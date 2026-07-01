@@ -1,0 +1,40 @@
+import { Router } from 'express';
+import authRoutes from './auth.routes';
+import employeeRoutes from './employee.routes';
+import attendanceRoutes from './attendance.routes';
+import leaveRoutes from './leave.routes';
+import shiftRoutes from './shift.routes';
+import onboardingRoutes from './onboarding.routes';
+import offboardingRoutes from './offboarding.routes';
+import recruitmentRoutes from './recruitment.routes';
+import analyticsRoutes from './analytics.routes';
+import reportsRoutes from './reports.routes';
+import payrollRoutes from './payroll.routes';
+import adminRoutes from './admin.routes';
+import financeRoutes from './finance.routes';
+import biometricRoutes from './biometric.routes';
+import notificationRoutes from './notification.routes';
+import manpowerRoutes from './manpower.routes';
+import propertyAnalyticsRoutes from './propertyAnalytics.routes';
+
+const router = Router();
+
+router.use('/auth', authRoutes);
+router.use('/employees', employeeRoutes);
+router.use('/attendance', attendanceRoutes);
+router.use('/leave', leaveRoutes);
+router.use('/shifts', shiftRoutes);
+router.use('/onboarding', onboardingRoutes);
+router.use('/offboarding', offboardingRoutes);
+router.use('/recruitment', recruitmentRoutes);
+router.use('/analytics', analyticsRoutes);
+router.use('/reports', reportsRoutes);
+router.use('/payroll', payrollRoutes);
+router.use('/admin', adminRoutes);
+router.use('/finance', financeRoutes);
+router.use('/biometric', biometricRoutes);
+router.use('/notifications', notificationRoutes);
+router.use('/manpower', manpowerRoutes);
+router.use('/property-analytics', propertyAnalyticsRoutes);
+
+export default router;

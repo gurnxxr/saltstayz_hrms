@@ -1,0 +1,23 @@
+node_modules/
+dist/
+build/
+.next/
+
+# secrets & local config — never commit
+.env
+.env.*
+!.env.example
+*.env
+cookies.txt
+.claude/settings.local.json
+
+# databases & backups
+*.db
+*.sqlite
+server/data/
+
+# misc
+*.log
+.DS_Store
+Thumbs.db
+uploads/
