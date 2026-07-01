@@ -1,14 +1,14 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import api from '@/lib/api';
 import {
   Plus, Calendar, Clock, CheckCircle, XCircle, AlertCircle,
-  CalendarDays, Upload, Trash2, Loader2, FileSpreadsheet,
 } from 'lucide-react';
+import HolidaysPanel from '@/components/attendance/HolidaysPanel';
 
 const STATUS_COLORS: Record<string, string> = {
   pending: 'bg-yellow-100 text-yellow-700',
@@ -29,7 +29,6 @@ export default function LeaveTab({ isAdmin }: { isAdmin: boolean }) {
   const queryClient = useQueryClient();
   const [leaveSubTab, setLeaveSubTab] = useState<'requests' | 'holidays'>('requests');
   const [statusFilter, setStatusFilter] = useState('');
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: balances = [] } = useQuery({
     queryKey: ['leave-balances'],
@@ -45,12 +44,6 @@ export default function LeaveTab({ isAdmin }: { isAdmin: boolean }) {
     },
   });
 
-  const { data: holidays = [], isLoading: holidaysLoading } = useQuery({
-    queryKey: ['holidays'],
-    queryFn: () => api.get('/leave/holidays').then(r => r.data),
-    enabled: leaveSubTab === 'holidays',
-  });
-
   const cancelMutation = useMutation({
     mutationFn: (id: number) => api.put(`/leave/${id}/cancel`),
     onSuccess: () => {
@@ -60,41 +53,6 @@ export default function LeaveTab({ isAdmin }: { isAdmin: boolean }) {
     },
     onError: (err: any) => toast.error(err.response?.data?.error || 'Failed to cancel'),
   });
-
-  const uploadMutation = useMutation({
-    mutationFn: (file: File) => {
-      const formData = new FormData();
-      formData.append('file', file);
-      return api.post('/leave/holidays/upload-csv', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      }).then(r => r.data);
-    },
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['holidays'] });
-      toast.success(`${data.inserted} holidays uploaded successfully`);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    },
-    onError: (err: any) => toast.error(err.response?.data?.error || 'Upload failed'),
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: (id: number) => api.delete(`/leave/holidays/${id}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['holidays'] });
-      toast.success('Holiday deleted');
-    },
-    onError: (err: any) => toast.error(err.response?.data?.error || 'Delete failed'),
-  });
-
-  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!file.name.endsWith('.csv')) {
-      toast.error('Please upload a .csv file');
-      return;
-    }
-    uploadMutation.mutate(file);
-  }
 
   return (
     <div className="space-y-6">
@@ -222,107 +180,7 @@ export default function LeaveTab({ isAdmin }: { isAdmin: boolean }) {
       )}
 
       {/* Holidays Sub-tab */}
-      {leaveSubTab === 'holidays' && (
-        <div className="space-y-4">
-          {isAdmin && (
-            <div className="bg-card rounded-xl border border-border p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-semibold text-foreground">Upload Holiday List</h3>
-                  <p className="text-xs text-secondary mt-1">Upload a CSV file with columns: Holiday Name, Date (DD-MM-YYYY). This will replace all existing holidays.</p>
-                </div>
-                <div className="flex items-center gap-3">
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept=".csv"
-                    onChange={handleFileSelect}
-                    className="hidden"
-                  />
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={uploadMutation.isPending}
-                    className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
-                  >
-                    {uploadMutation.isPending ? (
-                      <Loader2 size={16} className="animate-spin" />
-                    ) : (
-                      <Upload size={16} />
-                    )}
-                    {uploadMutation.isPending ? 'Uploading...' : 'Upload CSV'}
-                  </button>
-                </div>
-              </div>
-              <div className="mt-3 flex items-center gap-2 px-3 py-2 bg-muted/50 rounded-lg">
-                <FileSpreadsheet size={14} className="text-secondary" />
-                <p className="text-xs text-secondary">Example: <code className="bg-muted px-1 py-0.5 rounded text-xs">Holiday Name,Date</code> &rarr; <code className="bg-muted px-1 py-0.5 rounded text-xs">Republic Day,26-01-2026</code></p>
-              </div>
-            </div>
-          )}
-
-          <div className="bg-card rounded-xl border border-border overflow-hidden">
-            {holidaysLoading ? (
-              <div className="flex items-center justify-center py-12">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
-              </div>
-            ) : holidays.length === 0 ? (
-              <div className="p-8 text-center text-secondary">
-                <CalendarDays size={32} className="mx-auto mb-2 opacity-40" />
-                <p>No holidays configured.</p>
-                {isAdmin && <p className="text-xs mt-1">Upload a CSV to add holidays.</p>}
-              </div>
-            ) : (
-              <>
-                <div className="px-4 py-3 bg-muted/50 border-b border-border flex items-center justify-between">
-                  <p className="text-sm font-semibold text-foreground">{holidays.length} Holidays</p>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead>
-                      <tr className="border-b border-border bg-muted/30">
-                        <th className="text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Holiday Name</th>
-                        <th className="text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Date</th>
-                        <th className="text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Day</th>
-                        {isAdmin && <th className="text-right px-4 py-3 text-xs font-semibold text-secondary uppercase">Actions</th>}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {holidays.map((h: any) => (
-                        <tr key={h.id} className="hover:bg-muted/30 transition-colors">
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-3">
-                              <div className="w-8 h-8 rounded-lg bg-orange-50 flex items-center justify-center text-orange-600">
-                                <CalendarDays size={16} />
-                              </div>
-                              <span className="text-sm font-medium text-foreground">{h.name}</span>
-                            </div>
-                          </td>
-                          <td className="px-4 py-3 text-sm text-foreground">
-                            {new Date(h.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}
-                          </td>
-                          <td className="px-4 py-3 text-sm text-secondary">
-                            {new Date(h.date).toLocaleDateString('en-IN', { weekday: 'long' })}
-                          </td>
-                          {isAdmin && (
-                            <td className="px-4 py-3 text-right">
-                              <button
-                                onClick={() => deleteMutation.mutate(h.id)}
-                                className="inline-flex items-center gap-1 px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                              >
-                                <Trash2 size={12} /> Delete
-                              </button>
-                            </td>
-                          )}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
+      {leaveSubTab === 'holidays' && <HolidaysPanel isAdmin={isAdmin} />}
     </div>
   );
 }

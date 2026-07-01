@@ -295,49 +295,201 @@ export async function rejectLeave(requestId: number, approverId: number, roleNam
   return { message: 'Leave rejected' };
 }
 
-// ─── Holidays ───
+// ─── Regions (Admin) ───
+// Properties are grouped into user-defined regions; an employee's region is derived
+// from their property (employees.branch_name = properties.name).
 
-export async function getHolidays(propertyId?: string) {
-  const query = db('holidays')
-    .leftJoin('properties', 'properties.id', 'holidays.property_id')
-    .select('holidays.*', 'properties.name as property_name')
-    .orderBy('holidays.date');
-
-  if (propertyId) query.where('holidays.property_id', propertyId);
-
-  return query;
+export async function listRegions() {
+  const regions = await db('regions').select('*').orderBy('name');
+  const propCounts = await db('properties').whereNotNull('region_id')
+    .select('region_id').count({ c: '*' }).groupBy('region_id');
+  const holCounts = await db('holidays').whereNotNull('region_id')
+    .select('region_id').count({ c: '*' }).groupBy('region_id');
+  const pMap = new Map<number, number>(propCounts.map((r: any) => [r.region_id, Number(r.c)]));
+  const hMap = new Map<number, number>(holCounts.map((r: any) => [r.region_id, Number(r.c)]));
+  return regions.map((r: any) => ({ ...r, property_count: pMap.get(r.id) || 0, holiday_count: hMap.get(r.id) || 0 }));
 }
 
-export async function createHoliday(data: { name: string; date: string; property_id?: number; is_recurring?: boolean }) {
-  const [id] = await db('holidays').insert(data);
-  return db('holidays').where('id', id).first();
+export async function createRegion(data: { name: string; description?: string }) {
+  const name = String(data.name || '').trim();
+  if (!name) throw new ValidationError('Region name is required.');
+  const existing = await db('regions').whereRaw('LOWER(name) = ?', [name.toLowerCase()]).first();
+  if (existing) throw new ValidationError('A region with this name already exists.');
+  const [id] = await db('regions').insert({ name, description: String(data.description || '').trim() || null });
+  return db('regions').where('id', id).first();
 }
 
-export async function uploadHolidaysCSV(csvText: string) {
+export async function updateRegion(id: number, data: { name?: string; description?: string }) {
+  const region = await db('regions').where('id', id).first();
+  if (!region) throw new NotFoundError('Region');
+  const patch: any = { updated_at: db.fn.now() };
+  if (data.name !== undefined) {
+    const name = String(data.name).trim();
+    if (!name) throw new ValidationError('Region name is required.');
+    const dup = await db('regions').whereRaw('LOWER(name) = ?', [name.toLowerCase()]).whereNot('id', id).first();
+    if (dup) throw new ValidationError('A region with this name already exists.');
+    patch.name = name;
+  }
+  if (data.description !== undefined) patch.description = String(data.description || '').trim() || null;
+  await db('regions').where('id', id).update(patch);
+  return db('regions').where('id', id).first();
+}
+
+export async function deleteRegion(id: number) {
+  const region = await db('regions').where('id', id).first();
+  if (!region) throw new NotFoundError('Region');
+  const props = await db('properties').where('region_id', id).count({ c: '*' }).first();
+  if (Number(props?.c || 0) > 0) throw new ValidationError('This region has properties assigned. Reassign them before deleting.');
+  const hols = await db('holidays').where('region_id', id).count({ c: '*' }).first();
+  if (Number(hols?.c || 0) > 0) throw new ValidationError('This region has holidays. Delete or move them before deleting the region.');
+  await db('regions').where('id', id).delete();
+  return { message: 'Region deleted' };
+}
+
+// ─── Property ↔ region mapping (Admin) ───
+
+export async function listPropertiesWithRegion() {
+  return db('properties as p')
+    .leftJoin('regions as r', 'r.id', 'p.region_id')
+    .select('p.id', 'p.name', 'p.city', 'p.state', 'p.region_id', 'r.name as region_name')
+    .orderBy('p.name');
+}
+
+export async function setPropertyRegion(propertyId: number, regionId: number | null) {
+  const p = await db('properties').where('id', propertyId).first();
+  if (!p) throw new NotFoundError('Property');
+  if (regionId != null) {
+    const r = await db('regions').where('id', regionId).first();
+    if (!r) throw new NotFoundError('Region');
+  }
+  await db('properties').where('id', propertyId).update({ region_id: regionId ?? null, updated_at: db.fn.now() });
+  return db('properties as p').leftJoin('regions as r', 'r.id', 'p.region_id')
+    .where('p.id', propertyId).select('p.id', 'p.name', 'p.region_id', 'r.name as region_name').first();
+}
+
+/** Resolve an employee's region via their property (branch_name = properties.name). */
+export async function getEmployeeRegion(employeeId: number) {
+  const emp = await db('employees').where('id', employeeId).select('branch_name').first();
+  if (!emp?.branch_name) return null;
+  const prop = await db('properties as p').leftJoin('regions as r', 'r.id', 'p.region_id')
+    .where('p.name', emp.branch_name)
+    .select('p.id as property_id', 'p.name as property_name', 'p.region_id', 'r.name as region_name').first();
+  if (!prop) return null;
+  return {
+    property_id: prop.property_id, property_name: prop.property_name,
+    region_id: prop.region_id || null, region_name: prop.region_name || null,
+  };
+}
+
+// ─── Holidays (national + region-specific) ───
+
+function normalizeDateStr(raw: string): string {
+  const s = String(raw || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const m = s.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})$/);
+  if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  return s;
+}
+
+function holidayBase() {
+  return db('holidays as h')
+    .leftJoin('regions as r', 'r.id', 'h.region_id')
+    .select('h.*', 'r.name as region_name');
+}
+
+/** Admin view: every holiday, with region name + scope; optional scope/region/year filters. */
+export async function getHolidays(filters: { region_id?: string; scope?: string; year?: string } = {}) {
+  const q = holidayBase().orderBy('h.date');
+  if (filters.scope === 'national') q.where('h.is_national', true);
+  else if (filters.scope === 'regional') q.where('h.is_national', false).whereNotNull('h.region_id');
+  if (filters.region_id) q.where('h.region_id', Number(filters.region_id));
+  if (filters.year) q.whereRaw("strftime('%Y', h.date) = ?", [String(filters.year)]);
+  return q;
+}
+
+/** Employee view: national holidays + the holidays of the employee's region. */
+export async function getMyHolidays(employeeId: number, year?: string) {
+  const region = await getEmployeeRegion(employeeId);
+  const q = holidayBase().orderBy('h.date');
+  q.where(function () {
+    this.where('h.is_national', true);
+    if (region?.region_id) this.orWhere('h.region_id', region.region_id);
+  });
+  if (year) q.whereRaw("strftime('%Y', h.date) = ?", [String(year)]);
+  const holidays = await q;
+  return { region, holidays };
+}
+
+function normalizeHolidayInput(data: any) {
+  const name = String(data.name || '').trim();
+  if (!name) throw new ValidationError('Holiday name is required.');
+  const date = normalizeDateStr(String(data.date || ''));
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new ValidationError('A valid date is required (YYYY-MM-DD or DD-MM-YYYY).');
+  const is_national = !!data.is_national;
+  let region_id: number | null = null;
+  if (!is_national) {
+    region_id = data.region_id != null && data.region_id !== '' ? Number(data.region_id) : null;
+    if (!region_id) throw new ValidationError('Select a region, or mark the holiday as national.');
+  }
+  return { name, date, is_national, region_id, is_recurring: !!data.is_recurring };
+}
+
+export async function createHoliday(data: { name: string; date: string; is_national?: boolean; region_id?: number; is_recurring?: boolean }) {
+  const payload = normalizeHolidayInput(data);
+  if (payload.region_id) {
+    const r = await db('regions').where('id', payload.region_id).first();
+    if (!r) throw new NotFoundError('Region');
+  }
+  const [id] = await db('holidays').insert(payload);
+  return holidayBase().where('h.id', id).first();
+}
+
+export async function updateHoliday(id: number, data: { name: string; date: string; is_national?: boolean; region_id?: number; is_recurring?: boolean }) {
+  const existing = await db('holidays').where('id', id).first();
+  if (!existing) throw new NotFoundError('Holiday');
+  const payload = normalizeHolidayInput(data);
+  if (payload.region_id) {
+    const r = await db('regions').where('id', payload.region_id).first();
+    if (!r) throw new NotFoundError('Region');
+  }
+  await db('holidays').where('id', id).update({ ...payload, updated_at: db.fn.now() });
+  return holidayBase().where('h.id', id).first();
+}
+
+/**
+ * Bulk import from CSV (columns: Holiday Name, Date). Applies to a single scope —
+ * national or one region — and REPLACES only that scope's holidays (never a global wipe).
+ */
+export async function uploadHolidaysCSV(csvText: string, scope: { is_national?: boolean; region_id?: number }) {
+  const is_national = !!scope.is_national;
+  let region_id: number | null = null;
+  if (!is_national) {
+    region_id = scope.region_id != null ? Number(scope.region_id) : null;
+    if (!region_id) throw Object.assign(new Error('Choose a target: National or a specific region.'), { status: 400 });
+    const r = await db('regions').where('id', region_id).first();
+    if (!r) throw new NotFoundError('Region');
+  }
+
   const lines = csvText.split(/\r?\n/).filter(l => l.trim());
   if (lines.length < 2) throw Object.assign(new Error('CSV must have a header row and at least one data row'), { status: 400 });
 
-  const holidays: { name: string; date: string }[] = [];
+  const rows: { name: string; date: string; is_national: boolean; region_id: number | null }[] = [];
   for (let i = 1; i < lines.length; i++) {
     const cols = lines[i].split(',').map(c => c.trim().replace(/^"|"$/g, ''));
     if (cols.length < 2 || !cols[0] || !cols[1]) continue;
-
-    const name = cols[0];
-    let date = cols[1];
-    const dmyMatch = date.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})$/);
-    if (dmyMatch) {
-      date = `${dmyMatch[3]}-${dmyMatch[2].padStart(2, '0')}-${dmyMatch[1].padStart(2, '0')}`;
-    }
-
-    holidays.push({ name, date });
+    const date = normalizeDateStr(cols[1]);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    rows.push({ name: cols[0], date, is_national, region_id });
   }
+  if (rows.length === 0) throw Object.assign(new Error('No valid holiday rows found in CSV'), { status: 400 });
 
-  if (holidays.length === 0) throw Object.assign(new Error('No valid holiday rows found in CSV'), { status: 400 });
+  await db.transaction(async (trx) => {
+    if (is_national) await trx('holidays').where('is_national', true).del();
+    else await trx('holidays').where('region_id', region_id).del();
+    await trx('holidays').insert(rows);
+  });
 
-  await db('holidays').del();
-  await db('holidays').insert(holidays);
-
-  return { inserted: holidays.length };
+  return { inserted: rows.length, scope: is_national ? 'national' : `region ${region_id}` };
 }
 
 export async function deleteHoliday(id: number) {
