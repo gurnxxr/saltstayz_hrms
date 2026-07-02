@@ -10,7 +10,13 @@ import LoadError from '@/components/ui/LoadError';
 import { useUnsavedChangesWarning } from '@/hooks/useUnsavedChangesWarning';
 import Breadcrumb from '@/components/ui/Breadcrumb';
 import { formatINR } from '@/lib/utils';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { Wallet, Save, IndianRupee, Users, UserCheck, UserPlus, ChevronDown, ChevronRight, AlertTriangle } from 'lucide-react';
+
+// A blank/cleared field posts as 0. A 0 sanctioned budget or headcount silently
+// blocks ALL hiring at that property (the guardrail sees no remaining budget/slots),
+// so these submissions are confirmed before they save.
+const isZeroish = (v: string | number | null | undefined) => v === '' || v == null || Number(v) <= 0;
 
 
 export default function BudgetControlPage() {
@@ -19,6 +25,7 @@ export default function BudgetControlPage() {
   const [cluster, setCluster] = useState('');
   const [edits, setEdits] = useState<Record<number, { budget: string; head: string }>>({});
   const [expanded, setExpanded] = useState<number | null>(null);
+  const [confirmRow, setConfirmRow] = useState<any | null>(null);
 
   const { data: rows = [], isLoading, isError, refetch } = useQuery({
     queryKey: ['budget-control'],
@@ -31,7 +38,7 @@ export default function BudgetControlPage() {
 
   const save = useMutation({
     mutationFn: ({ id, budget, head }: any) => api.post(`/manpower/property-budgets/${id}`, { sanctioned_budget_monthly: Number(budget), sanctioned_headcount: Number(head) }),
-    onSuccess: (_d, v: any) => { toast.success('Budget saved'); setEdits(e => { const n = { ...e }; delete n[v.id]; return n; }); qc.invalidateQueries({ queryKey: ['budget-control'] }); },
+    onSuccess: (_d, v: any) => { toast.success('Budget saved'); setConfirmRow(null); setEdits(e => { const n = { ...e }; delete n[v.id]; return n; }); qc.invalidateQueries({ queryKey: ['budget-control'] }); },
     onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to save'),
   });
 
@@ -60,6 +67,14 @@ export default function BudgetControlPage() {
     if (e) return e[field];
     return String(field === 'budget' ? r.sanctioned_budget_monthly : r.sanctioned_headcount);
   };
+  // A row is unsafe to save if either sanctioned value is blank or ≤ 0.
+  const rowInvalid = (r: any) => isZeroish(val(r, 'budget')) || isZeroish(val(r, 'head'));
+  const zeroFields = (r: any) => {
+    const b = isZeroish(val(r, 'budget')), h = isZeroish(val(r, 'head'));
+    return b && h ? 'budget and headcount' : b ? 'budget' : 'headcount';
+  };
+  const submit = (r: any) => save.mutate({ id: r.property_id, budget: val(r, 'budget'), head: val(r, 'head') });
+
   const setVal = (r: any, field: 'budget' | 'head', v: string) => {
     setEdits(prev => ({
       ...prev,
@@ -150,11 +165,13 @@ export default function BudgetControlPage() {
                       </td>
                       <td className="px-4 py-3">
                         <input type="number" min="0" value={val(r, 'budget')} onChange={e => setVal(r, 'budget', e.target.value)}
-                          className="w-40 px-3 py-1.5 border border-border rounded-lg bg-background text-sm" />
+                          aria-invalid={dirty && isZeroish(val(r, 'budget'))}
+                          className={`w-40 px-3 py-1.5 border rounded-lg bg-background text-sm ${dirty && isZeroish(val(r, 'budget')) ? 'border-red-400 bg-red-50' : 'border-border'}`} />
                       </td>
                       <td className="px-4 py-3">
                         <input type="number" min="0" value={val(r, 'head')} onChange={e => setVal(r, 'head', e.target.value)}
-                          className="w-28 px-3 py-1.5 border border-border rounded-lg bg-background text-sm" />
+                          aria-invalid={dirty && isZeroish(val(r, 'head'))}
+                          className={`w-28 px-3 py-1.5 border rounded-lg bg-background text-sm ${dirty && isZeroish(val(r, 'head')) ? 'border-red-400 bg-red-50' : 'border-border'}`} />
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap">
                         <span className={r.over_headcount ? 'text-red-600 font-medium' : 'text-foreground'}>{r.filled_headcount}</span>
@@ -164,9 +181,11 @@ export default function BudgetControlPage() {
                         <span className={r.over_budget ? 'text-red-600 font-medium' : 'text-foreground'}>{formatINR(r.committed_amount)}</span>
                       </td>
                       <td className="px-4 py-3 text-right whitespace-nowrap">
-                        {dirty && <span className="mr-2 text-[11px] font-medium text-amber-600">Unsaved</span>}
+                        {dirty && (rowInvalid(r)
+                          ? <span className="mr-2 text-[11px] font-medium text-red-600" title="Blank counts as ₹0 and will block hiring">Blank = 0, blocks hiring</span>
+                          : <span className="mr-2 text-[11px] font-medium text-amber-600">Unsaved</span>)}
                         <button
-                          onClick={() => save.mutate({ id: r.property_id, budget: val(r, 'budget'), head: val(r, 'head') })}
+                          onClick={() => rowInvalid(r) ? setConfirmRow(r) : submit(r)}
                           disabled={!dirty || save.isPending}
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-primary text-white rounded-lg text-xs font-medium hover:bg-primary/90 disabled:opacity-40"
                         >
@@ -191,6 +210,20 @@ export default function BudgetControlPage() {
         </div>
         <p className="text-xs text-secondary">Headcount is cumulative across all roles at the property. Per-role salary bands are set in Manpower &amp; Budget Control.</p>
       </div>
+
+      <ConfirmDialog
+        open={!!confirmRow}
+        danger
+        title="Save a zero sanctioned value?"
+        confirmLabel="Save anyway"
+        cancelLabel="Go back"
+        loading={save.isPending}
+        message={confirmRow && (
+          <>Setting <b>{confirmRow.property_name}</b>&apos;s sanctioned {zeroFields(confirmRow)} to <b>0</b> will block all new hiring at this property until it&apos;s raised. Save anyway?</>
+        )}
+        onCancel={() => setConfirmRow(null)}
+        onConfirm={() => confirmRow && submit(confirmRow)}
+      />
     </AppShell>
   );
 }
