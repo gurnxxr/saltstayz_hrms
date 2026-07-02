@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import LoadError from '@/components/ui/LoadError';
+import { useUnsavedChangesWarning } from '@/hooks/useUnsavedChangesWarning';
 import { ArrowLeft, Wallet, Save, IndianRupee, Users, UserCheck, UserPlus, ChevronDown, ChevronRight } from 'lucide-react';
 
 const inr = (n: number) => '₹' + new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(Math.round(Number(n) || 0));
@@ -32,6 +33,8 @@ export default function BudgetControlPage() {
     onSuccess: (_d, v: any) => { toast.success('Budget saved'); setEdits(e => { const n = { ...e }; delete n[v.id]; return n; }); qc.invalidateQueries({ queryKey: ['budget-control'] }); },
     onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to save'),
   });
+
+  useUnsavedChangesWarning(Object.keys(edits).length > 0);
 
   const clusterNames = useMemo(() => Array.from(new Set(rows.map((r: any) => r.cluster_name).filter(Boolean))).sort(), [rows]);
   const filtered = rows.filter((r: any) => !cluster || r.cluster_name === cluster);
@@ -143,7 +146,8 @@ export default function BudgetControlPage() {
                       <td className="px-4 py-3 whitespace-nowrap">
                         <span className={r.over_budget ? 'text-red-600 font-medium' : 'text-foreground'}>{inr(r.committed_amount)}</span>
                       </td>
-                      <td className="px-4 py-3 text-right">
+                      <td className="px-4 py-3 text-right whitespace-nowrap">
+                        {dirty && <span className="mr-2 text-[11px] font-medium text-amber-600">Unsaved</span>}
                         <button
                           onClick={() => save.mutate({ id: r.property_id, budget: val(r, 'budget'), head: val(r, 'head') })}
                           disabled={!dirty || save.isPending}
@@ -188,12 +192,18 @@ function PropertyDeptCounts({ propertyId }: { propertyId: number }) {
     onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to save'),
   });
 
+  const deptDirty = Object.keys(edits).length > 0;
+  useUnsavedChangesWarning(deptDirty);
+
   if (isLoading || !data) return <p className="text-xs text-secondary">Loading departments…</p>;
   const depts: any[] = data.byDepartment || [];
 
   return (
     <div className="space-y-2">
-      <p className="text-[11px] uppercase tracking-wide text-secondary">No. of employees by department (sanctioned)</p>
+      <p className="text-[11px] uppercase tracking-wide text-secondary">
+        No. of employees by department (sanctioned)
+        {deptDirty && <span className="ml-2 normal-case tracking-normal font-medium text-amber-600">· Unsaved changes</span>}
+      </p>
       <table className="w-full text-sm">
         <tbody className="divide-y divide-border/60">
           {depts.length === 0 && <tr><td className="py-2 text-secondary text-xs">No departments.</td></tr>}
@@ -248,11 +258,16 @@ function PropertyBands({ propertyId }: { propertyId: number }) {
 
   const bandedIds = new Set(roles.map((r: any) => r.job_title_id));
   const addable = jobTitles.filter((j: any) => !bandedIds.has(j.id));
+  const bandsDirty = Object.keys(edits).length > 0 || !!add.job_title_id || !!add.min || !!add.max;
+  useUnsavedChangesWarning(bandsDirty);
   if (isLoading) return <p className="text-xs text-secondary">Loading salary bands…</p>;
 
   return (
     <div className="space-y-2">
-      <p className="text-[11px] uppercase tracking-wide text-secondary">Salary bands (monthly CTC) by role</p>
+      <p className="text-[11px] uppercase tracking-wide text-secondary">
+        Salary bands (monthly CTC) by role
+        {bandsDirty && <span className="ml-2 normal-case tracking-normal font-medium text-amber-600">· Unsaved changes</span>}
+      </p>
       <table className="w-full text-sm">
         <tbody className="divide-y divide-border/60">
           {roles.length === 0 && <tr><td className="py-2 text-secondary text-xs">No role bands yet — add one below.</td></tr>}
