@@ -8,7 +8,8 @@ import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import LoadError from '@/components/ui/LoadError';
 import { useUnsavedChangesWarning } from '@/hooks/useUnsavedChangesWarning';
-import { ArrowLeft, Wallet, Save, IndianRupee, Users, UserCheck, UserPlus, ChevronDown, ChevronRight } from 'lucide-react';
+import Breadcrumb from '@/components/ui/Breadcrumb';
+import { Wallet, Save, IndianRupee, Users, UserCheck, UserPlus, ChevronDown, ChevronRight } from 'lucide-react';
 
 const inr = (n: number) => '₹' + new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(Math.round(Number(n) || 0));
 
@@ -71,9 +72,7 @@ export default function BudgetControlPage() {
   return (
     <AppShell>
       <div className="space-y-6">
-        <button onClick={() => router.push('/admin')} className="flex items-center gap-2 text-secondary hover:text-foreground text-sm">
-          <ArrowLeft size={16} /> Back to Admin
-        </button>
+        <Breadcrumb items={[{ label: 'Admin', href: '/admin' }, { label: 'Budget Control' }]} />
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center"><Wallet className="text-primary" size={20} /></div>
           <div>

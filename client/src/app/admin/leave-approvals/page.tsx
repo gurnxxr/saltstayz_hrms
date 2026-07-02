@@ -5,7 +5,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
-import { ArrowLeft, Check, X, Clock, Calendar } from 'lucide-react';
+import Breadcrumb from '@/components/ui/Breadcrumb';
+import { Check, X, Clock, Calendar } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
 export default function LeaveApprovalsPage() {
@@ -144,13 +145,7 @@ export default function LeaveApprovalsPage() {
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <button
-              onClick={() => router.push('/admin')}
-              className="flex items-center gap-2 text-secondary hover:text-foreground text-sm transition-colors mb-2"
-            >
-              <ArrowLeft size={16} />
-              Back to Admin
-            </button>
+            <Breadcrumb className="mb-2" items={[{ label: 'Admin', href: '/admin' }, { label: 'Leave Approvals' }]} />
             <h1 className="text-2xl font-bold text-foreground">Leave Approvals</h1>
             <p className="text-secondary mt-1">Review and manage leave requests</p>
           </div>

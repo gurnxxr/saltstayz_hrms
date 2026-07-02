@@ -8,9 +8,10 @@ import api from '@/lib/api';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { formatDateTime } from '@/lib/utils';
 import {
-  ArrowLeft, Search, ChevronLeft, ChevronRight, ChevronDown, ChevronUp,
+  Search, ChevronLeft, ChevronRight, ChevronDown, ChevronUp,
   ScrollText, ShieldAlert, User,
 } from 'lucide-react';
+import Breadcrumb from '@/components/ui/Breadcrumb';
 
 const ACTION_COLORS: Record<string, string> = {
   create: 'bg-green-100 text-green-700',
@@ -62,9 +63,7 @@ export default function AuditLogPage() {
     <AppShell>
       <div className="space-y-6">
         <div>
-          <button onClick={() => router.push('/admin')} className="flex items-center gap-2 text-secondary hover:text-foreground text-sm transition-colors mb-2">
-            <ArrowLeft size={16} /> Back to Admin
-          </button>
+          <Breadcrumb className="mb-2" items={[{ label: 'Admin', href: '/admin' }, { label: 'Audit Log' }]} />
           <div className="flex items-center gap-2">
             <ScrollText className="text-primary" size={22} />
             <h1 className="text-2xl font-bold text-foreground">Audit Log</h1>

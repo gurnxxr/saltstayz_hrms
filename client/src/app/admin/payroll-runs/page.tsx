@@ -8,8 +8,9 @@ import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import {
-  ArrowLeft, Play, Lock, LockOpen, Loader2, CheckCircle2, AlertTriangle,
+  Play, Lock, LockOpen, Loader2, CheckCircle2, AlertTriangle,
 } from 'lucide-react';
+import Breadcrumb from '@/components/ui/Breadcrumb';
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -72,12 +73,7 @@ export default function PayrollRunsPage() {
     <AppShell>
       <div className="space-y-6">
         <div>
-          <button
-            onClick={() => router.push('/admin')}
-            className="flex items-center gap-2 text-secondary hover:text-foreground text-sm transition-colors mb-2"
-          >
-            <ArrowLeft size={16} /> Back to Admin
-          </button>
+          <Breadcrumb className="mb-2" items={[{ label: 'Admin', href: '/admin' }, { label: 'Payroll Runs' }]} />
           <h1 className="text-2xl font-bold text-foreground">Payroll Runs</h1>
           <p className="text-secondary mt-1">Generate payslips for the whole company, then lock the month</p>
         </div>

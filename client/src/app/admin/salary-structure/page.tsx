@@ -6,7 +6,8 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
-import { ArrowLeft, Search, Briefcase, Loader2, Save, IndianRupee, AlertCircle } from 'lucide-react';
+import Breadcrumb from '@/components/ui/Breadcrumb';
+import { Search, Briefcase, Loader2, Save, IndianRupee, AlertCircle } from 'lucide-react';
 
 const CITIES = ['Haryana', 'Delhi', 'Gurugram', 'Noida', 'Mumbai', 'Maharashtra', 'Bengaluru', 'Karnataka', 'Chandigarh'];
 const LWF_BY_CITY: Record<string, { employee: number; employer: number }> = {
@@ -106,9 +107,7 @@ export default function SalaryStructurePage() {
     <AppShell>
       <div className="space-y-6">
         <div>
-          <button onClick={() => router.push('/admin')} className="flex items-center gap-2 text-secondary hover:text-foreground text-sm transition-colors mb-2">
-            <ArrowLeft size={16} /> Back to Admin
-          </button>
+          <Breadcrumb className="mb-2" items={[{ label: 'Admin', href: '/admin' }, { label: 'Salary Structure' }]} />
           <h1 className="text-2xl font-bold text-foreground">Salary Structure</h1>
           <p className="text-secondary mt-1">Define the salary structure for each designation — every amount and percentage is editable. New hires inherit their designation&apos;s structure.</p>
         </div>

@@ -2,7 +2,8 @@
 
 import { useState } from 'react';
 import AppShell from '@/components/layout/AppShell';
-import { ArrowLeft, Building2, Layers, Briefcase, Tag, DollarSign, BadgeCheck } from 'lucide-react';
+import Breadcrumb from '@/components/ui/Breadcrumb';
+import { Building2, Layers, Briefcase, Tag, DollarSign, BadgeCheck } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { PropertiesTab, SimpleListTab, PayGradesTab } from '@/components/admin/OrgTabs';
 
@@ -25,12 +26,7 @@ export default function OrganizationPage() {
     <AppShell>
       <div className="space-y-6">
         <div>
-          <button
-            onClick={() => router.push('/admin')}
-            className="flex items-center gap-2 text-secondary hover:text-foreground text-sm transition-colors mb-2"
-          >
-            <ArrowLeft size={16} /> Back to Admin
-          </button>
+          <Breadcrumb className="mb-2" items={[{ label: 'Admin', href: '/admin' }, { label: 'Organization' }]} />
           <h1 className="text-2xl font-bold text-foreground">Organization Structure</h1>
           <p className="text-secondary mt-1">Manage properties, departments, job titles, and more</p>
         </div>

@@ -6,7 +6,8 @@ import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import { formatDateTime } from '@/lib/utils';
-import { ArrowLeft, DatabaseBackup, Loader2, HardDrive } from 'lucide-react';
+import Breadcrumb from '@/components/ui/Breadcrumb';
+import { DatabaseBackup, Loader2, HardDrive } from 'lucide-react';
 
 const kb = (n: number) => n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`;
 
@@ -29,9 +30,7 @@ export default function BackupsPage() {
     <AppShell>
       <div className="space-y-6">
         <div>
-          <button onClick={() => router.push('/admin')} className="flex items-center gap-2 text-secondary hover:text-foreground text-sm transition-colors mb-2">
-            <ArrowLeft size={16} /> Back to Admin
-          </button>
+          <Breadcrumb className="mb-2" items={[{ label: 'Admin', href: '/admin' }, { label: 'Database Backups' }]} />
           <div className="flex items-center justify-between">
             <div>
               <div className="flex items-center gap-2">

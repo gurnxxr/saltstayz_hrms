@@ -7,7 +7,8 @@ import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
-import { ArrowLeft, Search, User, ShieldCheck, RotateCcw, AlertTriangle } from 'lucide-react';
+import Breadcrumb from '@/components/ui/Breadcrumb';
+import { Search, User, ShieldCheck, RotateCcw, AlertTriangle } from 'lucide-react';
 
 const MODULE_LABELS: Record<string, string> = {
   employees: 'Employee Details',
@@ -63,9 +64,7 @@ export default function ModuleAccessPage() {
     <AppShell>
       <div className="space-y-6">
         <div>
-          <button onClick={() => router.push('/admin')} className="flex items-center gap-2 text-secondary hover:text-foreground text-sm transition-colors mb-2">
-            <ArrowLeft size={16} /> Back to Admin
-          </button>
+          <Breadcrumb className="mb-2" items={[{ label: 'Admin', href: '/admin' }, { label: 'Module Access' }]} />
           <h1 className="text-2xl font-bold text-foreground">Module Access</h1>
           <p className="text-secondary mt-1">Search any employee and grant or revoke access to specific modules</p>
         </div>

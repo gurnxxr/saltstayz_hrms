@@ -8,8 +8,9 @@ import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import {
-  ArrowLeft, Search, Pencil, Download, Loader2, X, Save, IndianRupee,
+  Search, Pencil, Download, Loader2, X, Save, IndianRupee,
 } from 'lucide-react';
+import Breadcrumb from '@/components/ui/Breadcrumb';
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -81,12 +82,7 @@ export default function SalarySetupPage() {
     <AppShell>
       <div className="space-y-6">
         <div>
-          <button
-            onClick={() => router.push('/admin')}
-            className="flex items-center gap-2 text-secondary hover:text-foreground text-sm transition-colors mb-2"
-          >
-            <ArrowLeft size={16} /> Back to Admin
-          </button>
+          <Breadcrumb className="mb-2" items={[{ label: 'Admin', href: '/admin' }, { label: 'Salary Setup' }]} />
           <h1 className="text-2xl font-bold text-foreground">Salary Setup</h1>
           <p className="text-secondary mt-1">Configure salary components used to generate payslips</p>
         </div>

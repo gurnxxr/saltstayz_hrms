@@ -9,6 +9,7 @@ import {
   Upload, FileSpreadsheet, ChevronDown, ChevronRight,
   Users, CheckCircle, XCircle, Clock, ArrowLeft, History,
 } from 'lucide-react';
+import Breadcrumb from '@/components/ui/Breadcrumb';
 
 const fmtDateTime = (s?: string) => {
   if (!s) return '—';
@@ -90,6 +91,7 @@ export default function AdminAttendancePage() {
   return (
     <AppShell>
       <div className="space-y-6">
+        <Breadcrumb items={[{ label: 'Admin', href: '/admin' }, { label: 'Attendance' }]} />
         <div>
           <h1 className="text-2xl font-bold text-foreground">Attendance Admin</h1>
           <p className="text-secondary mt-1">Property-level attendance overview</p>
