@@ -7,7 +7,7 @@ import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import {
-  ArrowLeft, SlidersHorizontal, IndianRupee, Users, Wallet, TrendingUp, Save, X, MapPin, CalendarRange, ChevronRight,
+  ArrowLeft, SlidersHorizontal, IndianRupee, Users, Wallet, TrendingUp, Save, X, MapPin, CalendarRange, ChevronRight, UserCheck, AlertTriangle,
 } from 'lucide-react';
 
 const inr = (n: number | null | undefined) =>
@@ -94,19 +94,19 @@ function Console({ propertyId }: { propertyId: number }) {
   const qc = useQueryClient();
   const [statusTarget, setStatusTarget] = useState<any | null>(null);
   const [selectedDept, setSelectedDept] = useState<string | null>(null);
-  const [workerEdits, setWorkerEdits] = useState<Record<string, string>>({});
+  const [sanctionedEdits, setSanctionedEdits] = useState<Record<string, string>>({});
 
   const { data, isLoading } = useQuery({
     queryKey: ['property-console', propertyId],
     queryFn: () => api.get(`/manpower/property-console?property_id=${propertyId}`).then(r => r.data),
   });
 
-  const saveWorkers = useMutation({
+  const saveSanctioned = useMutation({
     mutationFn: ({ department, worker_count }: any) =>
       api.put('/manpower/property-console/department-workers', { property_id: propertyId, department, worker_count: Number(worker_count) }),
     onSuccess: (_d, v: any) => {
-      toast.success('Worker count saved');
-      setWorkerEdits(e => { const n = { ...e }; delete n[v.department]; return n; });
+      toast.success('Sanctioned count saved');
+      setSanctionedEdits(e => { const n = { ...e }; delete n[v.department]; return n; });
       qc.invalidateQueries({ queryKey: ['property-console', propertyId] });
     },
     onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to save'),
@@ -116,17 +116,28 @@ function Console({ propertyId }: { propertyId: number }) {
 
   const { budget, totals, byDepartment, employees } = data;
   const deptEmployees = selectedDept ? employees.filter((e: any) => (e.dept_name || 'Unassigned') === selectedDept) : [];
+  const hired = totals.worker_count;
+  const sanctionedTotal = totals.total_sanctioned_workers;
+  const overLimit = sanctionedTotal > 0 && hired > sanctionedTotal;
 
   return (
     <div className="space-y-5">
       {/* Headline metrics */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         <Kpi icon={<Wallet size={16} />} label="Total Manpower Budget" value={inr(budget.sanctioned_budget_monthly)} sub={`${inr(budget.remaining)} remaining`} danger={budget.committed > budget.sanctioned_budget_monthly} />
         <Kpi icon={<Users size={16} />} label="Sanctioned Employee Count" value={String(budget.sanctioned_headcount)} sub={`${budget.filled} filled`} />
+        <Kpi icon={<UserCheck size={16} />} label="Workers Hired" value={String(hired)} sub={sanctionedTotal > 0 ? `of ${sanctionedTotal} sanctioned` : 'no dept limits set'} danger={overLimit} />
         <Kpi icon={<IndianRupee size={16} />} label="Monthly Spend" value={inr(totals.total_spend)} sub={`${totals.worker_count} workers`} />
         <Kpi icon={<CalendarRange size={16} />} label="Yearly Spend" value={inr(totals.total_spend_yearly)} sub="monthly × 12" />
         <Kpi icon={<TrendingUp size={16} />} label="Avg Salary / Worker" value={inr(totals.avg_salary)} />
       </div>
+
+      {overLimit && (
+        <div className="flex items-center gap-2 rounded-lg bg-red-50 border border-red-200 px-4 py-2.5 text-sm text-red-800">
+          <AlertTriangle size={16} className="text-red-600 shrink-0" />
+          <span><b>{hired}</b> workers hired exceed the sanctioned limit of <b>{sanctionedTotal}</b> for this property — over by <b>{hired - sanctionedTotal}</b>.</span>
+        </div>
+      )}
 
       {totals.on_pip > 0 && (
         <div className="flex items-center gap-2 rounded-lg bg-amber-50 border border-amber-200 px-4 py-2.5 text-sm text-amber-800">
@@ -141,7 +152,7 @@ function Console({ propertyId }: { propertyId: number }) {
         <div className="bg-card rounded-xl border border-border overflow-hidden">
           <div className="px-5 py-3 border-b border-border">
             <h3 className="text-sm font-semibold text-foreground">Departments</h3>
-            <p className="text-[11px] text-secondary mt-0.5">Edit the number of workers per department, or click a department to view its employees.</p>
+            <p className="text-[11px] text-secondary mt-0.5">Set the sanctioned employees per department, or click a department to view its employees.</p>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -149,32 +160,33 @@ function Console({ propertyId }: { propertyId: number }) {
                 <tr className="text-left">
                   <th className="px-5 py-2.5 font-medium">Department</th>
                   <th className="px-5 py-2.5 font-medium">No. of Workers</th>
+                  <th className="px-5 py-2.5 font-medium">No. of Sanctioned Employees</th>
                   <th className="px-5 py-2.5 font-medium text-right">Total Spend</th>
                   <th className="px-5 py-2.5 font-medium text-right">Avg Salary</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {byDepartment.length === 0 ? (
-                  <tr><td colSpan={4} className="px-5 py-6 text-center text-secondary">No departments configured.</td></tr>
+                  <tr><td colSpan={5} className="px-5 py-6 text-center text-secondary">No departments configured.</td></tr>
                 ) : byDepartment.map((d: any) => {
-                  const edited = workerEdits[d.dept_name];
-                  const val = edited != null ? edited : String(d.worker_count ?? 0);
+                  const edited = sanctionedEdits[d.dept_name];
+                  const val = edited != null ? edited : String(d.sanctioned_workers ?? 0);
                   return (
                     <tr key={d.dept_name} className="hover:bg-muted/30">
                       <td className="px-5 py-2.5">
                         <button onClick={() => setSelectedDept(d.dept_name)} className="font-medium text-foreground hover:text-primary inline-flex items-center gap-1">
                           {d.dept_name}<ChevronRight size={13} className="text-secondary" />
                         </button>
-                        <div className="text-[11px] text-secondary">{d.actual_workers} on roster</div>
                       </td>
+                      <td className={`px-5 py-2.5 ${d.over_limit ? 'text-red-600 font-medium' : ''}`} title={d.over_limit ? 'Over the sanctioned limit' : undefined}>{d.actual_workers}</td>
                       <td className="px-5 py-2.5">
                         <div className="flex items-center gap-1.5">
                           <input type="number" min="0" value={val}
-                            onChange={ev => setWorkerEdits(s => ({ ...s, [d.dept_name]: ev.target.value }))}
+                            onChange={ev => setSanctionedEdits(s => ({ ...s, [d.dept_name]: ev.target.value }))}
                             className="w-24 px-2 py-1 border border-border rounded-lg bg-background text-sm" />
-                          <button disabled={edited == null || saveWorkers.isPending}
-                            onClick={() => saveWorkers.mutate({ department: d.dept_name, worker_count: val })}
-                            className="p-1.5 rounded-lg text-primary hover:bg-primary/5 disabled:opacity-30" title="Save worker count">
+                          <button disabled={edited == null || saveSanctioned.isPending}
+                            onClick={() => saveSanctioned.mutate({ department: d.dept_name, worker_count: val })}
+                            className="p-1.5 rounded-lg text-primary hover:bg-primary/5 disabled:opacity-30" title="Save sanctioned count">
                             <Save size={14} />
                           </button>
                         </div>
@@ -188,7 +200,8 @@ function Console({ propertyId }: { propertyId: number }) {
               <tfoot>
                 <tr className="border-t-2 border-border bg-muted/30 font-semibold">
                   <td className="px-5 py-2.5 text-foreground">All departments</td>
-                  <td className="px-5 py-2.5">{totals.total_manual_workers}</td>
+                  <td className={`px-5 py-2.5 ${overLimit ? 'text-red-600' : 'text-foreground'}`}>{totals.worker_count}</td>
+                  <td className="px-5 py-2.5">{totals.total_sanctioned_workers}</td>
                   <td className="px-5 py-2.5 text-right">{inr(totals.total_spend)}</td>
                   <td className="px-5 py-2.5 text-right">{inr(totals.avg_salary)}</td>
                 </tr>

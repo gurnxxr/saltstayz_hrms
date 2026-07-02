@@ -810,20 +810,21 @@ export async function getPropertyConsole(propertyId: number) {
     if (e.monthly_ctc != null) { d.salaried += 1; salaried += 1; d.spend = round2(d.spend + ctc); total_spend = round2(total_spend + ctc); }
   }
 
-  let total_manual_workers = 0;
+  let total_sanctioned_workers = 0;
   const byDepartment = Array.from(deptMap.values())
     .map(d => {
-      const manual = manualMap.get(d.dept_name) ?? 0;
-      total_manual_workers += manual;
+      const sanctioned = manualMap.get(d.dept_name) ?? 0;
+      total_sanctioned_workers += sanctioned;
       return {
         dept_name: d.dept_name,
-        worker_count: manual,              // editable, admin-set
-        actual_workers: d.actual_workers,  // live count from the roster
+        sanctioned_workers: sanctioned,    // admin-set sanctioned limit (editable)
+        actual_workers: d.actual_workers,  // workers currently hired (live roster)
+        over_limit: sanctioned > 0 && d.actual_workers > sanctioned,
         spend: d.spend,
         avg_salary: d.salaried > 0 ? round2(d.spend / d.salaried) : 0,
       };
     })
-    .sort((a, b) => b.spend - a.spend || b.worker_count - a.worker_count);
+    .sort((a, b) => b.spend - a.spend || b.actual_workers - a.actual_workers);
 
   return {
     property: { id: propertyId, name: pb.property_name, cluster: pb.cluster_name },
@@ -838,8 +839,8 @@ export async function getPropertyConsole(propertyId: number) {
     totals: {
       total_spend,                          // monthly spend (Σ salaries)
       total_spend_yearly: round2(total_spend * 12),
-      worker_count,                         // actual live headcount
-      total_manual_workers,                 // Σ of the admin-set per-department counts
+      worker_count,                         // workers currently hired (live headcount)
+      total_sanctioned_workers,             // Σ of the admin-set per-department sanctioned limits
       on_pip,
       avg_salary: salaried > 0 ? round2(total_spend / salaried) : 0,
     },
