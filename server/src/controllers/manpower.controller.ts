@@ -57,8 +57,8 @@ export async function getPropertyConsole(req: AuthRequest, res: Response, next: 
   try { res.json(await svc.getPropertyConsole(Number(req.query.property_id))); } catch (err) { next(err); }
 }
 
-export async function setEmployeeSalary(req: AuthRequest, res: Response, next: NextFunction) {
-  try { res.json(await svc.setEmployeeSalary(Number(req.params.id), req.body.monthly_ctc, req.user!)); } catch (err) { next(err); }
+export async function setDepartmentWorkers(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await svc.setDepartmentWorkers(Number(req.body.property_id), req.body.department, req.body.worker_count)); } catch (err) { next(err); }
 }
 
 // ─── Hires ───

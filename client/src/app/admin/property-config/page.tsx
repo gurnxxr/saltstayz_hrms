@@ -7,7 +7,7 @@ import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import {
-  ArrowLeft, SlidersHorizontal, IndianRupee, Users, Wallet, TrendingUp, Save, X, MapPin,
+  ArrowLeft, SlidersHorizontal, IndianRupee, Users, Wallet, TrendingUp, Save, X, MapPin, CalendarRange, ChevronRight,
 } from 'lucide-react';
 
 const inr = (n: number | null | undefined) =>
@@ -93,30 +93,38 @@ export default function PropertyConfigPage() {
 function Console({ propertyId }: { propertyId: number }) {
   const qc = useQueryClient();
   const [statusTarget, setStatusTarget] = useState<any | null>(null);
-  const [salaryEdits, setSalaryEdits] = useState<Record<number, string>>({});
+  const [selectedDept, setSelectedDept] = useState<string | null>(null);
+  const [workerEdits, setWorkerEdits] = useState<Record<string, string>>({});
 
   const { data, isLoading } = useQuery({
     queryKey: ['property-console', propertyId],
     queryFn: () => api.get(`/manpower/property-console?property_id=${propertyId}`).then(r => r.data),
   });
 
-  const saveSalary = useMutation({
-    mutationFn: ({ id, monthly_ctc }: any) => api.put(`/manpower/employees/${id}/salary`, { monthly_ctc: Number(monthly_ctc) }),
-    onSuccess: (_d, v: any) => { toast.success('Salary updated'); setSalaryEdits(e => { const n = { ...e }; delete n[v.id]; return n; }); qc.invalidateQueries({ queryKey: ['property-console', propertyId] }); },
-    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to save salary'),
+  const saveWorkers = useMutation({
+    mutationFn: ({ department, worker_count }: any) =>
+      api.put('/manpower/property-console/department-workers', { property_id: propertyId, department, worker_count: Number(worker_count) }),
+    onSuccess: (_d, v: any) => {
+      toast.success('Worker count saved');
+      setWorkerEdits(e => { const n = { ...e }; delete n[v.department]; return n; });
+      qc.invalidateQueries({ queryKey: ['property-console', propertyId] });
+    },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to save'),
   });
 
   if (isLoading || !data) return <div className="bg-card rounded-xl border border-border p-10 text-center text-secondary text-sm">Loading…</div>;
 
   const { budget, totals, byDepartment, employees } = data;
+  const deptEmployees = selectedDept ? employees.filter((e: any) => (e.dept_name || 'Unassigned') === selectedDept) : [];
 
   return (
     <div className="space-y-5">
       {/* Headline metrics */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
         <Kpi icon={<Wallet size={16} />} label="Total Manpower Budget" value={inr(budget.sanctioned_budget_monthly)} sub={`${inr(budget.remaining)} remaining`} danger={budget.committed > budget.sanctioned_budget_monthly} />
         <Kpi icon={<Users size={16} />} label="Sanctioned Employee Count" value={String(budget.sanctioned_headcount)} sub={`${budget.filled} filled`} />
-        <Kpi icon={<IndianRupee size={16} />} label="Total Spend (all depts)" value={inr(totals.total_spend)} sub={`${totals.worker_count} workers`} />
+        <Kpi icon={<IndianRupee size={16} />} label="Monthly Spend" value={inr(totals.total_spend)} sub={`${totals.worker_count} workers`} />
+        <Kpi icon={<CalendarRange size={16} />} label="Yearly Spend" value={inr(totals.total_spend_yearly)} sub="monthly × 12" />
         <Kpi icon={<TrendingUp size={16} />} label="Avg Salary / Worker" value={inr(totals.avg_salary)} />
       </div>
 
@@ -127,105 +135,124 @@ function Console({ propertyId }: { propertyId: number }) {
         </div>
       )}
 
-      {/* Workers & spend per department */}
-      <div className="bg-card rounded-xl border border-border overflow-hidden">
-        <div className="px-5 py-3 border-b border-border"><h3 className="text-sm font-semibold text-foreground">Departments</h3></div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50 text-secondary">
-              <tr className="text-left">
-                <th className="px-5 py-2.5 font-medium">Department</th>
-                <th className="px-5 py-2.5 font-medium text-right">No. of Workers</th>
-                <th className="px-5 py-2.5 font-medium text-right">Total Spend</th>
-                <th className="px-5 py-2.5 font-medium text-right">Avg Salary</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {byDepartment.length === 0 ? (
-                <tr><td colSpan={4} className="px-5 py-6 text-center text-secondary">No workers at this property.</td></tr>
-              ) : byDepartment.map((d: any) => (
-                <tr key={d.dept_name} className="hover:bg-muted/30">
-                  <td className="px-5 py-2.5 font-medium text-foreground">{d.dept_name}</td>
-                  <td className="px-5 py-2.5 text-right">{d.worker_count}</td>
-                  <td className="px-5 py-2.5 text-right">{inr(d.spend)}</td>
-                  <td className="px-5 py-2.5 text-right">{inr(d.avg_salary)}</td>
+      {selectedDept ? (
+        <DeptEmployees dept={selectedDept} employees={deptEmployees} onBack={() => setSelectedDept(null)} onChangeStatus={(e) => setStatusTarget(e)} />
+      ) : (
+        <div className="bg-card rounded-xl border border-border overflow-hidden">
+          <div className="px-5 py-3 border-b border-border">
+            <h3 className="text-sm font-semibold text-foreground">Departments</h3>
+            <p className="text-[11px] text-secondary mt-0.5">Edit the number of workers per department, or click a department to view its employees.</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 text-secondary">
+                <tr className="text-left">
+                  <th className="px-5 py-2.5 font-medium">Department</th>
+                  <th className="px-5 py-2.5 font-medium">No. of Workers</th>
+                  <th className="px-5 py-2.5 font-medium text-right">Total Spend</th>
+                  <th className="px-5 py-2.5 font-medium text-right">Avg Salary</th>
                 </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr className="border-t-2 border-border bg-muted/30 font-semibold">
-                <td className="px-5 py-2.5 text-foreground">All departments</td>
-                <td className="px-5 py-2.5 text-right">{totals.worker_count}</td>
-                <td className="px-5 py-2.5 text-right">{inr(totals.total_spend)}</td>
-                <td className="px-5 py-2.5 text-right">{inr(totals.avg_salary)}</td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-      </div>
-
-      {/* Employees — adjust salary + status */}
-      <div className="bg-card rounded-xl border border-border overflow-hidden">
-        <div className="px-5 py-3 border-b border-border"><h3 className="text-sm font-semibold text-foreground">Employees ({employees.length})</h3></div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50 text-secondary">
-              <tr className="text-left">
-                <th className="px-5 py-2.5 font-medium">Employee</th>
-                <th className="px-5 py-2.5 font-medium">Department</th>
-                <th className="px-5 py-2.5 font-medium">Designation</th>
-                <th className="px-5 py-2.5 font-medium">Salary (monthly)</th>
-                <th className="px-5 py-2.5 font-medium">Status</th>
-                <th className="px-5 py-2.5 font-medium text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {employees.length === 0 ? (
-                <tr><td colSpan={6} className="px-5 py-6 text-center text-secondary">No employees at this property.</td></tr>
-              ) : employees.map((e: any) => {
-                const edited = salaryEdits[e.id];
-                const val = edited != null ? edited : (e.monthly_ctc != null ? String(e.monthly_ctc) : '');
-                const meta = STATUS_META[e.employment_status] || STATUS_META.active;
-                return (
-                  <tr key={e.id} className="hover:bg-muted/30">
-                    <td className="px-5 py-2.5">
-                      <div className="font-medium text-foreground">{e.name}</div>
-                      <div className="text-[11px] text-secondary">{e.employee_code}</div>
-                    </td>
-                    <td className="px-5 py-2.5 text-secondary">{e.dept_name}</td>
-                    <td className="px-5 py-2.5 text-secondary">{e.job_title || '—'}</td>
-                    <td className="px-5 py-2.5">
-                      <div className="flex items-center gap-1.5">
-                        <input type="number" min="0" value={val}
-                          onChange={ev => setSalaryEdits(s => ({ ...s, [e.id]: ev.target.value }))}
-                          placeholder="—"
-                          className="w-28 px-2 py-1 border border-border rounded-lg bg-background text-sm" />
-                        <button
-                          disabled={edited == null || saveSalary.isPending}
-                          onClick={() => saveSalary.mutate({ id: e.id, monthly_ctc: val })}
-                          className="p-1.5 rounded-lg text-primary hover:bg-primary/5 disabled:opacity-30" title="Save salary">
-                          <Save size={14} />
+              </thead>
+              <tbody className="divide-y divide-border">
+                {byDepartment.length === 0 ? (
+                  <tr><td colSpan={4} className="px-5 py-6 text-center text-secondary">No departments configured.</td></tr>
+                ) : byDepartment.map((d: any) => {
+                  const edited = workerEdits[d.dept_name];
+                  const val = edited != null ? edited : String(d.worker_count ?? 0);
+                  return (
+                    <tr key={d.dept_name} className="hover:bg-muted/30">
+                      <td className="px-5 py-2.5">
+                        <button onClick={() => setSelectedDept(d.dept_name)} className="font-medium text-foreground hover:text-primary inline-flex items-center gap-1">
+                          {d.dept_name}<ChevronRight size={13} className="text-secondary" />
                         </button>
-                      </div>
-                    </td>
-                    <td className="px-5 py-2.5">
-                      <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium border ${meta.cls}`}>{meta.label}</span>
-                    </td>
-                    <td className="px-5 py-2.5 text-right">
-                      <button onClick={() => setStatusTarget(e)} className="px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/5 rounded-lg">Change status</button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                        <div className="text-[11px] text-secondary">{d.actual_workers} on roster</div>
+                      </td>
+                      <td className="px-5 py-2.5">
+                        <div className="flex items-center gap-1.5">
+                          <input type="number" min="0" value={val}
+                            onChange={ev => setWorkerEdits(s => ({ ...s, [d.dept_name]: ev.target.value }))}
+                            className="w-24 px-2 py-1 border border-border rounded-lg bg-background text-sm" />
+                          <button disabled={edited == null || saveWorkers.isPending}
+                            onClick={() => saveWorkers.mutate({ department: d.dept_name, worker_count: val })}
+                            className="p-1.5 rounded-lg text-primary hover:bg-primary/5 disabled:opacity-30" title="Save worker count">
+                            <Save size={14} />
+                          </button>
+                        </div>
+                      </td>
+                      <td className="px-5 py-2.5 text-right">{inr(d.spend)}</td>
+                      <td className="px-5 py-2.5 text-right">{inr(d.avg_salary)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-border bg-muted/30 font-semibold">
+                  <td className="px-5 py-2.5 text-foreground">All departments</td>
+                  <td className="px-5 py-2.5">{totals.total_manual_workers}</td>
+                  <td className="px-5 py-2.5 text-right">{inr(totals.total_spend)}</td>
+                  <td className="px-5 py-2.5 text-right">{inr(totals.avg_salary)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
         </div>
-      </div>
+      )}
 
       {statusTarget && (
         <StatusDialog employee={statusTarget} onClose={() => setStatusTarget(null)}
           onSaved={() => { setStatusTarget(null); qc.invalidateQueries({ queryKey: ['property-console', propertyId] }); }} />
       )}
+    </div>
+  );
+}
+
+// Per-department employee sub-view — shown inline when a department is clicked
+// (a drill-in, not a pop-up). Salary is read-only.
+function DeptEmployees({ dept, employees, onBack, onChangeStatus }: { dept: string; employees: any[]; onBack: () => void; onChangeStatus: (e: any) => void }) {
+  return (
+    <div className="bg-card rounded-xl border border-border overflow-hidden">
+      <div className="flex items-center gap-2 px-5 py-3 border-b border-border">
+        <button onClick={onBack} className="flex items-center gap-1 text-secondary hover:text-foreground text-sm"><ArrowLeft size={15} /> Departments</button>
+        <span className="text-secondary">/</span>
+        <h3 className="text-sm font-semibold text-foreground">{dept}</h3>
+        <span className="text-[11px] text-secondary">· {employees.length} employee{employees.length === 1 ? '' : 's'}</span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-muted/50 text-secondary">
+            <tr className="text-left">
+              <th className="px-5 py-2.5 font-medium">Employee</th>
+              <th className="px-5 py-2.5 font-medium">Department</th>
+              <th className="px-5 py-2.5 font-medium">Designation</th>
+              <th className="px-5 py-2.5 font-medium">Salary (monthly)</th>
+              <th className="px-5 py-2.5 font-medium">Status</th>
+              <th className="px-5 py-2.5 font-medium text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {employees.length === 0 ? (
+              <tr><td colSpan={6} className="px-5 py-6 text-center text-secondary">No employees in this department.</td></tr>
+            ) : employees.map((e: any) => {
+              const meta = STATUS_META[e.employment_status] || STATUS_META.active;
+              return (
+                <tr key={e.id} className="hover:bg-muted/30">
+                  <td className="px-5 py-2.5">
+                    <div className="font-medium text-foreground">{e.name}</div>
+                    <div className="text-[11px] text-secondary">{e.employee_code}</div>
+                  </td>
+                  <td className="px-5 py-2.5 text-secondary">{e.dept_name}</td>
+                  <td className="px-5 py-2.5 text-secondary">{e.job_title || '—'}</td>
+                  <td className="px-5 py-2.5">{inr(e.monthly_ctc)}</td>
+                  <td className="px-5 py-2.5"><span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium border ${meta.cls}`}>{meta.label}</span></td>
+                  <td className="px-5 py-2.5 text-right">
+                    <button onClick={() => onChangeStatus(e)} className="px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/5 rounded-lg">Change status</button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

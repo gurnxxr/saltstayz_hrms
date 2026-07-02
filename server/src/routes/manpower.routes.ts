@@ -24,7 +24,7 @@ router.post('/property-budgets/:id', authorizeRoles('admin'), ctrl.upsertPropert
 router.post('/clusters', authorizeRoles('admin'), ctrl.upsertCluster);
 router.put('/properties/:id/cluster', authorizeRoles('admin'), ctrl.setPropertyCluster);
 router.get('/property-console', authorizeRoles('admin'), ctrl.getPropertyConsole);
-router.put('/employees/:id/salary', authorizeRoles('admin'), ctrl.setEmployeeSalary);
+router.put('/property-console/department-workers', authorizeRoles('admin'), ctrl.setDepartmentWorkers);
 router.get('/cluster-hr-users', authorizeRoles('admin'), ctrl.listClusterHrUsers);
 router.get('/users/:id/clusters', authorizeRoles('admin'), ctrl.getUserClusters);
 router.put('/users/:id/clusters', authorizeRoles('admin'), ctrl.setUserClusters);

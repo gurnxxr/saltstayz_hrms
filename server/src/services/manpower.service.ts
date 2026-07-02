@@ -788,22 +788,42 @@ export async function getPropertyConsole(propertyId: number) {
   // truth) so every department — including those with no staff at this property —
   // is visible and stays in sync with changes made in Admin → Organisation.
   const canonicalDepts = await db('departments').select('name').orderBy('name');
-  const deptMap = new Map<string, { dept_name: string; worker_count: number; spend: number; salaried: number }>();
-  for (const d of canonicalDepts as any[]) deptMap.set(d.name, { dept_name: d.name, worker_count: 0, spend: 0, salaried: 0 });
+  const deptMap = new Map<string, { dept_name: string; actual_workers: number; spend: number; salaried: number }>();
+  for (const d of canonicalDepts as any[]) deptMap.set(d.name, { dept_name: d.name, actual_workers: 0, spend: 0, salaried: 0 });
 
-  // Workers = non-Left headcount. Spend = Σ salaries; average is over workers who
-  // actually have a salary set (so unpaid/unset rows don't drag the average to ₹0).
+  // Admin-set manual worker counts per department (the editable "No. of Workers").
+  const manualRows = await db('property_department_workers').where('property_id', propertyId).select('department', 'worker_count');
+  const manualMap = new Map<string, number>(manualRows.map((r: any) => [r.department, Number(r.worker_count)]));
+  for (const dept of manualMap.keys()) if (!deptMap.has(dept)) deptMap.set(dept, { dept_name: dept, actual_workers: 0, spend: 0, salaried: 0 });
+
+  // Actual workers = non-Left headcount. Spend = Σ salaries; average is over workers
+  // who actually have a salary set (so unpaid/unset rows don't drag the average to ₹0).
   let total_spend = 0, worker_count = 0, salaried = 0, on_pip = 0;
   for (const e of emps as any[]) {
     if (e.employment_status === 'pip') on_pip += 1;
     if (e.employment_status === 'left') continue; // Left employees don't count toward workers/spend
     const dept = e.dept_name || 'Unassigned';
-    if (!deptMap.has(dept)) deptMap.set(dept, { dept_name: dept, worker_count: 0, spend: 0, salaried: 0 });
+    if (!deptMap.has(dept)) deptMap.set(dept, { dept_name: dept, actual_workers: 0, spend: 0, salaried: 0 });
     const ctc = Number(e.monthly_ctc || 0);
     const d = deptMap.get(dept)!;
-    d.worker_count += 1; worker_count += 1;
+    d.actual_workers += 1; worker_count += 1;
     if (e.monthly_ctc != null) { d.salaried += 1; salaried += 1; d.spend = round2(d.spend + ctc); total_spend = round2(total_spend + ctc); }
   }
+
+  let total_manual_workers = 0;
+  const byDepartment = Array.from(deptMap.values())
+    .map(d => {
+      const manual = manualMap.get(d.dept_name) ?? 0;
+      total_manual_workers += manual;
+      return {
+        dept_name: d.dept_name,
+        worker_count: manual,              // editable, admin-set
+        actual_workers: d.actual_workers,  // live count from the roster
+        spend: d.spend,
+        avg_salary: d.salaried > 0 ? round2(d.spend / d.salaried) : 0,
+      };
+    })
+    .sort((a, b) => b.spend - a.spend || b.worker_count - a.worker_count);
 
   return {
     property: { id: propertyId, name: pb.property_name, cluster: pb.cluster_name },
@@ -816,12 +836,14 @@ export async function getPropertyConsole(propertyId: number) {
       configured: pb.configured,
     },
     totals: {
-      total_spend, worker_count, on_pip,
+      total_spend,                          // monthly spend (Σ salaries)
+      total_spend_yearly: round2(total_spend * 12),
+      worker_count,                         // actual live headcount
+      total_manual_workers,                 // Σ of the admin-set per-department counts
+      on_pip,
       avg_salary: salaried > 0 ? round2(total_spend / salaried) : 0,
     },
-    byDepartment: Array.from(deptMap.values())
-      .map(d => ({ dept_name: d.dept_name, worker_count: d.worker_count, spend: d.spend, avg_salary: d.salaried > 0 ? round2(d.spend / d.salaried) : 0 }))
-      .sort((a, b) => b.spend - a.spend),
+    byDepartment,
     employees: (emps as any[]).map(e => ({
       id: e.id, employee_code: e.employee_code, name: `${e.first_name} ${e.last_name}`.trim(),
       dept_name: e.dept_name || 'Unassigned', job_title: e.job_title,
@@ -831,13 +853,22 @@ export async function getPropertyConsole(propertyId: number) {
   };
 }
 
-export async function setEmployeeSalary(employeeId: number, monthlyCtc: number, _user: JwtPayload) {
-  const emp = await db('employees').where('id', employeeId).first();
-  if (!emp) throw new NotFoundError('Employee');
-  const ctc = Number(monthlyCtc);
-  if (isNaN(ctc) || ctc < 0) throw new ValidationError('Enter a valid salary amount.');
-  await db('employees').where('id', employeeId).update({ monthly_ctc: ctc, updated_at: db.fn.now() });
-  return getHire(employeeId);
+// Upsert the admin-set worker count for a property × department.
+export async function setDepartmentWorkers(propertyId: number, department: string, workerCount: number) {
+  const property = await db('properties').where('id', propertyId).first();
+  if (!property) throw new NotFoundError('Property');
+  const dept = String(department || '').trim();
+  if (!dept) throw new ValidationError('Department is required.');
+  const count = Number(workerCount);
+  if (isNaN(count) || count < 0) throw new ValidationError('Enter a valid worker count.');
+
+  const existing = await db('property_department_workers').where({ property_id: propertyId, department: dept }).first();
+  if (existing) {
+    await db('property_department_workers').where('id', existing.id).update({ worker_count: count, updated_at: db.fn.now() });
+  } else {
+    await db('property_department_workers').insert({ property_id: propertyId, department: dept, worker_count: count });
+  }
+  return { property_id: propertyId, department: dept, worker_count: count };
 }
 
 // ─── Recruitment integration: vacancy headcount + salary-band checks ───
