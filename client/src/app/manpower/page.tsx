@@ -5,9 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
-import {
-  ShieldCheck, X, ChevronRight, Save,
-} from 'lucide-react';
+import { ShieldCheck, X } from 'lucide-react';
 
 const inr = (n: number) => '₹' + new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(Math.round(Number(n) || 0));
 
@@ -73,8 +71,7 @@ export default function ManpowerPage() {
           ))}
         </div>
 
-        {/* Salary bands are view-only here — editing moved to Admin → Budget Control. */}
-        {tab === 'budget' && <BudgetTab canEdit={false} />}
+        {tab === 'budget' && <BudgetTab />}
         {tab === 'status' && <StatusTab />}
       </div>
     </AppShell>
@@ -83,10 +80,9 @@ export default function ManpowerPage() {
 
 // ─────────────────────────── Budget (property-wise) ───────────────────────────
 
-function BudgetTab({ canEdit }: { canEdit: boolean }) {
+function BudgetTab() {
   const [cluster, setCluster] = useState('');
   const [search, setSearch] = useState('');
-  const [expanded, setExpanded] = useState<number | null>(null);
 
   const { data: rows = [], isLoading } = useQuery({
     queryKey: ['mp-property-budgets'],
@@ -122,125 +118,31 @@ function BudgetTab({ canEdit }: { canEdit: boolean }) {
               ) : filtered.length === 0 ? (
                 <tr><td colSpan={4} className="px-4 py-8 text-center text-secondary">No properties.</td></tr>
               ) : filtered.map((r: any) => (
-                <PropertyRow key={r.property_id} r={r} expanded={expanded === r.property_id}
-                  onToggle={() => setExpanded(expanded === r.property_id ? null : r.property_id)} canEdit={canEdit} />
+                <PropertyRow key={r.property_id} r={r} />
               ))}
             </tbody>
           </table>
         </div>
       </div>
-      <p className="text-xs text-secondary">One row per property — headcount is cumulative across all roles. Expand a row to view/edit the per-role salary bands. Budget &amp; headcount caps are set in Admin → Budget Control.</p>
+      <p className="text-xs text-secondary">One row per property — headcount is cumulative across all roles. Budget &amp; headcount caps are set in Admin → Budget Control.</p>
     </div>
   );
 }
 
-function PropertyRow({ r, expanded, onToggle, canEdit }: { r: any; expanded: boolean; onToggle: () => void; canEdit: boolean }) {
+function PropertyRow({ r }: { r: any }) {
   return (
-    <>
-      <tr className="hover:bg-muted/30 cursor-pointer" onClick={onToggle}>
-        <td className="px-4 py-3">
-          <div className="flex items-center gap-2">
-            <ChevronRight size={14} className={`text-secondary transition-transform ${expanded ? 'rotate-90' : ''}`} />
-            <div>
-              <div className="font-medium text-foreground">{r.property_name}</div>
-              <div className="text-[11px] text-secondary">{r.cluster_name || 'Unassigned'}{r.source === 'rolled_up' ? ' · rolled-up' : ''}</div>
-            </div>
-          </div>
-        </td>
-        <td className="px-4 py-3">
-          <span className={r.over_headcount ? 'text-red-600 font-medium' : ''}>{r.filled_headcount}/{r.sanctioned_headcount}</span>
-          <div className="text-[11px] text-secondary">{r.remaining_slots} open</div>
-        </td>
-        <td className="px-4 py-3"><Gauge committed={Number(r.committed_amount)} sanctioned={Number(r.sanctioned_budget_monthly)} /></td>
-        <td className="px-4 py-3 text-right text-secondary">{r.role_lines}</td>
-      </tr>
-      {expanded && (
-        <tr>
-          <td colSpan={4} className="px-4 py-3 bg-muted/20">
-            <RoleBands propertyId={r.property_id} canEdit={canEdit} />
-          </td>
-        </tr>
-      )}
-    </>
-  );
-}
-
-function RoleBands({ propertyId, canEdit }: { propertyId: number; canEdit: boolean }) {
-  const qc = useQueryClient();
-  const { data: roles = [], isLoading } = useQuery({
-    queryKey: ['mp-sanctions', propertyId],
-    queryFn: () => api.get(`/manpower/sanctions?property_id=${propertyId}`).then(r => r.data),
-  });
-  const { data: jobTitles = [] } = useQuery({
-    queryKey: ['mp-jobtitles'], queryFn: () => api.get('/recruitment/job-titles').then(r => r.data).catch(() => []), enabled: canEdit,
-  });
-  const [edits, setEdits] = useState<Record<number, { min: string; max: string }>>({});
-  const [add, setAdd] = useState({ job_title_id: '', min: '', max: '' });
-
-  const saveBand = useMutation({
-    mutationFn: (b: any) => api.put('/manpower/sanctions/band', b),
-    onSuccess: () => {
-      toast.success('Band saved');
-      qc.invalidateQueries({ queryKey: ['mp-sanctions', propertyId] });
-      qc.invalidateQueries({ queryKey: ['mp-property-budgets'] });
-      setEdits({}); setAdd({ job_title_id: '', min: '', max: '' });
-    },
-    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed'),
-  });
-
-  const bandedIds = new Set(roles.map((r: any) => r.job_title_id));
-  const addable = jobTitles.filter((j: any) => !bandedIds.has(j.id));
-
-  if (isLoading) return <p className="text-xs text-secondary">Loading role bands…</p>;
-
-  return (
-    <div className="space-y-2">
-      <p className="text-[11px] uppercase tracking-wide text-secondary">Salary bands (monthly CTC) by role</p>
-      <table className="w-full text-sm">
-        <tbody className="divide-y divide-border/60">
-          {roles.length === 0 && <tr><td className="py-2 text-secondary text-xs">No role bands yet.</td></tr>}
-          {roles.map((r: any) => {
-            const e = edits[r.id];
-            const min = e ? e.min : String(r.band_min);
-            const max = e ? e.max : String(r.band_max);
-            return (
-              <tr key={r.id}>
-                <td className="py-2 pr-3 font-medium text-foreground">{r.job_title}</td>
-                <td className="py-2 pr-3 text-secondary text-xs">{r.filled}/{r.sanctioned_headcount ?? '—'} filled</td>
-                {canEdit ? (
-                  <>
-                    <td className="py-2 pr-2"><input type="number" min="0" value={min} onChange={ev => setEdits(p => ({ ...p, [r.id]: { min: ev.target.value, max: p[r.id]?.max ?? String(r.band_max) } }))} className="w-28 px-2 py-1 border border-border rounded-lg bg-background text-sm" /></td>
-                    <td className="py-2 pr-2"><input type="number" min="0" value={max} onChange={ev => setEdits(p => ({ ...p, [r.id]: { min: p[r.id]?.min ?? String(r.band_min), max: ev.target.value } }))} className="w-28 px-2 py-1 border border-border rounded-lg bg-background text-sm" /></td>
-                    <td className="py-2 text-right">
-                      <button disabled={!e || saveBand.isPending} onClick={() => saveBand.mutate({ property_id: propertyId, job_title_id: r.job_title_id, band_min: Number(min), band_max: Number(max) })}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 bg-primary text-white rounded-lg text-xs font-medium disabled:opacity-40"><Save size={12} /> Save</button>
-                    </td>
-                  </>
-                ) : (
-                  <td className="py-2 text-foreground" colSpan={3}>{inr(r.band_min)} – {inr(r.band_max)}</td>
-                )}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-
-      {canEdit && addable.length > 0 && (
-        <div className="flex flex-wrap items-end gap-2 pt-2 border-t border-border/60">
-          <Field label="Add role band">
-            <select value={add.job_title_id} onChange={e => setAdd(a => ({ ...a, job_title_id: e.target.value }))} className="px-2 py-1 border border-border rounded-lg bg-background text-sm">
-              <option value="">Select role</option>
-              {addable.map((j: any) => <option key={j.id} value={j.id}>{j.title}</option>)}
-            </select>
-          </Field>
-          <input type="number" min="0" placeholder="Band min" value={add.min} onChange={e => setAdd(a => ({ ...a, min: e.target.value }))} className="w-28 px-2 py-1 border border-border rounded-lg bg-background text-sm" />
-          <input type="number" min="0" placeholder="Band max" value={add.max} onChange={e => setAdd(a => ({ ...a, max: e.target.value }))} className="w-28 px-2 py-1 border border-border rounded-lg bg-background text-sm" />
-          <button disabled={!add.job_title_id || !add.min || !add.max || saveBand.isPending}
-            onClick={() => saveBand.mutate({ property_id: propertyId, job_title_id: Number(add.job_title_id), band_min: Number(add.min), band_max: Number(add.max) })}
-            className="px-3 py-1.5 bg-primary text-white rounded-lg text-xs font-medium disabled:opacity-40">Add band</button>
-        </div>
-      )}
-    </div>
+    <tr className="hover:bg-muted/30">
+      <td className="px-4 py-3">
+        <div className="font-medium text-foreground">{r.property_name}</div>
+        <div className="text-[11px] text-secondary">{r.cluster_name || 'Unassigned'}{r.source === 'rolled_up' ? ' · rolled-up' : ''}</div>
+      </td>
+      <td className="px-4 py-3">
+        <span className={r.over_headcount ? 'text-red-600 font-medium' : ''}>{r.filled_headcount}/{r.sanctioned_headcount}</span>
+        <div className="text-[11px] text-secondary">{r.remaining_slots} open</div>
+      </td>
+      <td className="px-4 py-3"><Gauge committed={Number(r.committed_amount)} sanctioned={Number(r.sanctioned_budget_monthly)} /></td>
+      <td className="px-4 py-3 text-right text-secondary">{r.role_lines}</td>
+    </tr>
   );
 }
 
