@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
+import { formatINR } from '@/lib/utils';
 import {
   FileText, Download, Loader2, Wallet, Calendar, IndianRupee, AlertTriangle,
 } from 'lucide-react';
@@ -14,7 +15,6 @@ const MONTHS = [
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
 
-const inr = (n: number) => `₹${Math.round(Number(n) || 0).toLocaleString('en-IN')}`;
 
 export default function PayrollPage() {
   const queryClient = useQueryClient();
@@ -168,7 +168,7 @@ export default function PayrollPage() {
                 </p>
                 <p className="text-xs text-green-700/70 mt-0.5">Gross Earnings − Total Deduction</p>
               </div>
-              <p className="text-2xl font-bold text-green-700">{inr(b.net_pay)}</p>
+              <p className="text-2xl font-bold text-green-700">{formatINR(b.net_pay)}</p>
             </div>
 
             {/* CTC breakdown */}
@@ -186,7 +186,7 @@ export default function PayrollPage() {
               </div>
               <div className="mt-3 pt-3 border-t border-border flex items-center justify-between">
                 <p className="text-sm font-bold text-primary">Total CTC (A + B + C + D)</p>
-                <p className="text-lg font-bold text-primary">{inr(b.ctc)}</p>
+                <p className="text-lg font-bold text-primary">{formatINR(b.ctc)}</p>
               </div>
             </div>
           </div>
@@ -224,8 +224,8 @@ export default function PayrollPage() {
                     <td className="px-4 py-3 text-sm text-secondary">
                       {h.pay_date ? new Date(h.pay_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}
                     </td>
-                    <td className="px-4 py-3 text-sm text-right font-medium text-green-700">{inr(h.net_pay)}</td>
-                    <td className="px-4 py-3 text-sm text-right text-foreground">{inr(h.ctc)}</td>
+                    <td className="px-4 py-3 text-sm text-right font-medium text-green-700">{formatINR(h.net_pay)}</td>
+                    <td className="px-4 py-3 text-sm text-right text-foreground">{formatINR(h.ctc)}</td>
                     <td className="px-6 py-3 text-right">
                       <button
                         onClick={() => download(`/payroll/me/history/${h.id}/pdf`, `${MONTHS[h.month - 1]}_${h.year}`)}
@@ -257,13 +257,13 @@ function Section({ title, rows, total }: {
         {rows.map(([label, val]) => (
           <div key={label} className="flex items-center justify-between text-sm">
             <span className="text-secondary">{label}</span>
-            <span className="text-foreground font-medium">{inr(val)}</span>
+            <span className="text-foreground font-medium">{formatINR(val)}</span>
           </div>
         ))}
       </div>
       <div className="px-6 py-2.5 bg-muted/30 border-t border-border flex items-center justify-between">
         <span className="text-sm font-semibold text-foreground">{total[0]}</span>
-        <span className="text-sm font-bold text-foreground">{inr(total[1])}</span>
+        <span className="text-sm font-bold text-foreground">{formatINR(total[1])}</span>
       </div>
     </div>
   );
@@ -275,7 +275,7 @@ function CtcLine({ label, value, indent, bold }: {
   return (
     <div className={`flex items-center justify-between ${indent ? 'pl-4' : ''}`}>
       <span className={bold ? 'font-medium text-foreground' : 'text-secondary'}>{label}</span>
-      <span className={bold ? 'font-medium text-foreground' : 'text-foreground'}>{inr(value)}</span>
+      <span className={bold ? 'font-medium text-foreground' : 'text-foreground'}>{formatINR(value)}</span>
     </div>
   );
 }

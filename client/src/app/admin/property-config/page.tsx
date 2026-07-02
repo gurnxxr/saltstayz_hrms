@@ -11,23 +11,9 @@ import {
   ArrowLeft, SlidersHorizontal, IndianRupee, Users, Wallet, TrendingUp, X, MapPin, CalendarRange, ChevronRight, UserCheck, AlertTriangle,
 } from 'lucide-react';
 import Breadcrumb from '@/components/ui/Breadcrumb';
-
-const inr = (n: number | null | undefined) =>
-  n == null ? '—' : '₹' + new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(Math.round(Number(n) || 0));
-
-// Work status: server enum (active/pip/on_notice/left) ↔ display labels the admin uses.
-const STATUS_META: Record<string, { label: string; cls: string }> = {
-  active: { label: 'Active', cls: 'bg-green-100 text-green-700 border-green-200' },
-  pip: { label: 'PIP', cls: 'bg-amber-100 text-amber-700 border-amber-200' },
-  on_notice: { label: 'Notice', cls: 'bg-orange-100 text-orange-700 border-orange-200' },
-  left: { label: 'Inactive', cls: 'bg-gray-100 text-gray-600 border-gray-200' },
-};
-const STATUS_OPTIONS = [
-  { value: 'active', label: 'Active' },
-  { value: 'pip', label: 'PIP' },
-  { value: 'on_notice', label: 'Notice' },
-  { value: 'left', label: 'Inactive' },
-];
+import { formatINR } from '@/lib/utils';
+import EmployeeStatusChip from '@/components/employees/EmployeeStatusChip';
+import EmployeeStatusDialog from '@/components/employees/EmployeeStatusDialog';
 
 export default function PropertyConfigPage() {
   const router = useRouter();
@@ -114,12 +100,12 @@ function Console({ propertyId }: { propertyId: number }) {
     <div className="space-y-5">
       {/* Headline metrics */}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <Kpi icon={<Wallet size={16} />} label="Total Manpower Budget" value={inr(budget.sanctioned_budget_monthly)} sub={`${inr(budget.remaining)} remaining`} danger={budget.committed > budget.sanctioned_budget_monthly} />
+        <Kpi icon={<Wallet size={16} />} label="Total Manpower Budget" value={formatINR(budget.sanctioned_budget_monthly)} sub={`${formatINR(budget.remaining)} remaining`} danger={budget.committed > budget.sanctioned_budget_monthly} />
         <Kpi icon={<Users size={16} />} label="Sanctioned Employee Count" value={String(budget.sanctioned_headcount)} sub={`${budget.filled} filled`} />
         <Kpi icon={<UserCheck size={16} />} label="Workers Hired" value={String(hired)} sub={sanctionedTotal > 0 ? `of ${sanctionedTotal} sanctioned` : 'no dept limits set'} danger={overLimit} />
-        <Kpi icon={<IndianRupee size={16} />} label="Monthly Spend" value={inr(totals.total_spend)} sub={`${totals.worker_count} workers`} />
-        <Kpi icon={<CalendarRange size={16} />} label="Yearly Spend" value={inr(totals.total_spend_yearly)} sub="monthly × 12" />
-        <Kpi icon={<TrendingUp size={16} />} label="Avg Salary / Worker" value={inr(totals.avg_salary)} />
+        <Kpi icon={<IndianRupee size={16} />} label="Monthly Spend" value={formatINR(totals.total_spend)} sub={`${totals.worker_count} workers`} />
+        <Kpi icon={<CalendarRange size={16} />} label="Yearly Spend" value={formatINR(totals.total_spend_yearly)} sub="monthly × 12" />
+        <Kpi icon={<TrendingUp size={16} />} label="Avg Salary / Worker" value={formatINR(totals.avg_salary)} />
       </div>
 
       {overLimit && (
@@ -167,8 +153,8 @@ function Console({ propertyId }: { propertyId: number }) {
                     </td>
                     <td className={`px-5 py-2.5 ${d.over_limit ? 'text-red-600 font-medium' : ''}`} title={d.over_limit ? 'Over the sanctioned limit' : undefined}>{d.actual_workers}</td>
                     <td className="px-5 py-2.5">{d.sanctioned_workers ?? 0}</td>
-                    <td className="px-5 py-2.5 text-right">{inr(d.spend)}</td>
-                    <td className="px-5 py-2.5 text-right">{inr(d.avg_salary)}</td>
+                    <td className="px-5 py-2.5 text-right">{formatINR(d.spend)}</td>
+                    <td className="px-5 py-2.5 text-right">{formatINR(d.avg_salary)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -177,8 +163,8 @@ function Console({ propertyId }: { propertyId: number }) {
                   <td className="px-5 py-2.5 text-foreground">All departments</td>
                   <td className={`px-5 py-2.5 ${overLimit ? 'text-red-600' : 'text-foreground'}`}>{totals.worker_count}</td>
                   <td className="px-5 py-2.5">{totals.total_sanctioned_workers}</td>
-                  <td className="px-5 py-2.5 text-right">{inr(totals.total_spend)}</td>
-                  <td className="px-5 py-2.5 text-right">{inr(totals.avg_salary)}</td>
+                  <td className="px-5 py-2.5 text-right">{formatINR(totals.total_spend)}</td>
+                  <td className="px-5 py-2.5 text-right">{formatINR(totals.avg_salary)}</td>
                 </tr>
               </tfoot>
             </table>
@@ -187,7 +173,7 @@ function Console({ propertyId }: { propertyId: number }) {
       )}
 
       {statusTarget && (
-        <StatusDialog employee={statusTarget} onClose={() => setStatusTarget(null)}
+        <EmployeeStatusDialog employee={statusTarget} onClose={() => setStatusTarget(null)}
           onSaved={() => { setStatusTarget(null); qc.invalidateQueries({ queryKey: ['property-console', propertyId] }); }} />
       )}
     </div>
@@ -221,7 +207,6 @@ function DeptEmployees({ dept, employees, onBack, onChangeStatus }: { dept: stri
             {employees.length === 0 ? (
               <tr><td colSpan={6} className="px-5 py-6 text-center text-secondary">No employees in this department.</td></tr>
             ) : employees.map((e: any) => {
-              const meta = STATUS_META[e.employment_status] || STATUS_META.active;
               return (
                 <tr key={e.id} className="hover:bg-muted/30">
                   <td className="px-5 py-2.5">
@@ -230,8 +215,8 @@ function DeptEmployees({ dept, employees, onBack, onChangeStatus }: { dept: stri
                   </td>
                   <td className="px-5 py-2.5 text-secondary">{e.dept_name}</td>
                   <td className="px-5 py-2.5 text-secondary">{e.job_title || '—'}</td>
-                  <td className="px-5 py-2.5">{inr(e.monthly_ctc)}</td>
-                  <td className="px-5 py-2.5"><span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium border ${meta.cls}`}>{meta.label}</span></td>
+                  <td className="px-5 py-2.5">{formatINR(e.monthly_ctc)}</td>
+                  <td className="px-5 py-2.5"><EmployeeStatusChip status={e.employment_status} /></td>
                   <td className="px-5 py-2.5 text-right">
                     <button onClick={() => onChangeStatus(e)} className="px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/5 rounded-lg">Change status</button>
                   </td>
@@ -240,62 +225,6 @@ function DeptEmployees({ dept, employees, onBack, onChangeStatus }: { dept: stri
             })}
           </tbody>
         </table>
-      </div>
-    </div>
-  );
-}
-
-function StatusDialog({ employee, onClose, onSaved }: { employee: any; onClose: () => void; onSaved: () => void }) {
-  const [status, setStatus] = useState(employee.employment_status);
-  const [lwd, setLwd] = useState(employee.last_working_day || '');
-  const [pipStart, setPipStart] = useState('');
-  const [pipEnd, setPipEnd] = useState('');
-  const [reason, setReason] = useState('');
-
-  const save = useMutation({
-    mutationFn: () => api.put(`/manpower/employees/${employee.id}/status`, {
-      status, reason, last_working_day: lwd || undefined, pip_start_date: pipStart || undefined, pip_end_date: pipEnd || undefined,
-    }),
-    onSuccess: () => { toast.success('Status updated'); onSaved(); },
-    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed'),
-  });
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
-      <div className="bg-card rounded-xl border border-border w-full max-w-md" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-border">
-          <h3 className="font-semibold text-foreground">Change status — {employee.name}</h3>
-          <button onClick={onClose} className="p-1 rounded-lg hover:bg-muted"><X size={18} /></button>
-        </div>
-        <div className="p-5 space-y-3">
-          <div className="flex flex-wrap gap-2">
-            {STATUS_OPTIONS.map(s => (
-              <button key={s.value} onClick={() => setStatus(s.value)}
-                className={`px-3 py-1.5 rounded-lg text-sm border ${status === s.value ? (STATUS_META[s.value]?.cls || '') + ' border-current' : 'border-border hover:bg-muted'}`}>
-                {s.label}
-              </button>
-            ))}
-          </div>
-          {status === 'pip' && (
-            <div className="grid grid-cols-2 gap-3">
-              <label className="block"><span className="block text-xs text-secondary mb-1">PIP start *</span>
-                <input type="date" value={pipStart} onChange={e => setPipStart(e.target.value)} className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm" /></label>
-              <label className="block"><span className="block text-xs text-secondary mb-1">PIP end *</span>
-                <input type="date" value={pipEnd} onChange={e => setPipEnd(e.target.value)} className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm" /></label>
-            </div>
-          )}
-          {(status === 'on_notice' || status === 'left') && (
-            <label className="block"><span className="block text-xs text-secondary mb-1">Last working day *</span>
-              <input type="date" value={lwd} onChange={e => setLwd(e.target.value)} className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm" /></label>
-          )}
-          {status === 'left' && <p className="text-xs text-secondary">Marking Inactive frees the headcount slot and budget for this property.</p>}
-          <label className="block"><span className="block text-xs text-secondary mb-1">Reason / note</span>
-            <input value={reason} onChange={e => setReason(e.target.value)} className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm" /></label>
-          <div className="flex justify-end gap-2 pt-1">
-            <button onClick={onClose} className="px-3 py-2 border border-border rounded-lg text-sm hover:bg-muted">Cancel</button>
-            <button onClick={() => save.mutate()} disabled={save.isPending} className="px-3 py-2 bg-primary text-white rounded-lg text-sm font-medium disabled:opacity-50">{save.isPending ? 'Saving…' : 'Update status'}</button>
-          </div>
-        </div>
       </div>
     </div>
   );

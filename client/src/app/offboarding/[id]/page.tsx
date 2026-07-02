@@ -6,14 +6,13 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
-import { formatDate } from '@/lib/utils';
+import { formatDate, formatINR } from '@/lib/utils';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import {
   ArrowLeft, CheckCircle2, Circle, Loader2, UserMinus, ShieldOff,
   IndianRupee, Calendar, Briefcase, Building2,
 } from 'lucide-react';
 
-const inr = (n: any) => `₹${Math.round(Number(n) || 0).toLocaleString('en-IN')}`;
 
 export default function OffboardingDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -144,7 +143,7 @@ export default function OffboardingDetailPage({ params }: { params: Promise<{ id
                 <FnfRow label="Deductions (advances/notice)" value={fnf.deductions} onChange={(v) => setF('deductions', v)} disabled={completed} negative />
                 <div className="border-t border-border pt-3 flex items-center justify-between">
                   <span className="text-sm font-semibold text-foreground">Net Payable</span>
-                  <span className="text-lg font-bold text-primary">{inr(net)}</span>
+                  <span className="text-lg font-bold text-primary">{formatINR(net)}</span>
                 </div>
                 {!completed && (
                   <button onClick={() => saveFnf.mutate()} disabled={saveFnf.isPending}
@@ -152,7 +151,7 @@ export default function OffboardingDetailPage({ params }: { params: Promise<{ id
                     {saveFnf.isPending ? <Loader2 size={15} className="animate-spin" /> : <IndianRupee size={15} />} Save settlement
                   </button>
                 )}
-                {c.fnf_amount != null && <p className="text-xs text-secondary text-center">Last saved: {inr(c.fnf_amount)}</p>}
+                {c.fnf_amount != null && <p className="text-xs text-secondary text-center">Last saved: {formatINR(c.fnf_amount)}</p>}
               </div>
             )}
           </div>

@@ -1,6 +1,6 @@
 import db from '../config/database';
 import { JwtPayload } from '../types';
-import { getScope, suggestedSalary, listPropertyBudgets } from './manpower.service';
+import { getScope, suggestedSalary, listPropertyBudgets, DEPARTED_STATUSES } from './manpower.service';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Property Analytics — sanctioned vs committed budget & headcount, salary variance,
@@ -23,7 +23,7 @@ async function scopeNames(user: JwtPayload): Promise<string[] | null> {
 // committed (Σ monthly_ctc) + filled (count) per (branch_name, job_title_id), non-Left
 async function committedMap() {
   const agg = await db('employees')
-    .whereNot('employment_status', 'left')
+    .whereNotIn('employment_status', DEPARTED_STATUSES)
     .select('branch_name', 'job_title_id')
     .sum({ committed: 'monthly_ctc' })
     .count({ cnt: '*' })
@@ -132,7 +132,7 @@ export async function salaryVariance(filters: Filters, user: JwtPayload) {
     .leftJoin('job_titles as jt', 'jt.id', 'e.job_title_id')
     .leftJoin('users as cu', 'cu.id', 'e.created_by_user_id')
     .leftJoin('users as au', 'au.id', 'e.approved_by_user_id')
-    .whereNot('e.employment_status', 'left')
+    .whereNotIn('e.employment_status', DEPARTED_STATUSES)
     .whereNotNull('e.monthly_ctc')
     .whereRaw('e.monthly_ctc > s.band_max')
     .select(
@@ -178,13 +178,13 @@ export async function attrition(filters: Filters, user: JwtPayload, months = 12)
 
   // Left within the window
   const leftQ = db('employees as e').leftJoin('properties as p', 'p.name', 'e.branch_name')
-    .where('e.employment_status', 'left').where('e.last_working_day', '>=', sinceStr);
+    .whereIn('e.employment_status', DEPARTED_STATUSES).where('e.last_working_day', '>=', sinceStr);
   scopeWhere(leftQ);
   const leftRows = await leftQ.select('e.id', 'e.date_of_joining', 'e.last_working_day', 'e.branch_name', 'e.job_title_id');
 
   // Active now
   const activeQ = db('employees as e').leftJoin('properties as p', 'p.name', 'e.branch_name')
-    .whereNot('e.employment_status', 'left');
+    .whereNotIn('e.employment_status', DEPARTED_STATUSES);
   scopeWhere(activeQ);
   const activeCount = Number((await activeQ.count({ c: '*' }).first())?.c || 0);
 
@@ -204,7 +204,7 @@ export async function attrition(filters: Filters, user: JwtPayload, months = 12)
   if (leftRows.length) {
     const ids = leftRows.map((r: any) => r.id);
     const hist = await db('employee_status_history')
-      .whereIn('employee_id', ids).whereIn('to_status', ['on_notice', 'left'])
+      .whereIn('employee_id', ids).whereIn('to_status', ['on_notice', 'left', 'absconding'])
       .select('employee_id', 'created_at').orderBy('created_at', 'asc');
     const firstNotice = new Map<number, string>();
     for (const h of hist as any[]) if (!firstNotice.has(h.employee_id)) firstNotice.set(h.employee_id, h.created_at);

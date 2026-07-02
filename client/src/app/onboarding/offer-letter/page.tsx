@@ -6,6 +6,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
+import { formatINR } from '@/lib/utils';
 import { ArrowLeft, FileText, Download, Eye, Loader2, Percent, IndianRupee, AlertTriangle } from 'lucide-react';
 
 export default function OfferLetterPage() {
@@ -350,7 +351,6 @@ const LWF_BY_CITY: Record<string, { employee: number; employer: number }> = {
   Bengaluru: { employee: 20, employer: 40 }, Karnataka: { employee: 20, employer: 40 },
   Chandigarh: { employee: 5, employer: 20 },
 };
-const inr = (n: any) => `₹${Math.round(Number(n) || 0).toLocaleString('en-IN')}`;
 
 // Mirrors server payslip.calc — recompute the breakdown from an adjusted monthly gross.
 function computeOfferBreakdown(inputs: any, gross: number) {
@@ -383,7 +383,7 @@ function OfferRow({ label, value, strong }: { label: string; value: number; stro
   return (
     <div className="flex items-center justify-between">
       <span className={strong ? 'font-medium text-foreground' : 'text-secondary'}>{label}</span>
-      <span className={strong ? 'font-semibold text-foreground' : 'text-foreground'}>{inr(value)}</span>
+      <span className={strong ? 'font-semibold text-foreground' : 'text-foreground'}>{formatINR(value)}</span>
     </div>
   );
 }
@@ -497,7 +497,7 @@ function EmployeeOfferEditor({ employeeId }: { employeeId: string }) {
 
               <div className="border-t border-border pt-4">
                 <p className="text-sm font-medium text-foreground">Base salary (monthly)</p>
-                <p className="text-xs text-secondary mb-3">From structure: <b>{inr(baseGross)}</b>/mo. Adjust by % or set the final amount — a negative % decrements.</p>
+                <p className="text-xs text-secondary mb-3">From structure: <b>{formatINR(baseGross)}</b>/mo. Adjust by % or set the final amount — a negative % decrements.</p>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-medium text-secondary mb-1">Adjustment %</label>
@@ -527,12 +527,12 @@ function EmployeeOfferEditor({ employeeId }: { employeeId: string }) {
                   <OfferRow label="Net In-Hand (approx.)" value={bd.net} />
                   <div className="flex items-center justify-between pt-2 mt-1 border-t border-border">
                     <span className="font-semibold text-primary">Annual CTC (offer)</span>
-                    <span className="font-bold text-primary">{inr(bd.annualCtc)}</span>
+                    <span className="font-bold text-primary">{formatINR(bd.annualCtc)}</span>
                   </div>
                   {bandMax != null && (
                     <div className={`flex items-center justify-between pt-1.5 text-xs ${overBand ? 'text-red-600 font-medium' : 'text-secondary'}`}>
                       <span>Sanctioned cap (monthly CTC)</span>
-                      <span>{inr(bandMax)}/mo</span>
+                      <span>{formatINR(bandMax)}/mo</span>
                     </div>
                   )}
                 </div>
@@ -541,7 +541,7 @@ function EmployeeOfferEditor({ employeeId }: { employeeId: string }) {
               {overBand && (
                 <div className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 p-3 text-xs text-red-700">
                   <AlertTriangle size={15} className="shrink-0 mt-0.5" />
-                  <span>Offered monthly CTC <b>{inr(bd!.ctc)}</b> exceeds the sanctioned band maximum <b>{inr(bandMax!)}</b> for this role/property. Lower the base salary, or raise the band in Admin → Budget Control.</span>
+                  <span>Offered monthly CTC <b>{formatINR(bd!.ctc)}</b> exceeds the sanctioned band maximum <b>{formatINR(bandMax!)}</b> for this role/property. Lower the base salary, or raise the band in Admin → Budget Control.</span>
                 </div>
               )}
 

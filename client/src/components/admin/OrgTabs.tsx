@@ -4,6 +4,7 @@ import { useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import api from '@/lib/api';
+import { formatINR } from '@/lib/utils';
 import { Plus, Pencil, Trash2, X, Upload } from 'lucide-react';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 
@@ -333,8 +334,8 @@ export function PayGradesTab() {
             {items.map((item: any) => (
               <tr key={item.id} className="hover:bg-muted/30">
                 <td className="px-4 py-3 text-sm font-medium text-foreground">{item.name}</td>
-                <td className="px-4 py-3 text-sm text-secondary">{item.min_salary ? `₹${Number(item.min_salary).toLocaleString('en-IN')}` : '—'}</td>
-                <td className="px-4 py-3 text-sm text-secondary">{item.max_salary ? `₹${Number(item.max_salary).toLocaleString('en-IN')}` : '—'}</td>
+                <td className="px-4 py-3 text-sm text-secondary">{formatINR(item.min_salary)}</td>
+                <td className="px-4 py-3 text-sm text-secondary">{formatINR(item.max_salary)}</td>
                 <td className="px-4 py-3 text-right">
                   <button onClick={() => openEdit(item)} className="p-1.5 text-secondary hover:text-foreground"><Pencil size={14} /></button>
                   <button onClick={() => setDelTarget(item)} className="p-1.5 text-secondary hover:text-red-600"><Trash2 size={14} /></button>

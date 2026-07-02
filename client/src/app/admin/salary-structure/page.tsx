@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import Breadcrumb from '@/components/ui/Breadcrumb';
+import { formatINR } from '@/lib/utils';
 import { Search, Briefcase, Loader2, Save, IndianRupee, AlertCircle } from 'lucide-react';
 
 const CITIES = ['Haryana', 'Delhi', 'Gurugram', 'Noida', 'Mumbai', 'Maharashtra', 'Bengaluru', 'Karnataka', 'Chandigarh'];
@@ -17,7 +18,6 @@ const LWF_BY_CITY: Record<string, { employee: number; employer: number }> = {
   Bengaluru: { employee: 20, employer: 40 }, Karnataka: { employee: 20, employer: 40 },
   Chandigarh: { employee: 5, employer: 20 },
 };
-const inr = (n: any) => `₹${Math.round(Number(n) || 0).toLocaleString('en-IN')}`;
 const num = (v: any) => (v === '' || v === null || v === undefined ? 0 : Number(v));
 
 const emptyStruct = {
@@ -140,7 +140,7 @@ export default function SalaryStructurePage() {
                     {d.employee_count > 0 && <span className="text-[10px] text-secondary">{d.employee_count}</span>}
                   </div>
                   {d.configured
-                    ? d.breakdown && <p className="text-[11px] text-secondary mt-0.5 ml-6">CTC {inr(d.breakdown.ctc)}/mo</p>
+                    ? d.breakdown && <p className="text-[11px] text-secondary mt-0.5 ml-6">CTC {formatINR(d.breakdown.ctc)}/mo</p>
                     : <span className="inline-block mt-1 ml-6 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">Missing salary details</span>}
                 </button>
               ))}
@@ -255,7 +255,7 @@ function Row({ label, value, sub, head, strong, highlight, note }: {
         {label}
         {note && <span className="text-[11px] text-secondary ml-2">{note}</span>}
       </td>
-      <td className={`px-5 py-2 text-right ${strong ? 'font-bold text-primary' : head ? 'font-semibold text-foreground' : 'text-foreground'}`}>{inr(value)}</td>
+      <td className={`px-5 py-2 text-right ${strong ? 'font-bold text-primary' : head ? 'font-semibold text-foreground' : 'text-foreground'}`}>{formatINR(value)}</td>
     </tr>
   );
 }

@@ -8,18 +8,11 @@ import {
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import LoadError from '@/components/ui/LoadError';
+import { formatINR, formatINRShort } from '@/lib/utils';
 import {
   Building2, IndianRupee, Users, TrendingDown, AlertTriangle, RefreshCw, UserMinus,
 } from 'lucide-react';
 
-const inr = (n: number) => '₹' + new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(Math.round(Number(n) || 0));
-const inrShort = (n: number) => {
-  const v = Number(n) || 0;
-  if (v >= 1e7) return '₹' + (v / 1e7).toFixed(2) + 'Cr';
-  if (v >= 1e5) return '₹' + (v / 1e5).toFixed(2) + 'L';
-  if (v >= 1e3) return '₹' + (v / 1e3).toFixed(1) + 'k';
-  return '₹' + v;
-};
 
 export default function PropertyAnalyticsPage() {
   const [clusterId, setClusterId] = useState('');
@@ -78,15 +71,15 @@ export default function PropertyAnalyticsPage() {
 
         {/* KPI strip */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <Kpi icon={<IndianRupee size={16} />} label="Manpower Amount Sanctioned" value={inr(t?.sanctioned_amount || 0)} sub="monthly CTC" />
-          <Kpi icon={<TrendingDown size={16} />} label="Committed" value={inr(t?.committed_amount || 0)} sub={`${t?.utilization_pct || 0}% utilised`} danger={t?.over_budget} />
-          <Kpi icon={<IndianRupee size={16} />} label="Remaining Budget" value={inr(t?.remaining_amount || 0)} danger={(t?.remaining_amount || 0) < 0} />
+          <Kpi icon={<IndianRupee size={16} />} label="Manpower Amount Sanctioned" value={formatINR(t?.sanctioned_amount || 0)} sub="monthly CTC" />
+          <Kpi icon={<TrendingDown size={16} />} label="Committed" value={formatINR(t?.committed_amount || 0)} sub={`${t?.utilization_pct || 0}% utilised`} danger={t?.over_budget} />
+          <Kpi icon={<IndianRupee size={16} />} label="Remaining Budget" value={formatINR(t?.remaining_amount || 0)} danger={(t?.remaining_amount || 0) < 0} />
           <Kpi icon={<Users size={16} />} label="Count of Manpower Sanctioned" value={String(t?.sanctioned_headcount || 0)} sub={`${t?.filled || 0} filled · ${t?.open || 0} open`} />
         </div>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Kpi icon={<UserMinus size={16} />} label="Attrition (12 mo)" value={`${attrition?.attrition_rate_pct || 0}%`} sub={`${attrition?.left_count || 0} exits`} />
           <Kpi icon={<AlertTriangle size={16} />} label="Short-notice exits" value={String(attrition?.short_notice_count || 0)} sub={`avg tenure ${attrition?.avg_tenure_months || 0} mo`} />
-          <Kpi icon={<AlertTriangle size={16} />} label="Salary variance (over band)" value={inr(variance?.total_variance || 0)} sub={`${variance?.count || 0} hire(s)`} danger={(variance?.total_variance || 0) > 0} />
+          <Kpi icon={<AlertTriangle size={16} />} label="Salary variance (over band)" value={formatINR(variance?.total_variance || 0)} sub={`${variance?.count || 0} hire(s)`} danger={(variance?.total_variance || 0) > 0} />
           <Kpi icon={<RefreshCw size={16} />} label="Open to backfill" value={String(backfill?.open_count || 0)} sub={`avg ${backfill?.avg_days_open || 0} days open`} />
         </div>
 
@@ -106,8 +99,8 @@ export default function PropertyAnalyticsPage() {
                     </div>
                   </div>
                   <div className="col-span-3 text-right text-xs">
-                    <span className={p.over_budget ? 'text-red-600 font-medium' : 'text-foreground'}>{inrShort(p.committed_amount)}</span>
-                    <span className="text-secondary"> / {inrShort(p.sanctioned_amount)}</span>
+                    <span className={p.over_budget ? 'text-red-600 font-medium' : 'text-foreground'}>{formatINRShort(p.committed_amount)}</span>
+                    <span className="text-secondary"> / {formatINRShort(p.sanctioned_amount)}</span>
                     <div className="text-[11px] text-secondary">{p.filled}/{p.sanctioned_headcount} heads · {p.open} open</div>
                   </div>
                 </div>
@@ -141,7 +134,7 @@ export default function PropertyAnalyticsPage() {
                 <thead className="text-secondary text-left"><tr><th className="py-1.5 font-medium">HR</th><th className="py-1.5 font-medium text-right">Hires</th><th className="py-1.5 font-medium text-right">Variance / mo</th></tr></thead>
                 <tbody className="divide-y divide-border">
                   {variance.byHr.map((h: any) => (
-                    <tr key={h.hired_by}><td className="py-2 truncate">{h.hired_by}</td><td className="py-2 text-right">{h.count}</td><td className="py-2 text-right text-red-600 font-medium">+{inr(h.total_variance)}</td></tr>
+                    <tr key={h.hired_by}><td className="py-2 truncate">{h.hired_by}</td><td className="py-2 text-right">{h.count}</td><td className="py-2 text-right text-red-600 font-medium">+{formatINR(h.total_variance)}</td></tr>
                   ))}
                 </tbody>
               </table>
@@ -156,8 +149,8 @@ export default function PropertyAnalyticsPage() {
                     {variance.byHire.map((h: any) => (
                       <tr key={h.id}>
                         <td className="py-2"><div className="font-medium text-foreground">{h.first_name} {h.last_name}</div><div className="text-[11px] text-secondary">{h.job_title} @ {h.branch_name}</div></td>
-                        <td className="py-2 text-right">{inr(h.monthly_ctc)}</td>
-                        <td className="py-2 text-right text-red-600 font-medium">+{inr(h.variance)}</td>
+                        <td className="py-2 text-right">{formatINR(h.monthly_ctc)}</td>
+                        <td className="py-2 text-right text-red-600 font-medium">+{formatINR(h.variance)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -188,13 +181,13 @@ export default function PropertyAnalyticsPage() {
               <div className="space-y-3">
                 <div className="grid grid-cols-3 gap-2">
                   <MiniStat label="Pending" value={String(exceptions.summary.pending.count)} tone="amber" />
-                  <MiniStat label="Approved" value={String(exceptions.summary.approved.count)} sub={inr(exceptions.summary.approved.value)} tone="green" />
+                  <MiniStat label="Approved" value={String(exceptions.summary.approved.count)} sub={formatINR(exceptions.summary.approved.value)} tone="green" />
                   <MiniStat label="Rejected" value={String(exceptions.summary.rejected.count)} tone="gray" />
                 </div>
                 <div className="max-h-56 overflow-y-auto divide-y divide-border">
                   {exceptions.recent?.length ? exceptions.recent.map((x: any) => (
                     <div key={x.id} className="py-2 text-sm flex items-center justify-between gap-2">
-                      <div className="min-w-0"><div className="font-medium text-foreground truncate">{x.candidate_name} · {x.job_title}</div><div className="text-[11px] text-secondary truncate">{x.property_name} · +{inr(x.variance_amount)}</div></div>
+                      <div className="min-w-0"><div className="font-medium text-foreground truncate">{x.candidate_name} · {x.job_title}</div><div className="text-[11px] text-secondary truncate">{x.property_name} · +{formatINR(x.variance_amount)}</div></div>
                       <span className={`text-[11px] px-2 py-0.5 rounded-full ${x.status === 'approved' ? 'bg-green-100 text-green-700' : x.status === 'pending' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600'}`}>{x.status}</span>
                     </div>
                   )) : <p className="text-secondary text-sm py-2">No exceptions raised.</p>}

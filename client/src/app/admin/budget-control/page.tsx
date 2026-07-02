@@ -9,9 +9,9 @@ import api from '@/lib/api';
 import LoadError from '@/components/ui/LoadError';
 import { useUnsavedChangesWarning } from '@/hooks/useUnsavedChangesWarning';
 import Breadcrumb from '@/components/ui/Breadcrumb';
+import { formatINR } from '@/lib/utils';
 import { Wallet, Save, IndianRupee, Users, UserCheck, UserPlus, ChevronDown, ChevronRight } from 'lucide-react';
 
-const inr = (n: number) => '₹' + new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(Math.round(Number(n) || 0));
 
 export default function BudgetControlPage() {
   const router = useRouter();
@@ -83,11 +83,11 @@ export default function BudgetControlPage() {
 
         {/* Live metrics — recompute as soon as any value is edited */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-          <Metric icon={<IndianRupee size={16} />} label="Total Sanctioned Amount" value={inr(totals.budget)} sub="monthly CTC, all properties" />
+          <Metric icon={<IndianRupee size={16} />} label="Total Sanctioned Amount" value={formatINR(totals.budget)} sub="monthly CTC, all properties" />
           <Metric icon={<Users size={16} />} label="Total Sanctioned Headcount" value={String(totals.head)} sub={`${filtered.length} properties`} />
           <Metric icon={<UserCheck size={16} />} label="Positions Filled" value={String(totals.filled)} sub={`${filtered.length} properties`} />
           <Metric icon={<UserPlus size={16} />} label="Open Slots" value={String(Math.max(0, totals.head - totals.filled))} sub="sanctioned − filled" />
-          <Metric icon={<Wallet size={16} />} label="Remaining Budget" value={inr(totals.budget - totals.committed)} danger={totals.committed > totals.budget} sub={`${inr(totals.committed)} committed`} />
+          <Metric icon={<Wallet size={16} />} label="Remaining Budget" value={formatINR(totals.budget - totals.committed)} danger={totals.committed > totals.budget} sub={`${formatINR(totals.committed)} committed`} />
         </div>
 
         <div className="flex items-center gap-2">
@@ -143,7 +143,7 @@ export default function BudgetControlPage() {
                         <span className="text-secondary"> / {val(r, 'head')} · {Math.max(0, Number(val(r, 'head')) - r.filled_headcount)} open</span>
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap">
-                        <span className={r.over_budget ? 'text-red-600 font-medium' : 'text-foreground'}>{inr(r.committed_amount)}</span>
+                        <span className={r.over_budget ? 'text-red-600 font-medium' : 'text-foreground'}>{formatINR(r.committed_amount)}</span>
                       </td>
                       <td className="px-4 py-3 text-right whitespace-nowrap">
                         {dirty && <span className="mr-2 text-[11px] font-medium text-amber-600">Unsaved</span>}

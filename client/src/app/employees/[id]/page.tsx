@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
+import { formatINR } from '@/lib/utils';
 import { useAuth } from '@/lib/auth';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import {
@@ -203,7 +204,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
               <InfoRow icon={CreditCard} label="Status" value={emp.is_active ? 'Active' : 'Inactive'} />
               {emp.offered_ctc != null && (
                 <InfoRow icon={CreditCard} label="Offered Salary" value={
-                  `₹${Math.round(Number(emp.offered_ctc)).toLocaleString('en-IN')}/yr · ₹${Math.round(Number(emp.offered_base)).toLocaleString('en-IN')}/mo`
+                  `${formatINR(emp.offered_ctc)}/yr · ${formatINR(emp.offered_base)}/mo`
                   + (Number(emp.offer_adjustment_pct) ? ` (${Number(emp.offer_adjustment_pct) > 0 ? '+' : ''}${emp.offer_adjustment_pct}% vs structure)` : '')
                 } />
               )}

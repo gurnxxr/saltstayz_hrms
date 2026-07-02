@@ -11,12 +11,12 @@ import {
   Play, Lock, LockOpen, Loader2, CheckCircle2, AlertTriangle,
 } from 'lucide-react';
 import Breadcrumb from '@/components/ui/Breadcrumb';
+import { formatINR } from '@/lib/utils';
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
-const inr = (n: any) => `₹${Math.round(Number(n) || 0).toLocaleString('en-IN')}`;
 
 export default function PayrollRunsPage() {
   const router = useRouter();
@@ -123,8 +123,8 @@ export default function PayrollRunsPage() {
                 {lastRun.generated} payslip(s) generated for {MONTHS[lastRun.month - 1]} {lastRun.year}
               </p>
               <div className="flex flex-wrap gap-x-6 gap-y-1 mt-2 text-xs text-secondary">
-                <span>Total Net: <span className="font-medium text-foreground">{inr(lastRun.total_net)}</span></span>
-                <span>Total CTC: <span className="font-medium text-foreground">{inr(lastRun.total_ctc)}</span></span>
+                <span>Total Net: <span className="font-medium text-foreground">{formatINR(lastRun.total_net)}</span></span>
+                <span>Total CTC: <span className="font-medium text-foreground">{formatINR(lastRun.total_ctc)}</span></span>
               </div>
               {lastRun.skipped?.length > 0 && (
                 <p className="text-xs text-amber-600 mt-2">
@@ -176,8 +176,8 @@ export default function PayrollRunsPage() {
                           </span>
                         </td>
                         <td className="px-4 py-3 text-sm text-right text-foreground">{r.employee_count}</td>
-                        <td className="px-4 py-3 text-sm text-right text-foreground">{inr(r.total_net)}</td>
-                        <td className="px-4 py-3 text-sm text-right text-foreground">{inr(r.total_ctc)}</td>
+                        <td className="px-4 py-3 text-sm text-right text-foreground">{formatINR(r.total_net)}</td>
+                        <td className="px-4 py-3 text-sm text-right text-foreground">{formatINR(r.total_ctc)}</td>
                         <td className="px-6 py-3 text-right">
                           {locked ? (
                             canUnlock ? (

@@ -11,13 +11,13 @@ import {
   Search, Pencil, Download, Loader2, X, Save, IndianRupee,
 } from 'lucide-react';
 import Breadcrumb from '@/components/ui/Breadcrumb';
+import { formatINR } from '@/lib/utils';
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
 const CITIES = ['Delhi', 'Gurugram', 'Noida', 'Mumbai', 'Bengaluru', 'Chandigarh', 'Haryana', 'Maharashtra', 'Karnataka'];
-const inr = (n: any) => `₹${Math.round(Number(n) || 0).toLocaleString('en-IN')}`;
 
 export default function SalarySetupPage() {
   const router = useRouter();
@@ -145,10 +145,10 @@ export default function SalarySetupPage() {
                         <td className="px-4 py-3 text-sm text-foreground">{r.first_name} {r.last_name}</td>
                         <td className="px-4 py-3 text-sm text-secondary">{r.dept_name || '—'}</td>
                         <td className="px-4 py-3 text-sm text-right font-medium text-foreground">
-                          {configured ? inr(r.gross) : <span className="text-amber-600 text-xs">Not set</span>}
+                          {configured ? formatINR(r.gross) : <span className="text-amber-600 text-xs">Not set</span>}
                         </td>
                         <td className="px-4 py-3 text-sm text-secondary">{r.city || '—'}</td>
-                        <td className="px-4 py-3 text-sm text-right text-foreground">{configured ? inr(r.pli) : '—'}</td>
+                        <td className="px-4 py-3 text-sm text-right text-foreground">{configured ? formatINR(r.pli) : '—'}</td>
                         <td className="px-4 py-3">
                           <div className="flex items-center justify-end gap-1">
                             {canEdit && (

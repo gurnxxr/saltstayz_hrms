@@ -14,10 +14,13 @@ import { notifyRole } from './notification.service';
 // exception for Admin approval. Committed = Σ monthly_ctc of non-Left employees.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const EMPLOYMENT_STATUSES = ['active', 'pip', 'on_notice', 'left'] as const;
+export const EMPLOYMENT_STATUSES = ['active', 'pip', 'on_notice', 'left', 'absconding'] as const;
 export type EmploymentStatus = typeof EMPLOYMENT_STATUSES[number];
-// Active, PIP and On Notice all consume a slot + budget; only Left frees them.
-const CONSUMES_SLOT = (s: string) => s !== 'left';
+// Departed = the employee is gone (Left = resigned/terminated, Absconding =
+// vanished without notice). Both free the headcount slot + budget. Active, PIP
+// and On Notice still consume a slot + budget.
+export const DEPARTED_STATUSES: string[] = ['left', 'absconding'];
+const CONSUMES_SLOT = (s: string) => !DEPARTED_STATUSES.includes(s);
 
 const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 const today = () => new Date().toISOString().split('T')[0];
@@ -120,7 +123,7 @@ export interface PropertyBudget {
 async function propertyCommitment(cx: Knex | Knex.Transaction, propertyName: string) {
   const agg = await cx('employees')
     .where('branch_name', propertyName)
-    .whereNot('employment_status', 'left')
+    .whereNotIn('employment_status', DEPARTED_STATUSES)
     .whereNotNull('monthly_ctc')
     .select(cx.raw('COALESCE(SUM(monthly_ctc), 0) as committed'), cx.raw('COUNT(*) as cnt'))
     .first();
@@ -412,8 +415,9 @@ export async function changeStatus(employeeId: number, toStatus: string, data: {
     if (!data.last_working_day) throw new ValidationError('On Notice requires a last working day.');
     patch.last_working_day = data.last_working_day;
     patch.is_active = true; patch.open_to_backfill = false;
-  } else if (toStatus === 'left') {
-    if (!data.last_working_day) throw new ValidationError('Left requires a last working day.');
+  } else if (toStatus === 'left' || toStatus === 'absconding') {
+    const label = toStatus === 'absconding' ? 'Absconding' : 'Left';
+    if (!data.last_working_day) throw new ValidationError(`${label} requires a last working day.`);
     patch.last_working_day = data.last_working_day;
     patch.is_active = false; patch.open_to_backfill = true; // frees the slot + budget
   } else { // active
@@ -435,8 +439,8 @@ export async function changeStatus(employeeId: number, toStatus: string, data: {
     });
   });
 
-  // On PIP / Left, flag admin + HR that this JOB needs a backup.
-  if (toStatus === 'pip' || toStatus === 'left') {
+  // On PIP / Left / Absconding, flag admin + HR that this JOB needs a backup.
+  if (toStatus === 'pip' || DEPARTED_STATUSES.includes(toStatus)) {
     await notifyReplacementNeeded({ ...emp, employment_status: toStatus });
   }
   return getHire(employeeId);
@@ -447,7 +451,9 @@ export async function notifyReplacementNeeded(emp: any) {
   const jt = emp.job_title_id ? (await db('job_titles').where('id', emp.job_title_id).first())?.title : null;
   const who = `${emp.first_name || ''} ${emp.last_name || ''}`.trim() || 'An employee';
   const tag = emp.job_id ? `${emp.job_id} · ` : '';
-  const verb = emp.employment_status === 'pip' ? 'is on PIP' : 'is leaving';
+  const verb = emp.employment_status === 'pip' ? 'is on PIP'
+    : emp.employment_status === 'absconding' ? 'has absconded'
+    : 'is leaving';
   const payload = {
     type: 'replacement_needed',
     title: 'Replacement needed',
@@ -465,7 +471,7 @@ export async function listReplacements(user: JwtPayload) {
     .leftJoin('job_titles as jt', 'jt.id', 'e.job_title_id')
     .leftJoin('properties as p', 'p.name', 'e.branch_name')
     .leftJoin('clusters as c', 'c.id', 'p.cluster_id')
-    .whereIn('e.employment_status', ['pip', 'left'])
+    .whereIn('e.employment_status', ['pip', 'left', 'absconding'])
     .where('e.open_to_backfill', true)
     .select(
       'e.id', 'e.job_id', 'e.employee_code', 'e.first_name', 'e.last_name',
@@ -518,7 +524,7 @@ export async function listSanctions(filters: { property_id?: number; cluster_id?
 
   // One pass over non-Left employees → committed + filled per (branch, role)
   const agg = await db('employees')
-    .whereNot('employment_status', 'left')
+    .whereNotIn('employment_status', DEPARTED_STATUSES)
     .select('branch_name', 'job_title_id')
     .sum({ committed: 'monthly_ctc' })
     .count({ cnt: '*' })
@@ -748,7 +754,7 @@ export async function listPropertyBudgets(filters: { cluster_id?: number }, user
   const expMap = new Map<number, any>(explicits.map((e: any) => [e.property_id, e]));
   const rolls = await db('manpower_sanctions').select('property_id').sum({ budget: 'sanctioned_budget_monthly' }).sum({ head: 'sanctioned_headcount' }).count({ roles: '*' }).groupBy('property_id');
   const rollMap = new Map<number, any>(rolls.map((r: any) => [r.property_id, r]));
-  const commits = await db('employees').whereNot('employment_status', 'left').whereNotNull('monthly_ctc')
+  const commits = await db('employees').whereNotIn('employment_status', DEPARTED_STATUSES).whereNotNull('monthly_ctc')
     .select('branch_name').sum({ committed: 'monthly_ctc' }).count({ cnt: '*' }).groupBy('branch_name');
   const commitMap = new Map<string, any>(commits.map((c: any) => [c.branch_name, c]));
 
@@ -857,7 +863,7 @@ export async function getPropertyConsole(propertyId: number) {
   let total_spend = 0, worker_count = 0, salaried = 0, on_pip = 0;
   for (const e of emps as any[]) {
     if (e.employment_status === 'pip') on_pip += 1;
-    if (e.employment_status === 'left') continue; // Left employees don't count toward workers/spend
+    if (DEPARTED_STATUSES.includes(e.employment_status)) continue; // departed employees don't count toward workers/spend
     const dept = e.dept_name || 'Unassigned';
     if (!deptMap.has(dept)) deptMap.set(dept, { dept_name: dept, actual_workers: 0, spend: 0, salaried: 0 });
     const ctc = Number(e.monthly_ctc || 0);
