@@ -7,7 +7,7 @@ import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import {
-  ArrowLeft, SlidersHorizontal, IndianRupee, Users, Wallet, TrendingUp, Save, X, MapPin, CalendarRange, ChevronRight, UserCheck, AlertTriangle,
+  ArrowLeft, SlidersHorizontal, IndianRupee, Users, Wallet, TrendingUp, X, MapPin, CalendarRange, ChevronRight, UserCheck, AlertTriangle,
 } from 'lucide-react';
 
 const inr = (n: number | null | undefined) =>
@@ -94,22 +94,10 @@ function Console({ propertyId }: { propertyId: number }) {
   const qc = useQueryClient();
   const [statusTarget, setStatusTarget] = useState<any | null>(null);
   const [selectedDept, setSelectedDept] = useState<string | null>(null);
-  const [sanctionedEdits, setSanctionedEdits] = useState<Record<string, string>>({});
 
   const { data, isLoading } = useQuery({
     queryKey: ['property-console', propertyId],
     queryFn: () => api.get(`/manpower/property-console?property_id=${propertyId}`).then(r => r.data),
-  });
-
-  const saveSanctioned = useMutation({
-    mutationFn: ({ department, worker_count }: any) =>
-      api.put('/manpower/property-console/department-workers', { property_id: propertyId, department, worker_count: Number(worker_count) }),
-    onSuccess: (_d, v: any) => {
-      toast.success('Sanctioned count saved');
-      setSanctionedEdits(e => { const n = { ...e }; delete n[v.department]; return n; });
-      qc.invalidateQueries({ queryKey: ['property-console', propertyId] });
-    },
-    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to save'),
   });
 
   if (isLoading || !data) return <div className="bg-card rounded-xl border border-border p-10 text-center text-secondary text-sm">Loading…</div>;
@@ -152,7 +140,7 @@ function Console({ propertyId }: { propertyId: number }) {
         <div className="bg-card rounded-xl border border-border overflow-hidden">
           <div className="px-5 py-3 border-b border-border">
             <h3 className="text-sm font-semibold text-foreground">Departments</h3>
-            <p className="text-[11px] text-secondary mt-0.5">Set the sanctioned employees per department, or click a department to view its employees.</p>
+            <p className="text-[11px] text-secondary mt-0.5">Sanctioned employees per department are set in Admin → Budget Control. Click a department to view its employees.</p>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -168,34 +156,19 @@ function Console({ propertyId }: { propertyId: number }) {
               <tbody className="divide-y divide-border">
                 {byDepartment.length === 0 ? (
                   <tr><td colSpan={5} className="px-5 py-6 text-center text-secondary">No departments configured.</td></tr>
-                ) : byDepartment.map((d: any) => {
-                  const edited = sanctionedEdits[d.dept_name];
-                  const val = edited != null ? edited : String(d.sanctioned_workers ?? 0);
-                  return (
-                    <tr key={d.dept_name} className="hover:bg-muted/30">
-                      <td className="px-5 py-2.5">
-                        <button onClick={() => setSelectedDept(d.dept_name)} className="font-medium text-foreground hover:text-primary inline-flex items-center gap-1">
-                          {d.dept_name}<ChevronRight size={13} className="text-secondary" />
-                        </button>
-                      </td>
-                      <td className={`px-5 py-2.5 ${d.over_limit ? 'text-red-600 font-medium' : ''}`} title={d.over_limit ? 'Over the sanctioned limit' : undefined}>{d.actual_workers}</td>
-                      <td className="px-5 py-2.5">
-                        <div className="flex items-center gap-1.5">
-                          <input type="number" min="0" value={val}
-                            onChange={ev => setSanctionedEdits(s => ({ ...s, [d.dept_name]: ev.target.value }))}
-                            className="w-24 px-2 py-1 border border-border rounded-lg bg-background text-sm" />
-                          <button disabled={edited == null || saveSanctioned.isPending}
-                            onClick={() => saveSanctioned.mutate({ department: d.dept_name, worker_count: val })}
-                            className="p-1.5 rounded-lg text-primary hover:bg-primary/5 disabled:opacity-30" title="Save sanctioned count">
-                            <Save size={14} />
-                          </button>
-                        </div>
-                      </td>
-                      <td className="px-5 py-2.5 text-right">{inr(d.spend)}</td>
-                      <td className="px-5 py-2.5 text-right">{inr(d.avg_salary)}</td>
-                    </tr>
-                  );
-                })}
+                ) : byDepartment.map((d: any) => (
+                  <tr key={d.dept_name} className="hover:bg-muted/30">
+                    <td className="px-5 py-2.5">
+                      <button onClick={() => setSelectedDept(d.dept_name)} className="font-medium text-foreground hover:text-primary inline-flex items-center gap-1">
+                        {d.dept_name}<ChevronRight size={13} className="text-secondary" />
+                      </button>
+                    </td>
+                    <td className={`px-5 py-2.5 ${d.over_limit ? 'text-red-600 font-medium' : ''}`} title={d.over_limit ? 'Over the sanctioned limit' : undefined}>{d.actual_workers}</td>
+                    <td className="px-5 py-2.5">{d.sanctioned_workers ?? 0}</td>
+                    <td className="px-5 py-2.5 text-right">{inr(d.spend)}</td>
+                    <td className="px-5 py-2.5 text-right">{inr(d.avg_salary)}</td>
+                  </tr>
+                ))}
               </tbody>
               <tfoot>
                 <tr className="border-t-2 border-border bg-muted/30 font-semibold">
