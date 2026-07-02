@@ -2,8 +2,10 @@
 
 import AppShell from '@/components/layout/AppShell';
 import Link from 'next/link';
+import { useQuery } from '@tanstack/react-query';
+import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { Building2, Clock, ClipboardList, ShieldCheck, IndianRupee, ScrollText, DatabaseBackup, Settings, Play, CalendarCheck, Wallet, SlidersHorizontal } from 'lucide-react';
+import { Building2, Clock, ClipboardList, ShieldCheck, IndianRupee, ScrollText, DatabaseBackup, Settings, Play, CalendarCheck, Wallet, SlidersHorizontal, AlertTriangle } from 'lucide-react';
 
 const adminModules = [
   { label: 'Property Configuration', href: '/admin/property-config', icon: SlidersHorizontal, description: 'Per-property workers, salaries, spend, budget & status', roles: ['admin'] },
@@ -22,7 +24,18 @@ const adminModules = [
 
 export default function AdminPage() {
   const { user } = useAuth();
+  const isAdmin = user?.roleName === 'admin';
   const visibleModules = adminModules.filter(m => m.roles.includes(user?.roleName || ''));
+
+  // How many properties have more workers hired than sanctioned — surfaced as a
+  // badge on the Property Configuration card so the alert finds the admin, not
+  // the other way around.
+  const { data: budgets = [] } = useQuery({
+    queryKey: ['admin-property-budgets'],
+    queryFn: () => api.get('/manpower/property-budgets').then(r => r.data).catch(() => []),
+    enabled: isAdmin,
+  });
+  const overLimitCount = budgets.filter((b: any) => b.over_worker_limit).length;
 
   return (
     <AppShell>
@@ -41,8 +54,13 @@ export default function AdminPage() {
                 className="bg-card rounded-xl border border-border p-6 hover:border-primary hover:shadow-sm transition-all group"
               >
                 <Icon className="w-8 h-8 text-primary mb-3" />
-                <h3 className="font-semibold text-foreground group-hover:text-primary transition-colors">
+                <h3 className="font-semibold text-foreground group-hover:text-primary transition-colors flex items-center gap-2">
                   {mod.label}
+                  {mod.href === '/admin/property-config' && overLimitCount > 0 && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-[11px] font-semibold" title="Properties with more workers hired than sanctioned">
+                      <AlertTriangle size={11} /> {overLimitCount} over limit
+                    </span>
+                  )}
                 </h3>
                 <p className="text-sm text-secondary mt-1">{mod.description}</p>
               </Link>

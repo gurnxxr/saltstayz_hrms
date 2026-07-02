@@ -25,6 +25,17 @@ export default function PropertyConfigPage() {
     queryFn: () => api.get('/manpower/properties').then(r => r.data),
   });
 
+  // Property-wide hired-vs-sanctioned status, so the over-limit alert is visible
+  // here (before drilling in) instead of only appearing once you open a property.
+  const { data: budgets = [] } = useQuery({
+    queryKey: ['pc-budgets'],
+    queryFn: () => api.get('/manpower/property-budgets').then(r => r.data).catch(() => []),
+  });
+  const overLimitProps = useMemo(
+    () => budgets.filter((b: any) => b.over_worker_limit),
+    [budgets]
+  );
+
   const cities = useMemo(
     () => Array.from(new Set(properties.map((p: any) => p.city).filter(Boolean))).sort(),
     [properties]
@@ -65,6 +76,33 @@ export default function PropertyConfigPage() {
             </select>
           </div>
         </div>
+
+        {/* Surface the hired-vs-sanctioned alert across ALL properties up front, so the
+            admin is guided straight to the ones over limit instead of opening each. */}
+        {overLimitProps.length > 0 && (
+          <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3">
+            <div className="flex items-center gap-2 text-sm text-red-800 font-medium">
+              <AlertTriangle size={16} className="text-red-600 shrink-0" />
+              {overLimitProps.length} {overLimitProps.length === 1 ? 'property is' : 'properties are'} over the sanctioned worker limit
+            </div>
+            <div className="flex flex-wrap gap-2 mt-2.5">
+              {overLimitProps.map((b: any) => (
+                <button
+                  key={b.property_id}
+                  onClick={() => {
+                    const p = properties.find((x: any) => x.id === b.property_id);
+                    setCity(p?.city || '');
+                    setPropertyId(String(b.property_id));
+                  }}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-red-200 bg-white text-xs font-medium text-red-700 hover:bg-red-100 transition-colors"
+                >
+                  {b.property_name}
+                  <span className="text-red-500">{b.worker_count}/{b.total_sanctioned_workers}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {propertyId ? <Console propertyId={Number(propertyId)} /> : (
           <div className="bg-card rounded-xl border border-dashed border-border p-10 text-center text-secondary text-sm">

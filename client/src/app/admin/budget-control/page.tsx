@@ -10,7 +10,7 @@ import LoadError from '@/components/ui/LoadError';
 import { useUnsavedChangesWarning } from '@/hooks/useUnsavedChangesWarning';
 import Breadcrumb from '@/components/ui/Breadcrumb';
 import { formatINR } from '@/lib/utils';
-import { Wallet, Save, IndianRupee, Users, UserCheck, UserPlus, ChevronDown, ChevronRight } from 'lucide-react';
+import { Wallet, Save, IndianRupee, Users, UserCheck, UserPlus, ChevronDown, ChevronRight, AlertTriangle } from 'lucide-react';
 
 
 export default function BudgetControlPage() {
@@ -39,6 +39,7 @@ export default function BudgetControlPage() {
 
   const clusterNames = useMemo(() => Array.from(new Set(rows.map((r: any) => r.cluster_name).filter(Boolean))).sort(), [rows]);
   const filtered = rows.filter((r: any) => !cluster || r.cluster_name === cluster);
+  const overLimitCount = filtered.filter((r: any) => r.over_worker_limit).length;
 
   // Effective (edited-but-unsaved values count live) → totals recompute as you type.
   const eff = (r: any) => {
@@ -90,6 +91,16 @@ export default function BudgetControlPage() {
           <Metric icon={<Wallet size={16} />} label="Remaining Budget" value={formatINR(totals.budget - totals.committed)} danger={totals.committed > totals.budget} sub={`${formatINR(totals.committed)} committed`} />
         </div>
 
+        {overLimitCount > 0 && (
+          <button
+            onClick={() => router.push('/admin/property-config')}
+            className="w-full flex items-center gap-2 rounded-lg bg-red-50 border border-red-200 px-4 py-2.5 text-sm text-red-800 hover:bg-red-100 transition-colors text-left"
+          >
+            <AlertTriangle size={16} className="text-red-600 shrink-0" />
+            <span><b>{overLimitCount}</b> {overLimitCount === 1 ? 'property has' : 'properties have'} more workers hired than sanctioned — open Property Configuration to review.</span>
+          </button>
+        )}
+
         <div className="flex items-center gap-2">
           <select value={cluster} onChange={e => setCluster(e.target.value)} className="px-3 py-2 border border-border rounded-lg bg-background text-sm">
             <option value="">All clusters</option>
@@ -127,7 +138,14 @@ export default function BudgetControlPage() {
                         <button onClick={() => setExpanded(isOpen ? null : r.property_id)} title="Salary bands" className="align-middle mr-1.5 p-0.5 rounded hover:bg-muted">
                           {isOpen ? <ChevronDown size={14} className="text-secondary inline" /> : <ChevronRight size={14} className="text-secondary inline" />}
                         </button>
-                        <div className="font-medium text-foreground">{r.property_name}</div>
+                        <div className="font-medium text-foreground inline-flex items-center gap-1.5">
+                          {r.property_name}
+                          {r.over_worker_limit && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 text-[10px] font-semibold" title={`${r.worker_count} hired vs ${r.total_sanctioned_workers} sanctioned`}>
+                              <AlertTriangle size={10} /> {r.worker_count}/{r.total_sanctioned_workers} over
+                            </span>
+                          )}
+                        </div>
                         <div className="text-[11px] text-secondary">{r.cluster_name || 'Unassigned'} · {r.source === 'explicit' ? 'explicit' : 'rolled-up from roles'}</div>
                       </td>
                       <td className="px-4 py-3">

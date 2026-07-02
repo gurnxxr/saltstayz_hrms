@@ -757,6 +757,14 @@ export async function listPropertyBudgets(filters: { cluster_id?: number }, user
   const commits = await db('employees').whereNotIn('employment_status', DEPARTED_STATUSES).whereNotNull('monthly_ctc')
     .select('branch_name').sum({ committed: 'monthly_ctc' }).count({ cnt: '*' }).groupBy('branch_name');
   const commitMap = new Map<string, any>(commits.map((c: any) => [c.branch_name, c]));
+  // Live headcount = all non-departed staff (with or without a salary set) — mirrors
+  // the Property Configuration console's worker_count for the hired-vs-sanctioned alert.
+  const heads = await db('employees').whereNotIn('employment_status', DEPARTED_STATUSES)
+    .select('branch_name').count({ cnt: '*' }).groupBy('branch_name');
+  const headMap = new Map<string, number>(heads.map((h: any) => [h.branch_name, Number(h.cnt || 0)]));
+  // Admin-set per-department sanctioned worker limits, summed per property.
+  const deptSanctions = await db('property_department_workers').select('property_id').sum({ workers: 'worker_count' }).groupBy('property_id');
+  const deptSanctionMap = new Map<number, number>(deptSanctions.map((r: any) => [r.property_id, Number(r.workers || 0)]));
 
   return props.map((p: any) => {
     const exp = expMap.get(p.id);
@@ -771,6 +779,8 @@ export async function listPropertyBudgets(filters: { cluster_id?: number }, user
     const filled_headcount = Number(cm?.cnt || 0);
     const remaining_budget = round2(sanctioned_budget_monthly - committed_amount);
     const remaining_slots = sanctioned_headcount - filled_headcount;
+    const worker_count = headMap.get(p.name) || 0;
+    const total_sanctioned_workers = deptSanctionMap.get(p.id) || 0;
     return {
       property_id: p.id, property_name: p.name, cluster_id: p.cluster_id, cluster_name: p.cluster_name,
       source: hasExplicit ? 'explicit' : 'rolled_up',
@@ -782,6 +792,10 @@ export async function listPropertyBudgets(filters: { cluster_id?: number }, user
       utilization_pct: sanctioned_budget_monthly > 0 ? round2((committed_amount / sanctioned_budget_monthly) * 100) : 0,
       over_budget: committed_amount > sanctioned_budget_monthly,
       over_headcount: filled_headcount > sanctioned_headcount,
+      // Hired vs sanctioned WORKERS (Σ per-department limits) — same comparison the
+      // Property Configuration console surfaces as a red alert once you drill in.
+      worker_count, total_sanctioned_workers,
+      over_worker_limit: total_sanctioned_workers > 0 && worker_count > total_sanctioned_workers,
     };
   });
 }
