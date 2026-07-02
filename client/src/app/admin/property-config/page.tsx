@@ -6,6 +6,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
+import LoadError from '@/components/ui/LoadError';
 import {
   ArrowLeft, SlidersHorizontal, IndianRupee, Users, Wallet, TrendingUp, X, MapPin, CalendarRange, ChevronRight, UserCheck, AlertTriangle,
 } from 'lucide-react';
@@ -95,12 +96,14 @@ function Console({ propertyId }: { propertyId: number }) {
   const [statusTarget, setStatusTarget] = useState<any | null>(null);
   const [selectedDept, setSelectedDept] = useState<string | null>(null);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['property-console', propertyId],
     queryFn: () => api.get(`/manpower/property-console?property_id=${propertyId}`).then(r => r.data),
   });
 
-  if (isLoading || !data) return <div className="bg-card rounded-xl border border-border p-10 text-center text-secondary text-sm">Loading…</div>;
+  if (isLoading) return <div className="bg-card rounded-xl border border-border p-10 text-center text-secondary text-sm">Loading…</div>;
+  if (isError) return <div className="bg-card rounded-xl border border-border"><LoadError message="Couldn't load this property's configuration." onRetry={() => refetch()} /></div>;
+  if (!data) return null;
 
   const { budget, totals, byDepartment, employees } = data;
   const deptEmployees = selectedDept ? employees.filter((e: any) => (e.dept_name || 'Unassigned') === selectedDept) : [];

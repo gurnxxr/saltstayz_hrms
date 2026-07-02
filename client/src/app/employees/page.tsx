@@ -8,6 +8,8 @@ import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import LoadError from '@/components/ui/LoadError';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import {
   Search, Users, Filter, Eye, ChevronDown, ChevronLeft, ChevronRight, Upload, X,
 } from 'lucide-react';
@@ -20,6 +22,7 @@ export default function EmployeeDetailsPage() {
   const { user } = useAuth();
   const canEditStatus = user?.roleName === 'admin' || user?.roleName === 'hr' || user?.roleName === 'chro';
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search, 300);
   const [statusFilter, setStatusFilter] = useState('active');
   const [page, setPage] = useState(1);
   const [deactivateTarget, setDeactivateTarget] = useState<any>(null);
@@ -58,11 +61,11 @@ export default function EmployeeDetailsPage() {
     onError: (err: any) => { toast.error(err.response?.data?.error || 'Status update failed'); setDeactivateTarget(null); },
   });
 
-  const { data, isLoading, isFetching } = useQuery({
-    queryKey: ['employees-list', search, statusFilter, page],
+  const { data, isLoading, isFetching, isError, refetch } = useQuery({
+    queryKey: ['employees-list', debouncedSearch, statusFilter, page],
     queryFn: () => {
       const params = new URLSearchParams();
-      if (search) params.set('search', search);
+      if (debouncedSearch) params.set('search', debouncedSearch);
       if (statusFilter) params.set('status', statusFilter);
       params.set('page', String(page));
       params.set('pageSize', String(PAGE_SIZE));
@@ -74,7 +77,7 @@ export default function EmployeeDetailsPage() {
   // Reset to first page whenever the filters change
   useEffect(() => {
     setPage(1);
-  }, [search, statusFilter]);
+  }, [debouncedSearch, statusFilter]);
 
   const pageEmployees = data?.data ?? [];
   const total = data?.total ?? 0;
@@ -130,6 +133,10 @@ export default function EmployeeDetailsPage() {
         {/* Table */}
         {isLoading ? (
           <TableSkeleton />
+        ) : isError ? (
+          <div className="bg-card rounded-xl border border-border">
+            <LoadError message="Couldn't load employees." onRetry={() => refetch()} />
+          </div>
         ) : total === 0 ? (
           <div className="bg-card rounded-xl border border-border p-12 text-center">
             <Users size={40} className="mx-auto text-secondary/30 mb-3" />

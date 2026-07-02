@@ -6,6 +6,8 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
+import LoadError from '@/components/ui/LoadError';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { formatDate } from '@/lib/utils';
 import { UserMinus, Plus, Search, X, Eye, Loader2, Users, CheckCircle2 } from 'lucide-react';
 
@@ -31,7 +33,7 @@ export default function OffboardingPage() {
   const [showForm, setShowForm] = useState(false);
 
   const { data: stats } = useQuery({ queryKey: ['offboarding-stats'], queryFn: () => api.get('/offboarding/stats').then(r => r.data) });
-  const { data: cases = [], isFetching } = useQuery({
+  const { data: cases = [], isFetching, isError, refetch } = useQuery({
     queryKey: ['offboarding-cases', statusFilter],
     queryFn: () => api.get(`/offboarding/cases${statusFilter ? `?status=${statusFilter}` : ''}`).then(r => r.data),
     placeholderData: keepPreviousData,
@@ -80,7 +82,9 @@ export default function OffboardingPage() {
               <th className="text-right px-4 py-3 text-xs font-medium text-secondary uppercase">Actions</th>
             </tr></thead>
             <tbody className="divide-y divide-border">
-              {cases.length === 0 ? (
+              {isError ? (
+                <tr><td colSpan={6}><LoadError compact message="Couldn't load offboarding cases." onRetry={() => refetch()} /></td></tr>
+              ) : cases.length === 0 ? (
                 <tr><td colSpan={6} className="text-center py-12 text-secondary text-sm">No offboarding cases{statusFilter ? ' in this status' : ''}.</td></tr>
               ) : cases.map((c: any) => (
                 <tr key={c.id} className="hover:bg-muted/30 cursor-pointer" onClick={() => router.push(`/offboarding/${c.id}`)}>
@@ -119,13 +123,14 @@ function Stat({ label, value, color }: { label: string; value: number; color: st
 
 function InitiateModal({ onClose, onDone }: { onClose: () => void; onDone: (id: number) => void }) {
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search, 300);
   const [picked, setPicked] = useState<any>(null);
   const [form, setForm] = useState({ exit_type: 'resignation', resignation_date: '', last_working_day: '', notice_period_days: '', reason: '' });
 
   const { data: results, isFetching: searching } = useQuery({
-    queryKey: ['emp-picker', search],
+    queryKey: ['emp-picker', debouncedSearch],
     // page=1 forces the paginated { data } shape — without it the API returns a bare array.
-    queryFn: () => api.get(`/employees?status=active&page=1&pageSize=8${search ? `&search=${encodeURIComponent(search)}` : ''}`).then(r => r.data),
+    queryFn: () => api.get(`/employees?status=active&page=1&pageSize=8${debouncedSearch ? `&search=${encodeURIComponent(debouncedSearch)}` : ''}`).then(r => r.data),
     enabled: !picked,
     placeholderData: keepPreviousData,
   });

@@ -6,6 +6,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import {
   ClipboardList, FileText, Users, CheckCircle, Plus, Search,
@@ -27,6 +28,7 @@ export default function OnboardingPage() {
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<'offers' | 'checklists' | 'offer-letters'>('offers');
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search, 300);
   const [statusFilter, setStatusFilter] = useState('');
 
   // Offer-flow UI state
@@ -46,10 +48,10 @@ export default function OnboardingPage() {
   });
 
   const { data: checklists = [] } = useQuery({
-    queryKey: ['onboarding-checklists', search, statusFilter],
+    queryKey: ['onboarding-checklists', debouncedSearch, statusFilter],
     queryFn: () => {
       const params = new URLSearchParams();
-      if (search) params.set('search', search);
+      if (debouncedSearch) params.set('search', debouncedSearch);
       if (statusFilter) params.set('status', statusFilter);
       return api.get(`/onboarding/checklists?${params}`).then(r => r.data);
     },

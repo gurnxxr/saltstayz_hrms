@@ -5,6 +5,7 @@ import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { formatDateTime } from '@/lib/utils';
 import {
   ArrowLeft, Search, ChevronLeft, ChevronRight, ChevronDown, ChevronUp,
@@ -26,6 +27,7 @@ const ACTION_COLORS: Record<string, string> = {
 export default function AuditLogPage() {
   const router = useRouter();
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search, 300);
   const [module, setModule] = useState('');
   const [action, setAction] = useState('');
   const [from, setFrom] = useState('');
@@ -39,10 +41,10 @@ export default function AuditLogPage() {
   });
 
   const { data, isLoading, isFetching } = useQuery({
-    queryKey: ['audit-logs', search, module, action, from, to, page],
+    queryKey: ['audit-logs', debouncedSearch, module, action, from, to, page],
     queryFn: () => {
       const p = new URLSearchParams();
-      if (search) p.set('search', search);
+      if (debouncedSearch) p.set('search', debouncedSearch);
       if (module) p.set('module', module);
       if (action) p.set('action', action);
       if (from) p.set('from', from);

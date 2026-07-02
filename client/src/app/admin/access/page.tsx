@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { ArrowLeft, Search, User, ShieldCheck, RotateCcw, AlertTriangle } from 'lucide-react';
 
 const MODULE_LABELS: Record<string, string> = {
@@ -25,11 +26,12 @@ export default function ModuleAccessPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search, 300);
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
   const { data: employees = [], isLoading: searching } = useQuery({
-    queryKey: ['access-employee-search', search],
-    queryFn: () => api.get(`/admin/module-access/employees?q=${encodeURIComponent(search)}`).then(r => r.data),
+    queryKey: ['access-employee-search', debouncedSearch],
+    queryFn: () => api.get(`/admin/module-access/employees?q=${encodeURIComponent(debouncedSearch)}`).then(r => r.data),
   });
 
   const { data: access, isLoading: accessLoading } = useQuery({

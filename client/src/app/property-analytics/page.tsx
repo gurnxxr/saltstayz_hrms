@@ -7,6 +7,7 @@ import {
 } from 'recharts';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
+import LoadError from '@/components/ui/LoadError';
 import {
   Building2, IndianRupee, Users, TrendingDown, AlertTriangle, RefreshCw, UserMinus,
 } from 'lucide-react';
@@ -33,7 +34,7 @@ export default function PropertyAnalyticsPage() {
   }, [clusterId, propertyId]);
 
   const { data: clusters = [] } = useQuery({ queryKey: ['pa-clusters'], queryFn: () => api.get('/manpower/clusters').then(r => r.data).catch(() => []) });
-  const { data: budget } = useQuery({ queryKey: ['pa-budget', qs], queryFn: () => api.get(`/property-analytics/budget${qs}`).then(r => r.data) });
+  const { data: budget, isError: budgetError, refetch: refetchBudget } = useQuery({ queryKey: ['pa-budget', qs], queryFn: () => api.get(`/property-analytics/budget${qs}`).then(r => r.data) });
   const { data: headcount = [] } = useQuery({ queryKey: ['pa-headcount', qs], queryFn: () => api.get(`/property-analytics/headcount${qs}`).then(r => r.data) });
   const { data: variance } = useQuery({ queryKey: ['pa-variance', qs], queryFn: () => api.get(`/property-analytics/salary-variance${qs}`).then(r => r.data) });
   const { data: attrition } = useQuery({ queryKey: ['pa-attrition', qs], queryFn: () => api.get(`/property-analytics/attrition${qs}`).then(r => r.data) });
@@ -68,6 +69,12 @@ export default function PropertyAnalyticsPage() {
             </select>
           </div>
         </div>
+
+        {budgetError && (
+          <div className="bg-card rounded-xl border border-border">
+            <LoadError message="Couldn't load property analytics — figures below may be missing." onRetry={() => refetchBudget()} />
+          </div>
+        )}
 
         {/* KPI strip */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">

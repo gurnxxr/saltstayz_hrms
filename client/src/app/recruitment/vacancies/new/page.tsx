@@ -6,6 +6,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
+import LoadError from '@/components/ui/LoadError';
 import { ArrowLeft, IndianRupee, AlertCircle } from 'lucide-react';
 
 export default function NewVacancyPage() {
@@ -23,28 +24,32 @@ export default function NewVacancyPage() {
     backfill_job_id: typeof window !== 'undefined' ? (new URLSearchParams(window.location.search).get('backfill_job_id') || '') : '',
   }));
 
-  const { data: properties = [] } = useQuery({
+  const { data: properties = [], isError: pErr, refetch: rP } = useQuery({
     queryKey: ['properties'],
-    queryFn: () => api.get('/admin/properties').then(r => r.data).catch(() => []),
+    queryFn: () => api.get('/admin/properties').then(r => r.data),
   });
 
   // Departments are organization-wide (not scoped to a property)
-  const { data: departments = [] } = useQuery({
+  const { data: departments = [], isError: dErr, refetch: rD } = useQuery({
     queryKey: ['departments'],
-    queryFn: () => api.get('/admin/departments').then(r => r.data).catch(() => []),
+    queryFn: () => api.get('/admin/departments').then(r => r.data),
   });
 
   // Job titles enriched with salary-structure status; only configured ones are postable.
-  const { data: jobTitles = [] } = useQuery({
+  const { data: jobTitles = [], isError: jErr, refetch: rJ } = useQuery({
     queryKey: ['postable-job-titles'],
-    queryFn: () => api.get('/recruitment/job-titles').then(r => r.data).catch(() => []),
+    queryFn: () => api.get('/recruitment/job-titles').then(r => r.data),
   });
 
   // Active employees — any can be tagged as the new hire's reporting manager.
-  const { data: managers = [] } = useQuery({
+  const { data: managers = [], isError: mErr, refetch: rM } = useQuery({
     queryKey: ['managers'],
-    queryFn: () => api.get('/employees/managers').then(r => r.data).catch(() => []),
+    queryFn: () => api.get('/employees/managers').then(r => r.data),
   });
+
+  // If the form's reference data fails, say so — don't leave silently-empty dropdowns.
+  const refError = pErr || dErr || jErr || mErr;
+  const retryRef = () => { rP(); rD(); rJ(); rM(); };
 
   const selectedTitle = jobTitles.find((j: any) => String(j.id) === form.job_title_id);
   const hasUnconfigured = jobTitles.some((j: any) => !j.configured);
@@ -102,6 +107,12 @@ export default function NewVacancyPage() {
           <h1 className="text-2xl font-bold text-foreground">Create Vacancy</h1>
           <p className="text-secondary mt-1">Open a new position for recruitment</p>
         </div>
+
+        {refError && (
+          <div className="bg-card rounded-xl border border-border">
+            <LoadError compact message="Couldn't load form options (properties, departments, roles, or managers)." onRetry={retryRef} />
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="bg-card rounded-xl border border-border p-6 space-y-5">
           <div>

@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useAuth } from '@/lib/auth';
 import { Plus, Clock, Check, X, Search, User } from 'lucide-react';
 
@@ -23,6 +24,7 @@ export default function ShiftsPage() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: '', start_time: '', end_time: '' });
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search, 300);
 
   const { data: shiftTypes = [] } = useQuery({
     queryKey: ['all-shift-types'],
@@ -31,8 +33,8 @@ export default function ShiftsPage() {
   const activeShifts = shiftTypes.filter((s: any) => s.is_active);
 
   const { data: employeeShifts = [], isLoading: empLoading } = useQuery({
-    queryKey: ['employee-shifts', search],
-    queryFn: () => api.get(`/shifts/employee-shifts?q=${encodeURIComponent(search)}`).then(r => r.data),
+    queryKey: ['employee-shifts', debouncedSearch],
+    queryFn: () => api.get(`/shifts/employee-shifts?q=${encodeURIComponent(debouncedSearch)}`).then(r => r.data),
     enabled: tab === 'employees',
   });
 

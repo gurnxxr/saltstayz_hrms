@@ -7,6 +7,8 @@ import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import Link from 'next/link';
 import { ShieldCheck, X, AlertTriangle, UserPlus } from 'lucide-react';
+import LoadError from '@/components/ui/LoadError';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 
 const inr = (n: number) => '₹' + new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(Math.round(Number(n) || 0));
 
@@ -87,7 +89,7 @@ function BudgetTab() {
   const [cluster, setCluster] = useState('');
   const [search, setSearch] = useState('');
 
-  const { data: rows = [], isLoading } = useQuery({
+  const { data: rows = [], isLoading, isError, refetch } = useQuery({
     queryKey: ['mp-property-budgets'],
     queryFn: () => api.get('/manpower/property-budgets').then(r => r.data),
   });
@@ -118,6 +120,8 @@ function BudgetTab() {
             <tbody className="divide-y divide-border">
               {isLoading ? (
                 <tr><td colSpan={4} className="px-4 py-8 text-center text-secondary">Loading…</td></tr>
+              ) : isError ? (
+                <tr><td colSpan={4}><LoadError compact message="Couldn't load properties." onRetry={() => refetch()} /></td></tr>
               ) : filtered.length === 0 ? (
                 <tr><td colSpan={4} className="px-4 py-8 text-center text-secondary">No properties.</td></tr>
               ) : filtered.map((r: any) => (
@@ -155,11 +159,12 @@ function StatusTab() {
   const qc = useQueryClient();
   const [status, setStatus] = useState('');
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search, 300);
   const [target, setTarget] = useState<any | null>(null);
 
-  const { data: employees = [], isLoading } = useQuery({
-    queryKey: ['mp-employees', status, search],
-    queryFn: () => api.get(`/manpower/employees?${status ? `status=${status}&` : ''}${search ? `search=${encodeURIComponent(search)}` : ''}`).then(r => r.data),
+  const { data: employees = [], isLoading, isError, refetch } = useQuery({
+    queryKey: ['mp-employees', status, debouncedSearch],
+    queryFn: () => api.get(`/manpower/employees?${status ? `status=${status}&` : ''}${debouncedSearch ? `search=${encodeURIComponent(debouncedSearch)}` : ''}`).then(r => r.data),
   });
 
   return (
@@ -185,6 +190,8 @@ function StatusTab() {
             <tbody className="divide-y divide-border">
               {isLoading ? (
                 <tr><td colSpan={7} className="px-4 py-8 text-center text-secondary">Loading…</td></tr>
+              ) : isError ? (
+                <tr><td colSpan={7}><LoadError compact message="Couldn't load employees." onRetry={() => refetch()} /></td></tr>
               ) : employees.length === 0 ? (
                 <tr><td colSpan={7} className="px-4 py-8 text-center text-secondary">No employees.</td></tr>
               ) : employees.map((e: any) => (
@@ -215,7 +222,7 @@ function StatusTab() {
 // ─────────────────────────── Replacements (PIP / Left → backfill) ───────────────────────────
 
 function ReplacementsTab() {
-  const { data: rows = [], isLoading } = useQuery({
+  const { data: rows = [], isLoading, isError, refetch } = useQuery({
     queryKey: ['mp-replacements'],
     queryFn: () => api.get('/manpower/replacements').then(r => r.data),
   });
@@ -243,6 +250,8 @@ function ReplacementsTab() {
             <tbody className="divide-y divide-border">
               {isLoading ? (
                 <tr><td colSpan={7} className="px-4 py-8 text-center text-secondary">Loading…</td></tr>
+              ) : isError ? (
+                <tr><td colSpan={7}><LoadError compact message="Couldn't load replacements." onRetry={() => refetch()} /></td></tr>
               ) : rows.length === 0 ? (
                 <tr><td colSpan={7} className="px-4 py-8 text-center text-secondary">No open replacements — every JOB is filled.</td></tr>
               ) : rows.map((r: any) => (

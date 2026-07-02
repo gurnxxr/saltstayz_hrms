@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { Search, ArrowLeft, User } from 'lucide-react';
 
 const STAGES = ['screening', 'interview', 'shortlisted', 'offered', 'rejected'] as const;
@@ -19,15 +20,16 @@ const STAGE_COLORS: Record<string, string> = {
 export default function CandidatesPage() {
   const router = useRouter();
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search, 300);
   const [stageFilter, setStageFilter] = useState('');
   const [vacancyFilter, setVacancyFilter] = useState('');
   const [includeArchived, setIncludeArchived] = useState(false);
 
   const { data: candidates = [], isLoading } = useQuery({
-    queryKey: ['all-candidates', search, stageFilter, vacancyFilter, includeArchived],
+    queryKey: ['all-candidates', debouncedSearch, stageFilter, vacancyFilter, includeArchived],
     queryFn: () => {
       const params = new URLSearchParams();
-      if (search) params.set('search', search);
+      if (debouncedSearch) params.set('search', debouncedSearch);
       if (stageFilter) params.set('stage', stageFilter);
       if (vacancyFilter) params.set('vacancy_id', vacancyFilter);
       // Rejected candidates are archived; show them when explicitly requested

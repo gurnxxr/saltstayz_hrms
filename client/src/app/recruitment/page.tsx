@@ -8,6 +8,7 @@ import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import LoadError from '@/components/ui/LoadError';
 import { Briefcase, Users, Plus, TrendingUp, Trash2 } from 'lucide-react';
 
 export default function RecruitmentPage() {
@@ -39,7 +40,7 @@ export default function RecruitmentPage() {
     queryFn: () => api.get('/recruitment/candidates/by-stage').then(r => r.data),
   });
 
-  const { data: vacancies = [] } = useQuery({
+  const { data: vacancies = [], isError: vacError, refetch: refetchVac } = useQuery({
     queryKey: ['vacancies'],
     queryFn: () => api.get('/recruitment/vacancies').then(r => r.data),
   });
@@ -107,7 +108,9 @@ export default function RecruitmentPage() {
               + Add New
             </button>
           </div>
-          {vacancies.length === 0 ? (
+          {vacError ? (
+            <LoadError message="Couldn't load vacancies." onRetry={() => refetchVac()} />
+          ) : vacancies.length === 0 ? (
             <div className="p-8 text-center text-secondary">
               No vacancies yet. Create one to start recruiting.
             </div>

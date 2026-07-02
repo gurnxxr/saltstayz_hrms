@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useAuth } from '@/lib/auth';
 import {
   Search, Plus, Pencil, Trash2, X, Landmark, Users, CircleDollarSign,
@@ -22,6 +23,7 @@ export default function FinancePage() {
   const isAdmin = ['admin', 'chro', 'hr', 'finance'].includes(user?.roleName || '');
 
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search, 300);
   const [branchFilter, setBranchFilter] = useState('');
   // Sensitive financial columns (account no., PAN, IFSC) are masked by default.
   const [reveal, setReveal] = useState(false);
@@ -51,10 +53,10 @@ export default function FinancePage() {
   });
 
   const { data: records = [], isLoading } = useQuery({
-    queryKey: ['finance-bank-details', search, branchFilter],
+    queryKey: ['finance-bank-details', debouncedSearch, branchFilter],
     queryFn: () => {
       const params = new URLSearchParams();
-      if (search) params.set('search', search);
+      if (debouncedSearch) params.set('search', debouncedSearch);
       if (branchFilter) params.set('branch_name', branchFilter);
       return api.get(`/finance/bank-details?${params}`).then(r => r.data);
     },

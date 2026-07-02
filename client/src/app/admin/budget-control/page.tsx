@@ -6,6 +6,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
+import LoadError from '@/components/ui/LoadError';
 import { ArrowLeft, Wallet, Save, IndianRupee, Users, UserCheck, UserPlus, ChevronDown, ChevronRight } from 'lucide-react';
 
 const inr = (n: number) => '₹' + new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(Math.round(Number(n) || 0));
@@ -17,7 +18,7 @@ export default function BudgetControlPage() {
   const [edits, setEdits] = useState<Record<number, { budget: string; head: string }>>({});
   const [expanded, setExpanded] = useState<number | null>(null);
 
-  const { data: rows = [], isLoading } = useQuery({
+  const { data: rows = [], isLoading, isError, refetch } = useQuery({
     queryKey: ['budget-control'],
     queryFn: () => api.get('/manpower/property-budgets').then(r => r.data),
   });
@@ -110,6 +111,8 @@ export default function BudgetControlPage() {
               <tbody className="divide-y divide-border">
                 {isLoading ? (
                   <tr><td colSpan={6} className="px-4 py-8 text-center text-secondary">Loading…</td></tr>
+                ) : isError ? (
+                  <tr><td colSpan={6}><LoadError compact message="Couldn't load budgets." onRetry={() => refetch()} /></td></tr>
                 ) : filtered.length === 0 ? (
                   <tr><td colSpan={6} className="px-4 py-8 text-center text-secondary">No properties.</td></tr>
                 ) : filtered.map((r: any) => {

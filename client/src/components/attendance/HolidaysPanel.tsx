@@ -4,6 +4,8 @@ import { useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import api from '@/lib/api';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import LoadError from '@/components/ui/LoadError';
 import {
   CalendarDays, MapPin, Plus, Upload, Trash2, Loader2, FileSpreadsheet,
   Pencil, Globe, Building2, X,
@@ -32,7 +34,7 @@ function ScopeBadge({ h }: { h: Holiday }) {
 // Employee (and default) view: my region + the holidays that apply to me
 // ─────────────────────────────────────────────────────────────────────────────
 function MyHolidays() {
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['holidays-me'],
     queryFn: () => api.get('/leave/holidays/me').then(r => r.data),
   });
@@ -65,6 +67,8 @@ function MyHolidays() {
       <div className="bg-card rounded-xl border border-border overflow-hidden">
         {isLoading ? (
           <div className="flex items-center justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" /></div>
+        ) : isError ? (
+          <LoadError message="Couldn't load holidays." onRetry={() => refetch()} />
         ) : holidays.length === 0 ? (
           <div className="p-8 text-center text-secondary">
             <CalendarDays size={32} className="mx-auto mb-2 opacity-40" />
@@ -205,8 +209,11 @@ function AdminHolidays({ regions }: { regions: Region[] }) {
   const [modal, setModal] = useState<{ open: boolean; holiday: Holiday | null }>({ open: false, holiday: null });
   const [csvScope, setCsvScope] = useState('national'); // 'national' | region id
   const fileRef = useRef<HTMLInputElement>(null);
+  const [confirmDel, setConfirmDel] = useState<Holiday | null>(null);
+  const [confirmCsv, setConfirmCsv] = useState<File | null>(null);
+  const clearFile = () => { if (fileRef.current) fileRef.current.value = ''; };
 
-  const { data: holidays = [], isLoading } = useQuery({
+  const { data: holidays = [], isLoading, isError, refetch } = useQuery({
     queryKey: ['holidays-admin', scope, regionFilter],
     queryFn: () => {
       const p = new URLSearchParams();
@@ -237,9 +244,11 @@ function AdminHolidays({ regions }: { regions: Region[] }) {
   function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     if (!f) return;
-    if (!f.name.endsWith('.csv')) return toast.error('Please upload a .csv file');
-    upload.mutate(f);
+    if (!f.name.endsWith('.csv')) { clearFile(); return toast.error('Please upload a .csv file'); }
+    setConfirmCsv(f); // confirm before replacing — import wipes the selected scope's holidays
   }
+
+  const csvScopeLabel = csvScope === 'national' ? 'National' : (regions.find((r) => String(r.id) === csvScope)?.name || 'the selected region');
 
   return (
     <div className="space-y-4">
@@ -290,6 +299,8 @@ function AdminHolidays({ regions }: { regions: Region[] }) {
       <div className="bg-card rounded-xl border border-border overflow-hidden">
         {isLoading ? (
           <div className="flex items-center justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" /></div>
+        ) : isError ? (
+          <LoadError message="Couldn't load holidays." onRetry={() => refetch()} />
         ) : holidays.length === 0 ? (
           <div className="p-8 text-center text-secondary"><CalendarDays size={32} className="mx-auto mb-2 opacity-40" /><p>No holidays match this filter.</p></div>
         ) : (
@@ -316,7 +327,7 @@ function AdminHolidays({ regions }: { regions: Region[] }) {
                     <td className="px-4 py-3"><ScopeBadge h={h} /></td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">
                       <button onClick={() => setModal({ open: true, holiday: h })} className="inline-flex items-center gap-1 px-2 py-1 text-xs text-foreground hover:bg-muted rounded-lg mr-1"><Pencil size={12} /> Edit</button>
-                      <button onClick={() => del.mutate(h.id)} className="inline-flex items-center gap-1 px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={12} /> Delete</button>
+                      <button onClick={() => setConfirmDel(h)} className="inline-flex items-center gap-1 px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={12} /> Delete</button>
                     </td>
                   </tr>
                 ))}
@@ -327,6 +338,29 @@ function AdminHolidays({ regions }: { regions: Region[] }) {
       </div>
 
       {modal.open && <HolidayModal holiday={modal.holiday} regions={regions} onClose={() => setModal({ open: false, holiday: null })} />}
+
+      <ConfirmDialog
+        open={!!confirmDel}
+        title="Delete holiday?"
+        message={confirmDel && (
+          <>Delete <b>{confirmDel.name}</b> ({fmtDate(confirmDel.date)})? {confirmDel.is_national ? 'This is a national holiday shown to every employee.' : `This affects the ${confirmDel.region_name || 'region'} region.`} This can't be undone.</>
+        )}
+        confirmLabel="Delete"
+        loading={del.isPending}
+        onConfirm={() => confirmDel && del.mutate(confirmDel.id, { onSettled: () => setConfirmDel(null) })}
+        onCancel={() => setConfirmDel(null)}
+      />
+
+      <ConfirmDialog
+        open={!!confirmCsv}
+        danger
+        title="Replace holidays from CSV?"
+        message={<>Importing <b>{confirmCsv?.name}</b> will <b>replace all {csvScopeLabel} holidays</b> with the rows in this file. This can't be undone.</>}
+        confirmLabel="Replace & import"
+        loading={upload.isPending}
+        onConfirm={() => confirmCsv && upload.mutate(confirmCsv, { onSettled: () => { setConfirmCsv(null); clearFile(); } })}
+        onCancel={() => { setConfirmCsv(null); clearFile(); }}
+      />
     </div>
   );
 }
@@ -339,6 +373,7 @@ function AdminRegions({ regions }: { regions: Region[] }) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [editing, setEditing] = useState<Region | null>(null);
+  const [confirmDel, setConfirmDel] = useState<Region | null>(null);
 
   const invalidate = () => { qc.invalidateQueries({ queryKey: ['leave-regions'] }); qc.invalidateQueries({ queryKey: ['region-properties'] }); };
 
@@ -405,7 +440,7 @@ function AdminRegions({ regions }: { regions: Region[] }) {
                     ) : (
                       <>
                         <button onClick={() => setEditing(r)} className="inline-flex items-center gap-1 px-2 py-1 text-xs text-foreground hover:bg-muted rounded-lg mr-1"><Pencil size={12} /> Rename</button>
-                        <button onClick={() => del.mutate(r.id)} className="inline-flex items-center gap-1 px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={12} /> Delete</button>
+                        <button onClick={() => setConfirmDel(r)} className="inline-flex items-center gap-1 px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={12} /> Delete</button>
                       </>
                     )}
                   </td>
@@ -415,6 +450,20 @@ function AdminRegions({ regions }: { regions: Region[] }) {
           </table>
         )}
       </div>
+
+      <ConfirmDialog
+        open={!!confirmDel}
+        title="Delete region?"
+        message={confirmDel && (
+          <>Delete the <b>{confirmDel.name}</b> region? {(confirmDel.property_count > 0 || confirmDel.holiday_count > 0)
+            ? `It has ${confirmDel.property_count} propert${confirmDel.property_count === 1 ? 'y' : 'ies'} and ${confirmDel.holiday_count} holiday(s) — you'll need to reassign those first.`
+            : "This can't be undone."}</>
+        )}
+        confirmLabel="Delete"
+        loading={del.isPending}
+        onConfirm={() => confirmDel && del.mutate(confirmDel.id, { onSettled: () => setConfirmDel(null) })}
+        onCancel={() => setConfirmDel(null)}
+      />
     </div>
   );
 }
@@ -424,7 +473,7 @@ function AdminRegions({ regions }: { regions: Region[] }) {
 // ─────────────────────────────────────────────────────────────────────────────
 function AdminMapping({ regions }: { regions: Region[] }) {
   const qc = useQueryClient();
-  const { data: props = [], isLoading } = useQuery({
+  const { data: props = [], isLoading, isError, refetch } = useQuery({
     queryKey: ['region-properties'],
     queryFn: () => api.get('/leave/region-properties').then(r => r.data),
   });
@@ -443,6 +492,8 @@ function AdminMapping({ regions }: { regions: Region[] }) {
       </div>
       {isLoading ? (
         <div className="flex items-center justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" /></div>
+      ) : isError ? (
+        <LoadError message="Couldn't load properties." onRetry={() => refetch()} />
       ) : (
         <table className="w-full">
           <thead>
