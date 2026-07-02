@@ -784,20 +784,25 @@ export async function getPropertyConsole(propertyId: number) {
     )
     .orderBy('e.dept_name').orderBy('e.first_name');
 
+  // Seed with the canonical department list (Organisation is the single source of
+  // truth) so every department — including those with no staff at this property —
+  // is visible and stays in sync with changes made in Admin → Organisation.
+  const canonicalDepts = await db('departments').select('name').orderBy('name');
+  const deptMap = new Map<string, { dept_name: string; worker_count: number; spend: number; salaried: number }>();
+  for (const d of canonicalDepts as any[]) deptMap.set(d.name, { dept_name: d.name, worker_count: 0, spend: 0, salaried: 0 });
+
   // Workers = non-Left headcount. Spend = Σ salaries; average is over workers who
   // actually have a salary set (so unpaid/unset rows don't drag the average to ₹0).
-  const deptMap = new Map<string, { dept_name: string; worker_count: number; spend: number; salaried: number }>();
   let total_spend = 0, worker_count = 0, salaried = 0, on_pip = 0;
   for (const e of emps as any[]) {
+    if (e.employment_status === 'pip') on_pip += 1;
+    if (e.employment_status === 'left') continue; // Left employees don't count toward workers/spend
     const dept = e.dept_name || 'Unassigned';
     if (!deptMap.has(dept)) deptMap.set(dept, { dept_name: dept, worker_count: 0, spend: 0, salaried: 0 });
-    if (e.employment_status === 'pip') on_pip += 1;
-    if (e.employment_status !== 'left') {
-      const ctc = Number(e.monthly_ctc || 0);
-      const d = deptMap.get(dept)!;
-      d.worker_count += 1; worker_count += 1;
-      if (e.monthly_ctc != null) { d.salaried += 1; salaried += 1; d.spend = round2(d.spend + ctc); total_spend = round2(total_spend + ctc); }
-    }
+    const ctc = Number(e.monthly_ctc || 0);
+    const d = deptMap.get(dept)!;
+    d.worker_count += 1; worker_count += 1;
+    if (e.monthly_ctc != null) { d.salaried += 1; salaried += 1; d.spend = round2(d.spend + ctc); total_spend = round2(total_spend + ctc); }
   }
 
   return {

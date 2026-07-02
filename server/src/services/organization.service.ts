@@ -74,16 +74,28 @@ export async function updateDepartment(id: number, data: Partial<{ name: string 
   if (!name) throw new ValidationError('Department name is required');
   const dup = await db('departments').whereRaw('lower(name) = lower(?)', [name]).whereNot('id', id).first();
   if (dup) throw new ValidationError('A department with this name already exists');
-  await db('departments').where('id', id).update({ name, updated_at: db.fn.now() });
+
+  // The department table is the single source of truth. Employees carry a free-text
+  // dept_name (property convention — employees.department_id was dropped in mig 011),
+  // so cascade the rename to every employee that referenced the old name, keeping the
+  // Manpower console, analytics and every other module in sync.
+  await db.transaction(async (trx) => {
+    await trx('departments').where('id', id).update({ name, updated_at: trx.fn.now() });
+    if (row.name !== name) {
+      await trx('employees').where('dept_name', row.name).update({ dept_name: name, updated_at: trx.fn.now() });
+    }
+  });
   return db('departments').where('id', id).first();
 }
 
 export async function deleteDepartment(id: number) {
   const row = await db('departments').where('id', id).first();
   if (!row) throw new NotFoundError('Department');
-  // Departments are referenced by vacancies (employees use a free-text dept_name)
   const vacancyCount = await db('vacancies').where('department_id', id).count('* as c').first();
-  if (vacancyCount && Number(vacancyCount.c) > 0) throw new ValidationError('Cannot delete department with linked vacancies');
+  if (vacancyCount && Number(vacancyCount.c) > 0) throw new ValidationError('Cannot delete department with linked vacancies. Remove or reassign them first.');
+  // Employees reference departments by free-text dept_name — block so none is orphaned.
+  const empCount = await db('employees').where('dept_name', row.name).count('* as c').first();
+  if (empCount && Number(empCount.c) > 0) throw new ValidationError('Cannot delete department with employees assigned. Reassign them to another department first.');
   await db('departments').where('id', id).delete();
 }
 
