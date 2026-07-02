@@ -12,6 +12,7 @@ router.get('/availability', authorize('manpower', 'read'), ctrl.getAvailability)
 router.get('/sanctions', authorize('manpower', 'read'), ctrl.listSanctions);
 router.get('/property-budgets', authorize('manpower', 'read'), ctrl.listPropertyBudgets);
 router.get('/employees', authorize('manpower', 'read'), ctrl.listEmployees);
+router.get('/replacements', authorize('manpower', 'read'), ctrl.listReplacements);
 router.get('/employees/:id/history', authorize('manpower', 'read'), ctrl.getStatusHistory);
 router.get('/exceptions', authorize('manpower', 'read'), ctrl.listExceptions);
 router.get('/clusters', authorize('manpower', 'read'), ctrl.listClusters);

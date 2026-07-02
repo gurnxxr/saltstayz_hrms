@@ -2,6 +2,8 @@ import type { Knex } from 'knex';
 import db from '../config/database';
 import { JwtPayload } from '../types';
 import { NotFoundError, ValidationError, ForbiddenError, GuardrailError } from '../utils/errors';
+import { nextJobId } from '../utils/jobId';
+import { notifyRole } from './notification.service';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Manpower & Budget Control
@@ -281,6 +283,7 @@ async function insertHire(trx: Knex.Transaction, input: HireInput, ctc: number, 
 
   const [employeeId] = await trx('employees').insert({
     employee_code: code,
+    job_id: await nextJobId(trx),
     first_name: firstName,
     last_name: lastName,
     email: input.email || null,
@@ -366,7 +369,7 @@ export async function listEmployees(filters: { property_id?: number; job_title_i
     .leftJoin('properties as p', 'p.name', 'e.branch_name')
     .leftJoin('clusters as c', 'c.id', 'p.cluster_id')
     .select(
-      'e.id', 'e.employee_code', 'e.first_name', 'e.last_name', 'e.email', 'e.phone',
+      'e.id', 'e.job_id', 'e.employee_code', 'e.first_name', 'e.last_name', 'e.email', 'e.phone',
       'e.branch_name', 'e.dept_name', 'e.job_title_id', 'jt.title as job_title',
       'e.employment_status', 'e.monthly_ctc', 'e.last_working_day', 'e.pip_start_date',
       'e.pip_end_date', 'e.open_to_backfill', 'e.date_of_joining', 'e.sanction_variance',
@@ -431,7 +434,60 @@ export async function changeStatus(employeeId: number, toStatus: string, data: {
       changed_by: user?.userId || null,
     });
   });
+
+  // On PIP / Left, flag admin + HR that this JOB needs a backup.
+  if (toStatus === 'pip' || toStatus === 'left') {
+    await notifyReplacementNeeded({ ...emp, employment_status: toStatus });
+  }
   return getHire(employeeId);
+}
+
+/** Flags admin + HR (bell notification) that a departing / PIP employee's JOB needs a backup. */
+export async function notifyReplacementNeeded(emp: any) {
+  const jt = emp.job_title_id ? (await db('job_titles').where('id', emp.job_title_id).first())?.title : null;
+  const who = `${emp.first_name || ''} ${emp.last_name || ''}`.trim() || 'An employee';
+  const tag = emp.job_id ? `${emp.job_id} · ` : '';
+  const verb = emp.employment_status === 'pip' ? 'is on PIP' : 'is leaving';
+  const payload = {
+    type: 'replacement_needed',
+    title: 'Replacement needed',
+    message: `${who} (${tag}${jt || 'role'} @ ${emp.branch_name || 'property'}) ${verb} — raise a backfill vacancy.`,
+    link: '/manpower',
+  };
+  await notifyRole('admin', payload);
+  await notifyRole('hr', payload);
+}
+
+/** JOBs (employees) currently on PIP or Left that are open to backfill. */
+export async function listReplacements(user: JwtPayload) {
+  const scope = await getScope(user);
+  const q = db('employees as e')
+    .leftJoin('job_titles as jt', 'jt.id', 'e.job_title_id')
+    .leftJoin('properties as p', 'p.name', 'e.branch_name')
+    .leftJoin('clusters as c', 'c.id', 'p.cluster_id')
+    .whereIn('e.employment_status', ['pip', 'left'])
+    .where('e.open_to_backfill', true)
+    .select(
+      'e.id', 'e.job_id', 'e.employee_code', 'e.first_name', 'e.last_name',
+      'e.branch_name', 'e.dept_name', 'e.job_title_id', 'jt.title as job_title',
+      'e.employment_status', 'e.last_working_day', 'c.name as cluster_name'
+    )
+    .orderBy('e.employment_status').orderBy('e.branch_name');
+  if (!scope.all) q.whereIn('e.branch_name', scope.propertyNames.length ? scope.propertyNames : ['__none__']);
+  const rows = await q;
+
+  // Which of these JOB IDs already have an open backfill vacancy?
+  const jobIds = rows.map((r: any) => r.job_id).filter(Boolean);
+  const openVac = jobIds.length
+    ? await db('vacancies').whereIn('backfill_job_id', jobIds).whereNot('status', 'closed').select('backfill_job_id')
+    : [];
+  const vacSet = new Set(openVac.map((v: any) => v.backfill_job_id));
+
+  return rows.map((r: any) => ({
+    ...r,
+    name: `${r.first_name} ${r.last_name}`.trim(),
+    backfill_vacancy_open: vacSet.has(r.job_id),
+  }));
 }
 
 export async function getStatusHistory(employeeId: number) {
@@ -778,7 +834,7 @@ export async function getPropertyConsole(propertyId: number) {
     .leftJoin('job_titles as jt', 'jt.id', 'e.job_title_id')
     .where('e.branch_name', pb.property_name)
     .select(
-      'e.id', 'e.employee_code', 'e.first_name', 'e.last_name', 'e.dept_name',
+      'e.id', 'e.job_id', 'e.employee_code', 'e.first_name', 'e.last_name', 'e.dept_name',
       'jt.title as job_title', 'e.monthly_ctc', 'e.employment_status',
       'e.last_working_day', 'e.pip_start_date', 'e.pip_end_date'
     )
@@ -846,7 +902,7 @@ export async function getPropertyConsole(propertyId: number) {
     },
     byDepartment,
     employees: (emps as any[]).map(e => ({
-      id: e.id, employee_code: e.employee_code, name: `${e.first_name} ${e.last_name}`.trim(),
+      id: e.id, job_id: e.job_id, employee_code: e.employee_code, name: `${e.first_name} ${e.last_name}`.trim(),
       dept_name: e.dept_name || 'Unassigned', job_title: e.job_title,
       monthly_ctc: e.monthly_ctc != null ? Number(e.monthly_ctc) : null,
       employment_status: e.employment_status, last_working_day: e.last_working_day,

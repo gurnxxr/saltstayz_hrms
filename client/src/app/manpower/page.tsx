@@ -5,7 +5,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
-import { ShieldCheck, X } from 'lucide-react';
+import Link from 'next/link';
+import { ShieldCheck, X, AlertTriangle, UserPlus } from 'lucide-react';
 
 const inr = (n: number) => '₹' + new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(Math.round(Number(n) || 0));
 
@@ -41,6 +42,7 @@ export default function ManpowerPage() {
   const tabs = [
     { key: 'budget', label: 'Budget' },
     { key: 'status', label: 'Employees & Status' },
+    { key: 'replacements', label: 'Replacements' },
   ];
   const [tab, setTab] = useState('budget');
 
@@ -73,6 +75,7 @@ export default function ManpowerPage() {
 
         {tab === 'budget' && <BudgetTab />}
         {tab === 'status' && <StatusTab />}
+        {tab === 'replacements' && <ReplacementsTab />}
       </div>
     </AppShell>
   );
@@ -188,7 +191,7 @@ function StatusTab() {
                 <tr key={e.id} className="hover:bg-muted/30">
                   <td className="px-4 py-3">
                     <div className="font-medium text-foreground">{e.first_name} {e.last_name}</div>
-                    <div className="text-[11px] text-secondary">{e.employee_code}</div>
+                    <div className="text-[11px] text-secondary">{e.job_id ? `${e.job_id} · ` : ''}{e.employee_code}</div>
                   </td>
                   <td className="px-4 py-3">{e.branch_name}</td>
                   <td className="px-4 py-3">{e.job_title || '—'}</td>
@@ -205,6 +208,67 @@ function StatusTab() {
         </div>
       </div>
       {target && <StatusDialog employee={target} onClose={() => setTarget(null)} onSaved={() => { setTarget(null); qc.invalidateQueries({ queryKey: ['mp-employees'] }); qc.invalidateQueries({ queryKey: ['mp-sanctions'] }); }} />}
+    </div>
+  );
+}
+
+// ─────────────────────────── Replacements (PIP / Left → backfill) ───────────────────────────
+
+function ReplacementsTab() {
+  const { data: rows = [], isLoading } = useQuery({
+    queryKey: ['mp-replacements'],
+    queryFn: () => api.get('/manpower/replacements').then(r => r.data),
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2 rounded-lg bg-amber-50 border border-amber-200 px-4 py-2.5 text-sm text-amber-800">
+        <AlertTriangle size={16} className="text-amber-600 shrink-0" />
+        <span>These JOBs are on PIP or have left and are open to backfill. Raise a vacancy mapped to the JOB ID to hire a replacement.</span>
+      </div>
+      <div className="bg-card rounded-xl border border-border overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/50 text-secondary">
+              <tr className="text-left">
+                <th className="px-4 py-2.5 font-medium">JOB ID</th>
+                <th className="px-4 py-2.5 font-medium">Employee</th>
+                <th className="px-4 py-2.5 font-medium">Role</th>
+                <th className="px-4 py-2.5 font-medium">Property</th>
+                <th className="px-4 py-2.5 font-medium">Status</th>
+                <th className="px-4 py-2.5 font-medium">Last working day</th>
+                <th className="px-4 py-2.5 font-medium text-right">Backfill</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {isLoading ? (
+                <tr><td colSpan={7} className="px-4 py-8 text-center text-secondary">Loading…</td></tr>
+              ) : rows.length === 0 ? (
+                <tr><td colSpan={7} className="px-4 py-8 text-center text-secondary">No open replacements — every JOB is filled.</td></tr>
+              ) : rows.map((r: any) => (
+                <tr key={r.id} className="hover:bg-muted/30">
+                  <td className="px-4 py-3 font-mono text-xs text-foreground whitespace-nowrap">{r.job_id || '—'}</td>
+                  <td className="px-4 py-3">
+                    <div className="font-medium text-foreground">{r.name}</div>
+                    <div className="text-[11px] text-secondary">{r.employee_code}</div>
+                  </td>
+                  <td className="px-4 py-3">{r.job_title || '—'}</td>
+                  <td className="px-4 py-3">{r.branch_name}</td>
+                  <td className="px-4 py-3"><StatusChip status={r.employment_status} /></td>
+                  <td className="px-4 py-3 whitespace-nowrap text-secondary">{r.last_working_day || '—'}</td>
+                  <td className="px-4 py-3 text-right">
+                    {r.backfill_vacancy_open ? (
+                      <span className="inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700 border border-green-200">Vacancy raised</span>
+                    ) : r.job_id ? (
+                      <Link href={`/recruitment/vacancies/new?backfill_job_id=${encodeURIComponent(r.job_id)}`} className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/5 rounded-lg"><UserPlus size={13} /> Raise vacancy</Link>
+                    ) : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }

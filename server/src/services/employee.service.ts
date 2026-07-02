@@ -1,4 +1,5 @@
 import db from '../config/database';
+import { nextJobId } from '../utils/jobId';
 
 export async function listEmployees(filters: {
   search?: string;
@@ -82,6 +83,7 @@ export async function createEmployee(data: any) {
     if (emailExists) throw Object.assign(new Error('Email already in use'), { status: 409 });
   }
 
+  if (!data.job_id) data.job_id = await nextJobId(db);
   const [id] = await db('employees').insert(data);
   return getEmployee(id);
 }
@@ -191,6 +193,7 @@ export async function bulkUploadEmployees(csvContent: string) {
       } else {
         if (!data.date_of_joining) data.date_of_joining = new Date().toISOString().split('T')[0];
         if (data.is_active === undefined) data.is_active = true;
+        data.job_id = await nextJobId(db);
         await db('employees').insert(data);
         results.created++;
       }

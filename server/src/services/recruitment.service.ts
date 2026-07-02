@@ -3,6 +3,7 @@ import db from '../config/database';
 import { NotFoundError, ValidationError } from '../utils/errors';
 import { getCtcRange } from './salaryStructure.service';
 import { getVacancySanctionContext } from './manpower.service';
+import { nextJobId } from '../utils/jobId';
 
 // Recruitment funnel stages (Hired removed — "Offered" promotes to onboarding,
 // "Rejected" archives the application).
@@ -122,6 +123,7 @@ export async function createVacancy(data: {
   description?: string;
   reporting_manager_id: number;
   posted_by: number;
+  backfill_job_id?: string;
 }) {
   // A vacancy can only be posted once its designation has a salary structure —
   // the CTC range on the JD is derived from it.
@@ -308,6 +310,7 @@ export async function createEmployeeFromCandidate(
 
   const [employeeId] = await cx('employees').insert({
     employee_code: employeeCode,
+    job_id: await nextJobId(cx),
     first_name: firstName,
     last_name: lastName,
     email: candidate.email || null,

@@ -251,7 +251,7 @@ function DeptEmployees({ dept, employees, onBack, onChangeStatus }: { dept: stri
                 <tr key={e.id} className="hover:bg-muted/30">
                   <td className="px-5 py-2.5">
                     <div className="font-medium text-foreground">{e.name}</div>
-                    <div className="text-[11px] text-secondary">{e.employee_code}</div>
+                    <div className="text-[11px] text-secondary">{e.job_id ? `${e.job_id} · ` : ''}{e.employee_code}</div>
                   </td>
                   <td className="px-5 py-2.5 text-secondary">{e.dept_name}</td>
                   <td className="px-5 py-2.5 text-secondary">{e.job_title || '—'}</td>

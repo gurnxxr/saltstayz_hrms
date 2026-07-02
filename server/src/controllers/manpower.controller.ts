@@ -90,6 +90,10 @@ export async function getStatusHistory(req: AuthRequest, res: Response, next: Ne
   try { res.json(await svc.getStatusHistory(Number(req.params.id))); } catch (err) { next(err); }
 }
 
+export async function listReplacements(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await svc.listReplacements(req.user!)); } catch (err) { next(err); }
+}
+
 // ─── Exceptions ───
 
 export async function listExceptions(req: AuthRequest, res: Response, next: NextFunction) {

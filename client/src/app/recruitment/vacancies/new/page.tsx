@@ -12,14 +12,16 @@ export default function NewVacancyPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
 
-  const [form, setForm] = useState({
+  const [form, setForm] = useState(() => ({
     job_title_id: '',
     department_id: '',
     property_id: '',
     reporting_manager_id: '',
     positions: '1',
     description: '',
-  });
+    // Prefilled from ?backfill_job_id when raising a vacancy from Manpower → Replacements.
+    backfill_job_id: typeof window !== 'undefined' ? (new URLSearchParams(window.location.search).get('backfill_job_id') || '') : '',
+  }));
 
   const { data: properties = [] } = useQuery({
     queryKey: ['properties'],
@@ -56,6 +58,7 @@ export default function NewVacancyPage() {
         reporting_manager_id: Number(data.reporting_manager_id),
         positions: Number(data.positions),
         description: data.description,
+        backfill_job_id: data.backfill_job_id?.trim() || undefined,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['vacancies'] });
@@ -192,6 +195,19 @@ export default function NewVacancyPage() {
               onChange={handleChange}
               className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
             />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-foreground mb-1.5">Backfill JOB ID (optional)</label>
+            <input
+              type="text"
+              name="backfill_job_id"
+              value={form.backfill_job_id}
+              onChange={handleChange}
+              placeholder="e.g. JOB-000123"
+              className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+            />
+            <p className="mt-1.5 text-xs text-secondary">Map this vacancy to the JOB ID it replaces (from Manpower &rarr; Replacements).</p>
           </div>
 
           <div>

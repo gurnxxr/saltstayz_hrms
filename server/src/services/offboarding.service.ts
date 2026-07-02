@@ -2,6 +2,7 @@ import db from '../config/database';
 import { NotFoundError, ValidationError, AppError } from '../utils/errors';
 import { getMonthlyBreakdown } from './payslip.service';
 import { notifyEmployee } from './notification.service';
+import { notifyReplacementNeeded } from './manpower.service';
 
 // Default clearance checklist, grouped by the team responsible for sign-off.
 const DEFAULT_CLEARANCE: { category: string; item: string }[] = [
@@ -293,8 +294,11 @@ export async function completeCase(id: number) {
   const tenureMonths = diffMonths(emp.date_of_joining, c.last_working_day) ?? 0;
 
   await db.transaction(async (trx) => {
-    // 1. Deactivate the employee record
-    await trx('employees').where('id', c.employee_id).update({ is_active: false, updated_at: trx.fn.now() });
+    // 1. Deactivate the employee record + mark the JOB left and open to backfill
+    await trx('employees').where('id', c.employee_id).update({
+      is_active: false, employment_status: 'left', open_to_backfill: true,
+      last_working_day: c.last_working_day || null, updated_at: trx.fn.now(),
+    });
 
     // 2. Revoke login — deactivate any user account linked to this employee
     await trx('users').where('employee_id', c.employee_id).update({ is_active: false, updated_at: trx.fn.now() });
@@ -316,5 +320,7 @@ export async function completeCase(id: number) {
     });
   });
 
+  // Flag admin + HR that this JOB now needs a replacement.
+  await notifyReplacementNeeded({ ...emp, employment_status: 'left' });
   return getCase(id);
 }

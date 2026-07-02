@@ -152,7 +152,8 @@ export default function BudgetControlPage() {
                     </tr>
                     {isOpen && (
                       <tr>
-                        <td colSpan={6} className="bg-muted/20 px-4 py-3">
+                        <td colSpan={6} className="bg-muted/20 px-4 py-3 space-y-4">
+                          <PropertyDeptCounts propertyId={r.property_id} />
                           <PropertyBands propertyId={r.property_id} />
                         </td>
                       </tr>
@@ -167,6 +168,54 @@ export default function BudgetControlPage() {
         <p className="text-xs text-secondary">Headcount is cumulative across all roles at the property. Per-role salary bands are set in Manpower &amp; Budget Control.</p>
       </div>
     </AppShell>
+  );
+}
+
+// Per-department sanctioned employee count — the same figure editable in Property Configuration.
+function PropertyDeptCounts({ propertyId }: { propertyId: number }) {
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery({
+    queryKey: ['bc-console', propertyId],
+    queryFn: () => api.get(`/manpower/property-console?property_id=${propertyId}`).then(r => r.data),
+  });
+  const [edits, setEdits] = useState<Record<string, string>>({});
+  const save = useMutation({
+    mutationFn: ({ department, worker_count }: any) => api.put('/manpower/property-console/department-workers', { property_id: propertyId, department, worker_count: Number(worker_count) }),
+    onSuccess: (_d, v: any) => { toast.success('Employees per department saved'); setEdits(e => { const n = { ...e }; delete n[v.department]; return n; }); qc.invalidateQueries({ queryKey: ['bc-console', propertyId] }); },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to save'),
+  });
+
+  if (isLoading || !data) return <p className="text-xs text-secondary">Loading departments…</p>;
+  const depts: any[] = data.byDepartment || [];
+
+  return (
+    <div className="space-y-2">
+      <p className="text-[11px] uppercase tracking-wide text-secondary">No. of employees by department (sanctioned)</p>
+      <table className="w-full text-sm">
+        <tbody className="divide-y divide-border/60">
+          {depts.length === 0 && <tr><td className="py-2 text-secondary text-xs">No departments.</td></tr>}
+          {depts.map((d) => {
+            const edited = edits[d.dept_name];
+            const val = edited != null ? edited : String(d.sanctioned_workers ?? 0);
+            return (
+              <tr key={d.dept_name}>
+                <td className="py-2 pr-3 font-medium text-foreground">{d.dept_name}</td>
+                <td className="py-2 pr-3 text-secondary text-xs">{d.actual_workers} hired</td>
+                <td className="py-2 pr-2">
+                  <input type="number" min="0" value={val} onChange={ev => setEdits(p => ({ ...p, [d.dept_name]: ev.target.value }))}
+                    className="w-24 px-2 py-1 border border-border rounded-lg bg-background text-sm" />
+                </td>
+                <td className="py-2 text-right">
+                  <button disabled={edited == null || save.isPending}
+                    onClick={() => save.mutate({ department: d.dept_name, worker_count: val })}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 bg-primary text-white rounded-lg text-xs font-medium disabled:opacity-40"><Save size={12} /> Save</button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
