@@ -41,10 +41,42 @@ export async function updateEmployee(req: AuthRequest, res: Response, next: Next
 }
 
 export async function bulkUploadEmployees(req: AuthRequest, res: Response, next: NextFunction) {
+  const fileName = req.file?.originalname || null;
   try {
     if (!req.file) return res.status(400).json({ error: 'CSV file is required' });
     const csv = req.file.buffer.toString('utf-8');
-    res.json(await employeeService.bulkUploadEmployees(csv));
+    const result = await employeeService.bulkUploadEmployees(csv);
+
+    await employeeService.logEmployeeUpload({
+      uploaded_by: req.user?.userId ?? null,
+      uploaded_by_email: req.user?.email ?? null,
+      file_name: fileName,
+      rows_total: result.total,
+      rows_created: result.created,
+      rows_updated: result.updated,
+      rows_skipped: result.skipped,
+      errors: result.errors,
+      status: result.skipped > 0 ? 'partial' : 'success',
+    });
+
+    res.json(result);
+  } catch (err: any) {
+    // Record the failed attempt so it shows in history, then surface the error.
+    await employeeService.logEmployeeUpload({
+      uploaded_by: req.user?.userId ?? null,
+      uploaded_by_email: req.user?.email ?? null,
+      file_name: fileName,
+      rows_total: 0, rows_created: 0, rows_updated: 0, rows_skipped: 0,
+      status: 'failed', error_note: err?.message?.slice(0, 500) || 'Upload failed',
+    });
+    next(err);
+  }
+}
+
+export async function getEmployeeUploadLogs(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const limit = req.query.limit ? Number(req.query.limit) : 50;
+    res.json(await employeeService.listEmployeeUploadLogs(limit));
   } catch (err) { next(err); }
 }
 

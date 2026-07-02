@@ -23,6 +23,7 @@ router.get('/managers', DIRECTORY_ROLES, ctrl.getManagers);
 
 // Employee directory (HR+ roles)
 router.get('/', authorize('employees', 'read'), DIRECTORY_ROLES, ctrl.listEmployees);
+router.get('/upload-logs', authorize('employees', 'read'), EMPLOYEE_WRITE_ROLES, ctrl.getEmployeeUploadLogs);
 router.get('/:id', authorize('employees', 'read'), DIRECTORY_ROLES, ctrl.getEmployee);
 router.post('/bulk-upload', authorize('employees', 'create'), EMPLOYEE_WRITE_ROLES, upload.single('file'), ctrl.bulkUploadEmployees);
 router.post('/', authorize('employees', 'create'), EMPLOYEE_WRITE_ROLES, ctrl.createEmployee);

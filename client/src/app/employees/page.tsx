@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, Fragment } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
@@ -11,7 +11,7 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import LoadError from '@/components/ui/LoadError';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import {
-  Search, Users, Filter, Eye, ChevronDown, ChevronLeft, ChevronRight, Upload, X,
+  Search, Users, Filter, Eye, ChevronDown, ChevronLeft, ChevronRight, Upload, X, History, Copy,
 } from 'lucide-react';
 
 const PAGE_SIZE = 10;
@@ -39,6 +39,7 @@ export default function EmployeeDetailsPage() {
     onSuccess: (data) => {
       setBulkResult(data);
       queryClient.invalidateQueries({ queryKey: ['employees-list'] });
+      queryClient.invalidateQueries({ queryKey: ['employee-upload-logs'] });
       toast.success(`${data.created} added, ${data.updated} updated`);
     },
     onError: (e: any) => toast.error(e.response?.data?.error || 'Bulk upload failed'),
@@ -259,6 +260,8 @@ export default function EmployeeDetailsPage() {
             </div>
           </div>
         )}
+
+        {canEditStatus && <UploadHistory />}
       </div>
       <ConfirmDialog
         open={!!deactivateTarget}
@@ -308,10 +311,16 @@ export default function EmployeeDetailsPage() {
                     {bulkResult.skipped > 0 && <span className="text-yellow-600">{bulkResult.skipped} skipped</span>}
                   </div>
                   {bulkResult.errors?.length > 0 && (
-                    <div className="max-h-40 overflow-y-auto rounded bg-red-50 border border-red-200 p-2">
-                      {bulkResult.errors.map((err: string, i: number) => (
-                        <p key={i} className="text-xs text-red-700">{err}</p>
-                      ))}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-secondary">{bulkResult.errors.length} row error(s)</span>
+                        <button onClick={() => copyErrors(bulkResult.errors)} className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"><Copy size={12} /> Copy errors</button>
+                      </div>
+                      <div className="max-h-40 overflow-y-auto rounded bg-red-50 border border-red-200 p-2">
+                        {bulkResult.errors.map((err: string, i: number) => (
+                          <p key={i} className="text-xs text-red-700">{err}</p>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -329,6 +338,120 @@ function getPageNumbers(current: number, total: number): (number | string)[] {
   if (current <= 4) return [1, 2, 3, 4, 5, '...', total];
   if (current >= total - 3) return [1, '...', total - 4, total - 3, total - 2, total - 1, total];
   return [1, '...', current - 1, current, current + 1, '...', total];
+}
+
+function fmtDateTime(s?: string) {
+  if (!s) return '—';
+  const d = new Date(s.includes('T') ? s : s.replace(' ', 'T') + 'Z');
+  return isNaN(d.getTime()) ? s : d.toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function copyErrors(errors: string[]) {
+  navigator.clipboard.writeText((errors || []).join('\n')).then(
+    () => toast.success('Errors copied to clipboard'),
+    () => toast.error('Copy failed'),
+  );
+}
+
+function UploadStatusBadge({ status }: { status: string }) {
+  const map: Record<string, string> = {
+    success: 'bg-green-100 text-green-700',
+    partial: 'bg-yellow-100 text-yellow-700',
+    failed: 'bg-red-100 text-red-700',
+  };
+  return <span className={`text-xs px-2 py-1 rounded-full font-medium capitalize ${map[status] || 'bg-gray-100 text-gray-500'}`}>{status}</span>;
+}
+
+// Persisted bulk-upload history — durable record of every run + its skipped-row errors.
+function UploadHistory() {
+  const [open, setOpen] = useState(false);
+  const [expanded, setExpanded] = useState<number | null>(null);
+  const { data: logs = [], isLoading, isError, refetch } = useQuery({
+    queryKey: ['employee-upload-logs'],
+    queryFn: () => api.get('/employees/upload-logs').then(r => r.data),
+    enabled: open,
+  });
+
+  return (
+    <div className="bg-card rounded-xl border border-border overflow-hidden">
+      <button onClick={() => setOpen(v => !v)} className="w-full flex items-center gap-3 px-5 py-4 hover:bg-muted/30 transition-colors">
+        {open ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+        <History size={18} className="text-primary" />
+        <span className="text-sm font-semibold text-foreground flex-1 text-left">Upload History</span>
+        <span className="text-xs text-secondary">Bulk employee uploads</span>
+      </button>
+      {open && (
+        <div className="border-t border-border">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-10"><div className="animate-spin rounded-full h-7 w-7 border-b-2 border-primary" /></div>
+          ) : isError ? (
+            <LoadError compact message="Couldn't load upload history." onRetry={() => refetch()} />
+          ) : logs.length === 0 ? (
+            <p className="px-5 py-8 text-center text-secondary text-sm">No bulk uploads yet.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-border bg-muted/20">
+                    <th className="text-left px-5 py-2.5 text-xs font-medium text-secondary uppercase">Uploaded At</th>
+                    <th className="text-left px-5 py-2.5 text-xs font-medium text-secondary uppercase">By</th>
+                    <th className="text-left px-5 py-2.5 text-xs font-medium text-secondary uppercase">File</th>
+                    <th className="text-left px-5 py-2.5 text-xs font-medium text-secondary uppercase">Rows</th>
+                    <th className="text-left px-5 py-2.5 text-xs font-medium text-secondary uppercase">Status</th>
+                    <th className="px-5 py-2.5" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {logs.map((log: any) => {
+                    const hasErrors = (log.errors?.length ?? 0) > 0 || !!log.error_note;
+                    const isOpen = expanded === log.id;
+                    return (
+                      <Fragment key={log.id}>
+                        <tr className="hover:bg-muted/20">
+                          <td className="px-5 py-2.5 text-sm font-medium text-foreground whitespace-nowrap">{fmtDateTime(log.created_at)}</td>
+                          <td className="px-5 py-2.5 text-sm text-secondary">{log.uploaded_by_email || '—'}</td>
+                          <td className="px-5 py-2.5 text-sm text-secondary">{log.file_name || '—'}</td>
+                          <td className="px-5 py-2.5 text-sm text-secondary whitespace-nowrap">
+                            <span className="text-green-600">{log.rows_created} new</span>{', '}
+                            <span className="text-blue-600">{log.rows_updated} upd</span>
+                            {log.rows_skipped > 0 && <>{', '}<span className="text-yellow-600">{log.rows_skipped} skip</span></>}
+                          </td>
+                          <td className="px-5 py-2.5"><UploadStatusBadge status={log.status} /></td>
+                          <td className="px-5 py-2.5 text-right">
+                            {hasErrors && (
+                              <button onClick={() => setExpanded(isOpen ? null : log.id)} className="text-xs font-medium text-primary hover:underline">
+                                {isOpen ? 'Hide' : 'View'} errors
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                        {isOpen && hasErrors && (
+                          <tr>
+                            <td colSpan={6} className="px-5 pb-3 bg-muted/10">
+                              <div className="flex items-center justify-between mb-1.5">
+                                <span className="text-xs font-medium text-secondary">{log.errors?.length || 0} row error(s){log.error_note ? ' · file rejected' : ''}</span>
+                                {log.errors?.length > 0 && (
+                                  <button onClick={() => copyErrors(log.errors)} className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"><Copy size={12} /> Copy errors</button>
+                                )}
+                              </div>
+                              <div className="max-h-48 overflow-y-auto rounded bg-red-50 border border-red-200 p-2">
+                                {log.error_note && <p className="text-xs text-red-700 font-medium">{log.error_note}</p>}
+                                {(log.errors || []).map((err: string, i: number) => <p key={i} className="text-xs text-red-700">{err}</p>)}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function TableSkeleton() {

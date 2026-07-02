@@ -248,3 +248,43 @@ export async function getManagers() {
     .select('id', 'first_name', 'last_name', 'employee_code')
     .orderBy('first_name');
 }
+
+// ─── Bulk upload history (persisted so HR can act on skipped rows later) ───
+
+export interface EmployeeUploadLogEntry {
+  uploaded_by?: number | null;
+  uploaded_by_email?: string | null;
+  file_name?: string | null;
+  rows_total: number;
+  rows_created: number;
+  rows_updated: number;
+  rows_skipped: number;
+  errors?: string[];
+  status: 'success' | 'partial' | 'failed';
+  error_note?: string | null;
+}
+
+/** Records one bulk-upload run. Fire-and-forget — never throws into the caller. */
+export async function logEmployeeUpload(entry: EmployeeUploadLogEntry) {
+  try {
+    const { errors, ...rest } = entry;
+    await db('employee_upload_logs').insert({ ...rest, errors: JSON.stringify(errors ?? []) });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[employee upload log] failed:', (err as Error).message);
+  }
+}
+
+/** Most-recent bulk-upload runs, newest first, with errors parsed back to string[]. */
+export async function listEmployeeUploadLogs(limit = 50) {
+  const rows = await db('employee_upload_logs')
+    .select('*')
+    .orderBy('created_at', 'desc')
+    .orderBy('id', 'desc')
+    .limit(Math.min(200, limit));
+  return rows.map((r: any) => {
+    let errors: string[] = [];
+    try { errors = r.errors ? JSON.parse(r.errors) : []; } catch { errors = []; }
+    return { ...r, errors };
+  });
+}
