@@ -131,7 +131,7 @@ export default function AttendanceCalendar() {
                 const cells: React.ReactNode[] = [];
 
                 for (let i = 0; i < firstDay; i++) {
-                  cells.push(<div key={`empty-${i}`} className="h-20" />);
+                  cells.push(<div key={`empty-${i}`} className="h-14 sm:h-20" />);
                 }
 
                 for (let d = 1; d <= daysInMonth; d++) {
@@ -173,7 +173,7 @@ export default function AttendanceCalendar() {
                     <div
                       key={d}
                       title={tooltip}
-                      className={`h-20 rounded-lg border p-1.5 flex flex-col transition-colors ${
+                      className={`h-14 sm:h-20 rounded-lg border p-1 sm:p-1.5 flex flex-col transition-colors ${
                         isToday ? 'border-primary bg-primary/5' :
                         isWeekend ? 'border-border/50 bg-muted/30' :
                         'border-border hover:bg-muted/30'
@@ -184,7 +184,7 @@ export default function AttendanceCalendar() {
                       </span>
                       {badge && !isFuture && (
                         <div className="flex-1 flex items-center justify-center">
-                          <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-xs font-bold ${badgeBg} ${badgeText}`}>
+                          <span className={`inline-flex items-center justify-center w-6 h-6 sm:w-8 sm:h-8 rounded-full text-[10px] sm:text-xs font-bold ${badgeBg} ${badgeText}`}>
                             {badge}
                           </span>
                         </div>

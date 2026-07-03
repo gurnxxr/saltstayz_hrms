@@ -41,6 +41,8 @@ export default function ApplyLeavePage() {
   const selectedBalance = balances.find((b: any) => String(b.leave_type_id) === form.leave_type_id);
   const remaining = selectedBalance ? selectedBalance.total_days - selectedBalance.used_days : null;
 
+  // Mirrors the server's calculateLeaveDays (excludes Sundays only), so the applicant
+  // and approver always see the same number.
   let estimatedDays = 0;
   if (form.start_date && form.end_date && new Date(form.start_date) <= new Date(form.end_date)) {
     const start = new Date(form.start_date);
@@ -51,6 +53,9 @@ export default function ApplyLeavePage() {
       current.setDate(current.getDate() + 1);
     }
   }
+
+  // Enforce balance client-side too (the server also rejects), so submit is blocked up front.
+  const insufficient = remaining !== null && estimatedDays > 0 && estimatedDays > remaining;
 
   return (
     <AppShell>
@@ -123,9 +128,11 @@ export default function ApplyLeavePage() {
           </div>
 
           {estimatedDays > 0 && (
-            <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 text-blue-700 rounded-lg text-sm">
+            <div className={`flex flex-wrap items-center gap-x-2 px-3 py-2 rounded-lg text-sm ${insufficient ? 'bg-red-50 text-red-700' : 'bg-blue-50 text-blue-700'}`}>
               <span className="font-medium">{estimatedDays} working day{estimatedDays > 1 ? 's' : ''}</span>
-              <span className="text-blue-500">(excluding Sundays)</span>
+              {insufficient
+                ? <span>exceeds your {remaining} remaining day{remaining !== 1 ? 's' : ''} — reduce the range or pick another leave type.</span>
+                : <span className="text-blue-500">(excluding Sundays)</span>}
             </div>
           )}
 
@@ -145,8 +152,8 @@ export default function ApplyLeavePage() {
           <div className="flex gap-3 pt-2">
             <button
               type="submit"
-              disabled={applyMutation.isPending}
-              className="px-6 py-2.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
+              disabled={applyMutation.isPending || insufficient}
+              className="px-6 py-2.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {applyMutation.isPending ? 'Submitting...' : 'Submit Request'}
             </button>

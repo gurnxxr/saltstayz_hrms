@@ -70,7 +70,7 @@ export default function LeaveTab({ isAdmin }: { isAdmin: boolean }) {
 
       {/* Leave Balances */}
       {balancesError && <LoadError compact message="Couldn't load leave balances." onRetry={() => refetchBalances()} />}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
         {balances.map((b: any) => {
           const remaining = b.total_days - b.used_days;
           const pct = b.total_days > 0 ? (b.used_days / b.total_days) * 100 : 0;
