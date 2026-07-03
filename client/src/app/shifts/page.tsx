@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
@@ -19,7 +20,12 @@ export default function ShiftsPage() {
   const { user } = useAuth();
   const canApprove = user?.roleName === 'admin' || user?.roleName === 'chro';
 
-  const [tab, setTab] = useState<Tab>('employees');
+  // Tab lives in the URL (?tab=) so a refresh or deep link keeps you on the same tab.
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const rawTab = searchParams.get('tab');
+  const tab: Tab = (['employees', 'types', 'requests'].includes(rawTab || '') ? rawTab : 'employees') as Tab;
+  const setTab = (t: Tab) => router.replace(`/shifts?tab=${t}`, { scroll: false });
 
   // Shift Types form + Employee search state
   const [showForm, setShowForm] = useState(false);
@@ -197,17 +203,17 @@ export default function ShiftsPage() {
                 className="bg-card rounded-xl border border-border p-6 grid grid-cols-1 sm:grid-cols-3 gap-4"
               >
                 <div>
-                  <label className="block text-sm font-medium mb-1">Name *</label>
+                  <label className="block text-sm font-medium mb-1">Name <span className="text-red-600">*</span></label>
                   <input value={form.name} onChange={(e) => setForm(p => ({ ...p, name: e.target.value }))} placeholder="e.g. Morning, Night"
                     className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1">Start Time *</label>
+                  <label className="block text-sm font-medium mb-1">Start Time <span className="text-red-600">*</span></label>
                   <input type="time" value={form.start_time} onChange={(e) => setForm(p => ({ ...p, start_time: e.target.value }))}
                     className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1">End Time *</label>
+                  <label className="block text-sm font-medium mb-1">End Time <span className="text-red-600">*</span></label>
                   <input type="time" value={form.end_time} onChange={(e) => setForm(p => ({ ...p, end_time: e.target.value }))}
                     className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
                 </div>
@@ -222,7 +228,16 @@ export default function ShiftsPage() {
 
             <div className="bg-card rounded-xl border border-border overflow-hidden">
               {shiftTypes.length === 0 ? (
-                <div className="p-8 text-center text-secondary">No shift types configured yet.</div>
+                <div className="p-10 text-center">
+                  <Clock size={32} className="mx-auto text-secondary/40 mb-2" />
+                  <p className="text-sm font-medium text-foreground">No shift types yet</p>
+                  <p className="text-sm text-secondary mt-1">Create your first shift (e.g. Morning, Night) to start assigning employees.</p>
+                  {!showForm && (
+                    <button onClick={() => setShowForm(true)} className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors">
+                      <Plus size={15} /> Add shift type
+                    </button>
+                  )}
+                </div>
               ) : (
                 <table className="w-full">
                   <thead>
