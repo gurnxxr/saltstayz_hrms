@@ -10,6 +10,7 @@ import { formatINR } from '@/lib/utils';
 import { useAuth } from '@/lib/auth';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import Breadcrumb from '@/components/ui/Breadcrumb';
+import LoadError from '@/components/ui/LoadError';
 import {
   ArrowLeft, User, Phone, Mail, Calendar, Briefcase,
   CreditCard, Shield, Hash, Save, Loader2, Pencil,
@@ -25,7 +26,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   const [form, setForm] = useState<any>({});
   const [confirmDeactivate, setConfirmDeactivate] = useState(false);
 
-  const { data: emp, isLoading } = useQuery({
+  const { data: emp, isLoading, isError, refetch } = useQuery({
     queryKey: ['employee-detail', id],
     queryFn: () => api.get(`/employees/${id}`).then(r => r.data),
   });
@@ -88,6 +89,14 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
         <div className="flex items-center justify-center py-20">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
         </div>
+      </AppShell>
+    );
+  }
+
+  if (isError) {
+    return (
+      <AppShell>
+        <LoadError message="Couldn't load this employee." onRetry={() => refetch()} />
       </AppShell>
     );
   }

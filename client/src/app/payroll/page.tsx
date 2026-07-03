@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import { formatINR } from '@/lib/utils';
+import LoadError from '@/components/ui/LoadError';
 import {
   FileText, Download, Loader2, Wallet, Calendar, IndianRupee, AlertTriangle,
 } from 'lucide-react';
@@ -29,7 +30,7 @@ export default function PayrollPage() {
     y > now.getFullYear() || (y === now.getFullYear() && m > now.getMonth() + 1);
   const selectedIsFuture = isFutureMonth(month, year);
 
-  const { data: history = [], isLoading: historyLoading } = useQuery({
+  const { data: history = [], isLoading: historyLoading, isError: historyError, refetch: refetchHistory } = useQuery({
     queryKey: ['my-payslip-history'],
     queryFn: () => api.get('/payroll/me/history').then(r => r.data),
   });
@@ -201,6 +202,8 @@ export default function PayrollPage() {
             <div className="flex justify-center py-10">
               <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-primary" />
             </div>
+          ) : historyError ? (
+            <LoadError message="Couldn't load your payslip history." onRetry={() => refetchHistory()} />
           ) : history.length === 0 ? (
             <div className="py-12 text-center">
               <FileText size={36} className="mx-auto text-secondary/30 mb-2" />

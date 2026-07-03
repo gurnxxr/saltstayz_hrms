@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
+import LoadError from '@/components/ui/LoadError';
 import api from '@/lib/api';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useAuth } from '@/lib/auth';
@@ -38,9 +39,9 @@ export default function ShiftsPage() {
     enabled: tab === 'employees',
   });
 
-  const { data: changeRequests = [] } = useQuery({
+  const { data: changeRequests = [], isError: reqError, refetch: refetchReq } = useQuery({
     queryKey: ['change-requests'],
-    queryFn: () => api.get('/shifts/change-requests').then(r => r.data).catch(() => []),
+    queryFn: () => api.get('/shifts/change-requests').then(r => r.data),
     enabled: tab === 'requests',
   });
 
@@ -259,7 +260,9 @@ export default function ShiftsPage() {
         {/* ─── Change Requests ─── */}
         {tab === 'requests' && (
           <div className="bg-card rounded-xl border border-border overflow-hidden">
-            {changeRequests.length === 0 ? (
+            {reqError ? (
+              <LoadError message="Couldn't load change requests." onRetry={() => refetchReq()} />
+            ) : changeRequests.length === 0 ? (
               <div className="p-8 text-center text-secondary">No change requests.</div>
             ) : (
               <div className="divide-y divide-border">

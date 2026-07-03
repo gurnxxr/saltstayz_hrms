@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import api from '@/lib/api';
+import LoadError from '@/components/ui/LoadError';
 import {
   Plus, Calendar, Clock, CheckCircle, XCircle, AlertCircle,
 } from 'lucide-react';
@@ -30,12 +31,12 @@ export default function LeaveTab({ isAdmin }: { isAdmin: boolean }) {
   const [leaveSubTab, setLeaveSubTab] = useState<'requests' | 'holidays'>('requests');
   const [statusFilter, setStatusFilter] = useState('');
 
-  const { data: balances = [] } = useQuery({
+  const { data: balances = [], isError: balancesError, refetch: refetchBalances } = useQuery({
     queryKey: ['leave-balances'],
     queryFn: () => api.get('/leave/balances').then(r => r.data),
   });
 
-  const { data: leaves = [] } = useQuery({
+  const { data: leaves = [], isError: leavesError, refetch: refetchLeaves } = useQuery({
     queryKey: ['my-leaves', statusFilter],
     queryFn: () => {
       const params = new URLSearchParams();
@@ -68,6 +69,7 @@ export default function LeaveTab({ isAdmin }: { isAdmin: boolean }) {
       </div>
 
       {/* Leave Balances */}
+      {balancesError && <LoadError compact message="Couldn't load leave balances." onRetry={() => refetchBalances()} />}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         {balances.map((b: any) => {
           const remaining = b.total_days - b.used_days;
@@ -125,7 +127,9 @@ export default function LeaveTab({ isAdmin }: { isAdmin: boolean }) {
       {/* Requests Sub-tab */}
       {leaveSubTab === 'requests' && (
         <div className="bg-card rounded-xl border border-border overflow-hidden">
-          {leaves.length === 0 ? (
+          {leavesError ? (
+            <LoadError message="Couldn't load your leave requests." onRetry={() => refetchLeaves()} />
+          ) : leaves.length === 0 ? (
             <div className="p-8 text-center text-secondary">
               <Calendar size={32} className="mx-auto mb-2 opacity-40" />
               <p>No leave requests found.</p>

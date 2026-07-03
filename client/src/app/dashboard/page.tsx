@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import AppShell from '@/components/layout/AppShell';
+import LoadError from '@/components/ui/LoadError';
 import { usePermissions } from '@/hooks/usePermissions';
 import api from '@/lib/api';
 import EmployeeDashboard from '@/components/dashboard/EmployeeDashboard';
@@ -29,9 +30,9 @@ function OrgDashboard() {
     { label: 'Employees', href: '/employees', module: 'employees' },
   ].filter(a => can(a.module, 'read'));
 
-  const { data: overview } = useQuery({
+  const { data: overview, isError: overviewError, refetch: refetchOverview } = useQuery({
     queryKey: ['dashboard-overview'],
-    queryFn: () => api.get('/analytics/overview').then(r => r.data).catch(() => null),
+    queryFn: () => api.get('/analytics/overview').then(r => r.data),
   });
 
   return (
@@ -40,6 +41,8 @@ function OrgDashboard() {
           <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
           <p className="text-secondary mt-1">Organization overview</p>
         </div>
+
+        {overviewError && <LoadError message="Couldn't load the dashboard overview." onRetry={() => refetchOverview()} />}
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           <DashboardCard

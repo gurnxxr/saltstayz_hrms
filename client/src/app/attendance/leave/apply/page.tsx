@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
+import LoadError from '@/components/ui/LoadError';
 import api from '@/lib/api';
 import { ArrowLeft } from 'lucide-react';
 
@@ -17,12 +18,12 @@ export default function ApplyLeavePage() {
     reason: '',
   });
 
-  const { data: leaveTypes = [] } = useQuery({
+  const { data: leaveTypes = [], isError: typesError, refetch: refetchTypes } = useQuery({
     queryKey: ['leave-types'],
     queryFn: () => api.get('/leave/types').then(r => r.data),
   });
 
-  const { data: balances = [] } = useQuery({
+  const { data: balances = [], isError: balancesError, refetch: refetchBalances } = useQuery({
     queryKey: ['leave-balances'],
     queryFn: () => api.get('/leave/balances').then(r => r.data),
   });
@@ -66,6 +67,10 @@ export default function ApplyLeavePage() {
           <h1 className="text-2xl font-bold text-foreground">Apply for Leave</h1>
           <p className="text-secondary mt-1">Submit a new leave request to your manager</p>
         </div>
+
+        {(typesError || balancesError) && (
+          <LoadError message="Couldn't load leave types or balances." onRetry={() => { refetchTypes(); refetchBalances(); }} />
+        )}
 
         <form
           onSubmit={(e) => { e.preventDefault(); applyMutation.mutate(form); }}

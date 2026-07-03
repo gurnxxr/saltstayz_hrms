@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import LoadError from '@/components/ui/LoadError';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import { usePermissions } from '@/hooks/usePermissions';
@@ -158,8 +159,10 @@ function AdaptiveBarChart({
                 <X size={18} />
               </button>
             </div>
-            <div className="flex-1 min-h-0 p-4">
-              <ResponsiveContainer width="100%" height="100%">{renderChart(true)}</ResponsiveContainer>
+            <div className="flex-1 min-h-0 p-4 overflow-auto">
+              <div className="h-full min-h-[300px] min-w-[480px]">
+                <ResponsiveContainer width="100%" height="100%">{renderChart(true)}</ResponsiveContainer>
+              </div>
             </div>
           </div>
         </div>
@@ -176,7 +179,7 @@ function DrilldownPanel({ title, onClose, type, filter, dateFrom, dateTo }: {
   if (dateFrom) params.set('from', dateFrom);
   if (dateTo) params.set('to', dateTo);
 
-  const { data: rows = [], isLoading } = useQuery({
+  const { data: rows = [], isLoading, isError, refetch } = useQuery({
     queryKey: ['analytics-drilldown', type, filter, dateFrom, dateTo],
     queryFn: () => api.get(`/analytics/drilldown?${params}`).then(r => r.data),
   });
@@ -213,6 +216,8 @@ function DrilldownPanel({ title, onClose, type, filter, dateFrom, dateTo }: {
         <div className="p-6">
           {isLoading ? (
             <div className="space-y-3">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-14 bg-muted rounded-lg animate-pulse" />)}</div>
+          ) : isError ? (
+            <LoadError compact message="Couldn't load these records." onRetry={() => refetch()} />
           ) : rows.length === 0 ? (
             <p className="text-center text-secondary py-8">No data found</p>
           ) : (
@@ -265,19 +270,19 @@ function OrgAnalytics() {
     queryFn: () => api.get('/analytics/kpi').then(r => r.data),
   });
 
-  const { data: workforce, isLoading: wfLoading } = useQuery({
+  const { data: workforce, isLoading: wfLoading, isError: wfError, refetch: refetchWf } = useQuery({
     queryKey: ['analytics-workforce'],
     queryFn: () => api.get('/analytics/workforce').then(r => r.data),
     enabled: activeTab === 'workforce',
   });
 
-  const { data: attritionData, isLoading: attrLoading } = useQuery({
+  const { data: attritionData, isLoading: attrLoading, isError: attrError, refetch: refetchAttr } = useQuery({
     queryKey: ['analytics-attrition-v2'],
     queryFn: () => api.get('/analytics/attrition-analysis').then(r => r.data),
     enabled: activeTab === 'attrition',
   });
 
-  const { data: attendProd, isLoading: attendLoading } = useQuery({
+  const { data: attendProd, isLoading: attendLoading, isError: attendError, refetch: refetchAttend } = useQuery({
     queryKey: ['analytics-attendance-prod'],
     queryFn: () => api.get('/analytics/attendance-productivity').then(r => r.data),
     enabled: activeTab === 'attendance',
@@ -285,7 +290,7 @@ function OrgAnalytics() {
 
   const today = new Date().toISOString().split('T')[0];
 
-  const { data: propAnalytics, isLoading: propAnalyticsLoading } = useQuery({
+  const { data: propAnalytics, isLoading: propAnalyticsLoading, isError: propAnalyticsError, refetch: refetchPropAnalytics } = useQuery({
     queryKey: ['analytics-property', statusDate],
     queryFn: () => {
       const p = new URLSearchParams();
@@ -358,8 +363,8 @@ function OrgAnalytics() {
               })}
         </div>
 
-        {/* Sticky tab bar */}
-        <div className="sticky top-0 z-10 bg-background pt-1 pb-2">
+        {/* Sticky tab bar (only stick on larger screens; on mobile it scrolls with content) */}
+        <div className="md:sticky md:top-0 z-10 bg-background pt-1 pb-2">
           <div className="inline-flex gap-1 bg-muted p-1 rounded-xl">
             {TABS.map(t => {
               const Icon = t.icon;
@@ -467,6 +472,8 @@ function OrgAnalytics() {
                 )}
               </Panel>
             </div>
+          ) : wfError ? (
+            <LoadError message="Couldn't load workforce analytics." onRetry={() => refetchWf()} />
           ) : null
         )}
 
@@ -532,6 +539,8 @@ function OrgAnalytics() {
                 )}
               </Panel>
             </div>
+          ) : attrError ? (
+            <LoadError message="Couldn't load attrition analytics." onRetry={() => refetchAttr()} />
           ) : null
         )}
 
@@ -601,6 +610,8 @@ function OrgAnalytics() {
                 </Panel>
               </div>
             </div>
+          ) : attendError ? (
+            <LoadError message="Couldn't load attendance analytics." onRetry={() => refetchAttend()} />
           ) : null
         )}
 
@@ -633,9 +644,21 @@ function OrgAnalytics() {
                   {(departments ?? []).map((d: any) => <option key={d.id} value={d.name}>{d.name}</option>)}
                 </select>
               </div>
+              {statusProperty && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-primary/10 text-primary text-xs">
+                  {statusProperty}
+                  <button onClick={() => { setStatusProperty(''); setStatusPage(1); }} aria-label="Clear property filter" className="hover:text-primary/70"><X size={12} /></button>
+                </span>
+              )}
+              {statusDept && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-primary/10 text-primary text-xs">
+                  {statusDept}
+                  <button onClick={() => { setStatusDept(''); setStatusPage(1); }} aria-label="Clear department filter" className="hover:text-primary/70"><X size={12} /></button>
+                </span>
+              )}
               {(statusProperty || statusDept || statusDate) && (
                 <button onClick={() => { setStatusProperty(''); setStatusDept(''); setStatusDate(''); setStatusPage(1); }}
-                  className="text-xs text-secondary hover:text-foreground underline">Reset</button>
+                  className="text-xs text-secondary hover:text-foreground underline">Reset all</button>
               )}
               <span className="text-xs text-secondary ml-auto">
                 {statusProperty || 'All Properties'} · {effectiveDate}
@@ -645,6 +668,8 @@ function OrgAnalytics() {
 
             {propAnalyticsLoading ? (
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-20 bg-muted rounded-xl animate-pulse" />)}</div>
+            ) : propAnalyticsError ? (
+              <LoadError message="Couldn't load property analytics." onRetry={() => refetchPropAnalytics()} />
             ) : (
               <>
                 {/* Status cards */}
