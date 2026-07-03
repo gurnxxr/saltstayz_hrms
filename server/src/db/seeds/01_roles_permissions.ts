@@ -30,7 +30,7 @@ export async function seed(knex: Knex): Promise<void> {
   const modules = [
     'employees', 'attendance', 'leave', 'shifts', 'onboarding',
     'recruitment', 'analytics', 'reports', 'payroll', 'admin',
-    'admin.users', 'permissions', 'manpower', 'propertyanalytics',
+    'admin.users', 'permissions', 'manpower',
   ];
   const actions = ['create', 'read', 'update', 'delete', 'approve'];
 
@@ -42,8 +42,6 @@ export async function seed(knex: Knex): Promise<void> {
   });
   // Org-only analytics access (attrition, headcount, org-wide attendance).
   permRows.push({ module: 'analytics', action: 'read_org' });
-  // Org/cluster-wide property analytics (vs property_manager's scoped 'read').
-  permRows.push({ module: 'propertyanalytics', action: 'read_org' });
 
   const perms = await knex('permissions').insert(permRows).returning('*');
   const permMap: Record<string, number> = {};
@@ -85,7 +83,6 @@ export async function seed(knex: Knex): Promise<void> {
   // Cluster HR — hire within sanction for assigned cluster(s); raise exceptions;
   // change status. Sanction edits + exception approvals are admin-only (route gate).
   grant('cluster_hr', 'manpower', ['read', 'create', 'update']);
-  grant('cluster_hr', 'propertyanalytics', ['read', 'read_org']);
   grant('cluster_hr', 'employees', ['read']);
   grant('cluster_hr', 'recruitment', ['read']);
 
@@ -97,7 +94,6 @@ export async function seed(knex: Knex): Promise<void> {
   grant('property_manager', 'employees', ['read']);
   // Read-only budget; can initiate status changes for own property.
   grant('property_manager', 'manpower', ['read', 'update']);
-  grant('property_manager', 'propertyanalytics', ['read']);
 
   // Employee
   grant('employee', 'attendance', ['create', 'read']);
@@ -114,8 +110,6 @@ export async function seed(knex: Knex): Promise<void> {
 
   // Org-level analytics — admin/CHRO/HR/HR-manager only (employees keep analytics:read for /me).
   ['admin', 'chro', 'hr', 'hr_manager'].forEach(role => grant(role, 'analytics', ['read_org']));
-  // Org/cluster-wide Property Analytics (cluster_hr granted above; property_manager scoped to 'read').
-  ['admin', 'chro', 'hr'].forEach(role => grant(role, 'propertyanalytics', ['read_org']));
 
   await knex('role_permissions').insert(rpRows);
 }

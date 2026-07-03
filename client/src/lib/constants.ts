@@ -71,13 +71,6 @@ export const NAVIGATION: NavItem[] = [
     module: 'manpower',
   },
   {
-    label: 'Property Analytics',
-    href: '/property-analytics',
-    icon: 'Building2',
-    roles: ['admin', 'chro', 'cluster_hr', 'property_manager'],
-    module: 'propertyanalytics',
-  },
-  {
     label: 'Setup & Configuration',
     href: '/setup/pay-schedule',
     icon: 'SlidersHorizontal',
