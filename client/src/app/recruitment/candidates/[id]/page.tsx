@@ -8,7 +8,8 @@ import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import { allowedNextStages } from '@/lib/constants';
 import { formatDateTime } from '@/lib/utils';
-import { ArrowLeft, User, Clock, ChevronRight } from 'lucide-react';
+import Breadcrumb from '@/components/ui/Breadcrumb';
+import { User, Clock, ChevronRight } from 'lucide-react';
 
 const STAGES = ['screening', 'interview', 'shortlisted', 'offered', 'rejected'] as const;
 const STAGE_COLORS: Record<string, string> = {
@@ -90,13 +91,7 @@ export default function CandidateDetailPage({ params }: { params: Promise<{ id: 
   return (
     <AppShell>
       <div className="space-y-6 max-w-4xl">
-        <button
-          onClick={() => router.back()}
-          className="flex items-center gap-2 text-secondary hover:text-foreground text-sm transition-colors"
-        >
-          <ArrowLeft size={16} />
-          Back
-        </button>
+        <Breadcrumb items={[{ label: 'Recruitment', href: '/recruitment' }, { label: 'Candidates', href: '/recruitment/candidates' }, { label: candidate.name }]} />
 
         {/* Candidate Header */}
         <div className="bg-card rounded-xl border border-border p-6">

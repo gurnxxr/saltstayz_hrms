@@ -17,6 +17,7 @@ export default function Header() {
     chro: 'CHRO',
     hr: 'HR',
     hr_manager: 'HR Manager',
+    cluster_hr: 'Cluster HR',
     property_manager: 'Property Manager',
     employee: 'Employee',
     finance: 'Finance',

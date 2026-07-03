@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useAuth } from '@/lib/auth';
+import { Loader2 } from 'lucide-react';
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -18,6 +19,7 @@ export default function LoginPage() {
       await login(email, password);
     } catch {
       setError('Invalid email or password');
+      setPassword(''); // don't leave the failed password sitting in the field
     } finally {
       setLoading(false);
     }
@@ -75,8 +77,9 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-2.5 px-4 bg-primary text-white font-medium rounded-lg hover:bg-primary-hover transition disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full py-2.5 px-4 bg-primary text-white font-medium rounded-lg hover:bg-primary-hover transition disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center gap-2"
             >
+              {loading && <Loader2 size={16} className="animate-spin" />}
               {loading ? 'Signing in...' : 'Sign In'}
             </button>
           </form>

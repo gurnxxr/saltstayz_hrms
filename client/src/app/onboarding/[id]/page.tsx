@@ -7,7 +7,8 @@ import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
-import { ArrowLeft, Check, Circle, Plus, Trash2, User, Upload, Paperclip, Download, Loader2 } from 'lucide-react';
+import Breadcrumb from '@/components/ui/Breadcrumb';
+import { Check, Circle, Plus, Trash2, User, Upload, Paperclip, Download, Loader2 } from 'lucide-react';
 
 const STATUS_COLORS: Record<string, string> = {
   pending: 'bg-yellow-100 text-yellow-700',
@@ -115,13 +116,7 @@ export default function OnboardingChecklistPage({ params }: { params: Promise<{ 
   return (
     <AppShell>
       <div className="space-y-6 max-w-3xl">
-        <button
-          onClick={() => router.push('/onboarding')}
-          className="flex items-center gap-2 text-secondary hover:text-foreground text-sm transition-colors"
-        >
-          <ArrowLeft size={16} />
-          Back to Onboarding
-        </button>
+        <Breadcrumb items={[{ label: 'Onboarding', href: '/onboarding' }, { label: 'Checklist' }]} />
 
         {/* Employee Header */}
         <div className="bg-card rounded-xl border border-border p-6">

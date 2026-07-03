@@ -19,6 +19,15 @@ export default function DashboardPage() {
 
 function OrgDashboard() {
   const router = useRouter();
+  const { can } = usePermissions();
+
+  // Only surface quick actions the user can actually open (no dead-end 403s).
+  const quickActions = [
+    { label: 'View Analytics', href: '/analytics', module: 'analytics' },
+    { label: 'Manage Shifts', href: '/shifts', module: 'shifts' },
+    { label: 'Recruitment', href: '/recruitment', module: 'recruitment' },
+    { label: 'Employees', href: '/employees', module: 'employees' },
+  ].filter(a => can(a.module, 'read'));
 
   const { data: overview } = useQuery({
     queryKey: ['dashboard-overview'],
@@ -72,25 +81,22 @@ function OrgDashboard() {
         </div>
 
         {/* Quick Actions */}
-        <div className="bg-card rounded-xl border border-border p-6">
-          <h2 className="text-lg font-semibold text-foreground mb-4">Quick Actions</h2>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {[
-              { label: 'View Analytics', href: '/analytics' },
-              { label: 'Manage Shifts', href: '/shifts' },
-              { label: 'Recruitment', href: '/recruitment' },
-              { label: 'Employees', href: '/employees' },
-            ].map(action => (
-              <button
-                key={action.label}
-                onClick={() => router.push(action.href)}
-                className="px-4 py-3 border border-border rounded-lg text-sm font-medium text-foreground hover:bg-muted transition-colors text-left"
-              >
-                {action.label}
-              </button>
-            ))}
+        {quickActions.length > 0 && (
+          <div className="bg-card rounded-xl border border-border p-6">
+            <h2 className="text-lg font-semibold text-foreground mb-4">Quick Actions</h2>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {quickActions.map(action => (
+                <button
+                  key={action.label}
+                  onClick={() => router.push(action.href)}
+                  className="px-4 py-3 border border-border rounded-lg text-sm font-medium text-foreground hover:bg-muted transition-colors text-left"
+                >
+                  {action.label}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Recent Hires */}
         {overview?.recentHires?.length > 0 && (

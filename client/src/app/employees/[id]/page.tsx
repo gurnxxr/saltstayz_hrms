@@ -9,6 +9,7 @@ import api from '@/lib/api';
 import { formatINR } from '@/lib/utils';
 import { useAuth } from '@/lib/auth';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import Breadcrumb from '@/components/ui/Breadcrumb';
 import {
   ArrowLeft, User, Phone, Mail, Calendar, Briefcase,
   CreditCard, Shield, Hash, Save, Loader2, Pencil,
@@ -106,12 +107,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       <div className="space-y-6 max-w-5xl">
         {/* Header */}
         <div className="flex items-center justify-between">
-          <button
-            onClick={() => router.push('/employees')}
-            className="flex items-center gap-2 text-secondary hover:text-foreground text-sm transition-colors"
-          >
-            <ArrowLeft size={16} /> Back to Employee Details
-          </button>
+          <Breadcrumb items={[{ label: 'Employee Details', href: '/employees' }, { label: `${emp.first_name} ${emp.last_name}` }]} />
           {!editing ? (
             <button
               onClick={startEditing}

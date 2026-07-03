@@ -8,7 +8,8 @@ import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { allowedNextStages } from '@/lib/constants';
-import { ArrowLeft, Plus, User, Eye, Archive, Users, FileText, Download, Loader2, Pencil } from 'lucide-react';
+import Breadcrumb from '@/components/ui/Breadcrumb';
+import { Plus, User, Eye, Archive, Users, FileText, Download, Loader2, Pencil } from 'lucide-react';
 
 const EMPLOYMENT_TYPES = ['Full-time', 'Part-time', 'Contract', 'Internship'];
 const emptyJd = {
@@ -174,12 +175,7 @@ export default function VacancyDetailPage({ params }: { params: Promise<{ id: st
   return (
     <AppShell>
       <div className="space-y-6">
-        <button
-          onClick={() => router.push('/recruitment')}
-          className="flex items-center gap-2 text-secondary hover:text-foreground text-sm transition-colors"
-        >
-          <ArrowLeft size={16} /> Back to Recruitment
-        </button>
+        <Breadcrumb items={[{ label: 'Recruitment', href: '/recruitment' }, { label: vacancy.job_title }]} />
 
         {/* Vacancy Header */}
         <div className="bg-card rounded-xl border border-border p-6">

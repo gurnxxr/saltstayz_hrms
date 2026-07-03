@@ -8,6 +8,7 @@ import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import { formatDate, formatINR } from '@/lib/utils';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import Breadcrumb from '@/components/ui/Breadcrumb';
 import {
   ArrowLeft, CheckCircle2, Circle, Loader2, UserMinus, ShieldOff,
   IndianRupee, Calendar, Briefcase, Building2,
@@ -68,9 +69,7 @@ export default function OffboardingDetailPage({ params }: { params: Promise<{ id
   return (
     <AppShell>
       <div className="space-y-6">
-        <button onClick={() => router.push('/offboarding')} className="flex items-center gap-2 text-secondary hover:text-foreground text-sm transition-colors">
-          <ArrowLeft size={16} /> Back to Offboarding
-        </button>
+        <Breadcrumb items={[{ label: 'Offboarding', href: '/offboarding' }, { label: 'Exit Details' }]} />
 
         {/* Header */}
         <div className="bg-card rounded-xl border border-border p-5">

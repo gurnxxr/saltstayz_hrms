@@ -193,7 +193,7 @@ export default function EmployeeDashboard() {
               className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none" />
 
             <div className="flex justify-end gap-2 mt-5">
-              <button onClick={() => setShiftModal(false)} className="px-4 py-2 border border-border rounded-lg text-sm">Cancel</button>
+              <button onClick={() => setShiftModal(false)} className="px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted transition-colors">Cancel</button>
               <button
                 onClick={() => requestShiftMutation.mutate()}
                 disabled={!requestedShift || requestShiftMutation.isPending}
