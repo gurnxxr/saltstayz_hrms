@@ -16,6 +16,7 @@ import biometricRoutes from './biometric.routes';
 import notificationRoutes from './notification.routes';
 import manpowerRoutes from './manpower.routes';
 import propertyAnalyticsRoutes from './propertyAnalytics.routes';
+import payScheduleRoutes from './paySchedule.routes';
 
 const router = Router();
 
@@ -36,5 +37,6 @@ router.use('/biometric', biometricRoutes);
 router.use('/notifications', notificationRoutes);
 router.use('/manpower', manpowerRoutes);
 router.use('/property-analytics', propertyAnalyticsRoutes);
+router.use('/pay-schedule', payScheduleRoutes);
 
 export default router;

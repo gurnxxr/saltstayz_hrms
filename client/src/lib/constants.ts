@@ -78,6 +78,17 @@ export const NAVIGATION: NavItem[] = [
     module: 'propertyanalytics',
   },
   {
+    label: 'Setup & Configuration',
+    href: '/setup/pay-schedule',
+    icon: 'SlidersHorizontal',
+    roles: ['admin', 'finance'],
+    children: [
+      { label: 'Pay Schedule', href: '/setup/pay-schedule', icon: 'CalendarClock', roles: ['admin', 'finance'] },
+      { label: 'Statutory Components', href: '/setup/statutory-components', icon: 'Landmark', roles: ['admin', 'finance'] },
+      { label: 'Salary Components', href: '/setup/salary-components', icon: 'Coins', roles: ['admin', 'finance'] },
+    ],
+  },
+  {
     label: 'Admin',
     href: '/admin',
     icon: 'Settings',
