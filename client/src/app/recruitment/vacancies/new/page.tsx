@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import LoadError from '@/components/ui/LoadError';
+import { useUnsavedChangesWarning } from '@/hooks/useUnsavedChangesWarning';
 import { ArrowLeft, IndianRupee, AlertCircle } from 'lucide-react';
 
 export default function NewVacancyPage() {
@@ -53,6 +54,11 @@ export default function NewVacancyPage() {
 
   const selectedTitle = jobTitles.find((j: any) => String(j.id) === form.job_title_id);
   const hasUnconfigured = jobTitles.some((j: any) => !j.configured);
+
+  // Warn before leaving with an unsaved, non-empty vacancy/JD draft (backfill prefill doesn't count).
+  const dirty = !!form.job_title_id || !!form.department_id || !!form.property_id ||
+    !!form.reporting_manager_id || form.description.trim() !== '' || form.positions !== '1';
+  useUnsavedChangesWarning(dirty);
 
   const mutation = useMutation({
     mutationFn: (data: typeof form) =>

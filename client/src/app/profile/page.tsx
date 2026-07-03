@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
+import { useUnsavedChangesWarning } from '@/hooks/useUnsavedChangesWarning';
 import {
   User, Phone, Mail, Calendar, Briefcase, Shield,
   Save, Loader2, Hash, CreditCard, KeyRound,
@@ -62,6 +63,19 @@ export default function ProfilePage() {
     },
     onError: (err: any) => toast.error(err.response?.data?.error || 'Failed to update'),
   });
+
+  // Warn before leaving with unsaved profile edits.
+  const dirty = editing && !!profile && (
+    form.phone !== (profile.phone || '') ||
+    form.father_name !== (profile.father_name || '') ||
+    form.aadhaar_number !== (profile.aadhaar_number || '')
+  );
+  useUnsavedChangesWarning(dirty);
+
+  // Inline password validation (no submit round-trip needed).
+  const pwTooShort = pw.newPassword.length > 0 && pw.newPassword.length < 4;
+  const pwMismatch = pw.confirm.length > 0 && pw.newPassword !== pw.confirm;
+  const pwValid = pw.currentPassword.length > 0 && pw.newPassword.length >= 4 && pw.newPassword === pw.confirm;
 
   if (isLoading) {
     return (
@@ -196,6 +210,7 @@ export default function ProfilePage() {
                 onChange={(e) => setPw(p => ({ ...p, newPassword: e.target.value }))}
                 className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
               />
+              {pwTooShort && <p className="text-xs text-red-600 mt-1">Must be at least 4 characters.</p>}
             </div>
             <div>
               <label className="block text-sm font-medium text-foreground mb-1.5">Confirm New Password</label>
@@ -206,12 +221,13 @@ export default function ProfilePage() {
                 onChange={(e) => setPw(p => ({ ...p, confirm: e.target.value }))}
                 className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
               />
+              {pwMismatch && <p className="text-xs text-red-600 mt-1">Passwords don&apos;t match.</p>}
             </div>
             <div className="md:col-span-3">
               <button
                 type="submit"
-                disabled={passwordMutation.isPending}
-                className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                disabled={passwordMutation.isPending || !pwValid}
+                className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 {passwordMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <KeyRound size={14} />}
                 Update Password

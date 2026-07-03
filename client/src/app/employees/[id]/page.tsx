@@ -11,6 +11,7 @@ import { useAuth } from '@/lib/auth';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import Breadcrumb from '@/components/ui/Breadcrumb';
 import LoadError from '@/components/ui/LoadError';
+import { useUnsavedChangesWarning } from '@/hooks/useUnsavedChangesWarning';
 import {
   ArrowLeft, User, Phone, Mail, Calendar, Briefcase,
   CreditCard, Shield, Hash, Save, Loader2, Pencil,
@@ -62,6 +63,23 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
     },
     onError: (err: any) => { toast.error(err.response?.data?.error || 'Status update failed'); setConfirmDeactivate(false); },
   });
+
+  // Warn before leaving with unsaved employee edits.
+  const dirty = editing && !!emp && (
+    form.first_name !== emp.first_name ||
+    form.last_name !== emp.last_name ||
+    form.date_of_birth !== (emp.date_of_birth || '') ||
+    form.father_name !== (emp.father_name || '') ||
+    String(form.reporting_manager_id) !== String(emp.reporting_manager_id || '') ||
+    form.email !== (emp.email || '') ||
+    form.date_of_joining !== (emp.date_of_joining || '') ||
+    form.phone !== (emp.phone || '') ||
+    form.aadhaar_number !== (emp.aadhaar_number || '') ||
+    form.dept_name !== (emp.dept_name || '') ||
+    form.branch_name !== (emp.branch_name || '') ||
+    String(form.job_title_id) !== String(emp.job_title_id || '')
+  );
+  useUnsavedChangesWarning(dirty);
 
   function startEditing() {
     if (!emp) return;

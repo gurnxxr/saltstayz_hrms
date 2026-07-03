@@ -40,7 +40,10 @@ export default function EmployeeDetailsPage() {
       setBulkResult(data);
       queryClient.invalidateQueries({ queryKey: ['employees-list'] });
       queryClient.invalidateQueries({ queryKey: ['employee-upload-logs'] });
-      toast.success(`${data.created} added, ${data.updated} updated`);
+      toast.success(
+        `${data.created} added, ${data.updated} updated${data.skipped ? `, ${data.skipped} skipped` : ''}`,
+        { action: { label: 'View details', onClick: () => setShowBulk(true) } },
+      );
     },
     onError: (e: any) => toast.error(e.response?.data?.error || 'Bulk upload failed'),
   });
@@ -153,9 +156,9 @@ export default function EmployeeDetailsPage() {
                     <th className="text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Emp Name</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Dept Name</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Designation</th>
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Branch Name</th>
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Reporting Manager</th>
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Phone Number</th>
+                    <th className="hidden sm:table-cell text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Branch Name</th>
+                    <th className="hidden sm:table-cell text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Reporting Manager</th>
+                    <th className="hidden sm:table-cell text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Phone Number</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Email Address</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Status</th>
                     <th className="text-right px-4 py-3 text-xs font-semibold text-secondary uppercase">Actions</th>
@@ -177,21 +180,24 @@ export default function EmployeeDetailsPage() {
                         </td>
                         <td className="px-4 py-3 text-sm text-foreground">{emp.dept_name || '—'}</td>
                         <td className="px-4 py-3 text-sm text-foreground">{emp.designation_name || '—'}</td>
-                        <td className="px-4 py-3 text-sm text-foreground">{emp.branch_name || '—'}</td>
-                        <td className="px-4 py-3 text-sm text-foreground">{manager || '—'}</td>
-                        <td className="px-4 py-3 text-sm text-foreground">{emp.phone || '—'}</td>
+                        <td className="hidden sm:table-cell px-4 py-3 text-sm text-foreground">{emp.branch_name || '—'}</td>
+                        <td className="hidden sm:table-cell px-4 py-3 text-sm text-foreground">{manager || '—'}</td>
+                        <td className="hidden sm:table-cell px-4 py-3 text-sm text-foreground">{emp.phone || '—'}</td>
                         <td className="px-4 py-3 text-sm text-foreground">{emp.email || '—'}</td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
                             {canEditStatus && (
                               <button
+                                role="switch"
+                                aria-checked={emp.is_active}
+                                aria-label={`Toggle status — currently ${emp.is_active ? 'Active' : 'Inactive'}`}
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   if (emp.is_active) setDeactivateTarget(emp);
                                   else toggleStatusMutation.mutate({ empId: emp.id, active: true });
                                 }}
                                 disabled={toggleStatusMutation.isPending}
-                                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${emp.is_active ? 'bg-green-500' : 'bg-gray-400'} ${toggleStatusMutation.isPending ? 'opacity-50' : 'cursor-pointer'}`}
+                                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 ${emp.is_active ? 'bg-green-500' : 'bg-gray-400'} ${toggleStatusMutation.isPending ? 'opacity-50' : 'cursor-pointer'}`}
                                 title={`Click to mark ${emp.is_active ? 'Inactive' : 'Active'}`}
                               >
                                 <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${emp.is_active ? 'translate-x-[18px]' : 'translate-x-[3px]'}`} />
