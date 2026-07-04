@@ -81,7 +81,7 @@ export default function PaySchedulePage() {
   return (
     <AppShell>
       <div className="space-y-6 max-w-3xl">
-        <Breadcrumb items={[{ label: 'Setup & Configuration' }, { label: 'Pay Schedule' }]} />
+        <Breadcrumb items={[{ label: 'Payroll' }, { label: 'Pay Schedule' }]} />
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center"><CalendarClock className="text-primary" size={20} /></div>
           <div>

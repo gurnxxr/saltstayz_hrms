@@ -103,7 +103,7 @@ export default function SalaryComponentsPage() {
   return (
     <AppShell>
       <div className="space-y-6">
-        <Breadcrumb items={[{ label: 'Setup & Configuration' }, { label: 'Salary Components' }]} />
+        <Breadcrumb items={[{ label: 'Payroll' }, { label: 'Salary Components' }]} />
 
         {/* Header */}
         <div className="flex items-start justify-between gap-4">

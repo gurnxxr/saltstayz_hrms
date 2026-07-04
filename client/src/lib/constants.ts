@@ -72,7 +72,12 @@ export const NAVIGATION: NavItem[] = [
     href: '/payroll',
     icon: 'Wallet',
     roles: ['admin', 'chro', 'hr', 'finance', 'employee'],
-    module: 'payroll',
+    children: [
+      { label: 'Salary Slips', href: '/payroll', icon: 'FileText', roles: ['admin', 'chro', 'hr', 'finance', 'employee'], module: 'payroll' },
+      { label: 'Pay Schedule', href: '/setup/pay-schedule', icon: 'CalendarClock', roles: ['admin', 'finance'] },
+      { label: 'Statutory Components', href: '/setup/statutory-components', icon: 'Landmark', roles: ['admin', 'finance'] },
+      { label: 'Salary Components', href: '/setup/salary-components', icon: 'Coins', roles: ['admin', 'finance'] },
+    ],
   },
   {
     label: 'Manpower & Budget',
@@ -90,17 +95,6 @@ export const NAVIGATION: NavItem[] = [
       { label: 'Shift Type', href: '/shift-setup/type', icon: 'Tag', roles: ['admin', 'chro', 'hr'] },
       { label: 'Shift Location', href: '/shift-setup/location', icon: 'MapPin', roles: ['admin', 'chro', 'hr'] },
       { label: 'Shift Schedule', href: '/shift-setup/schedule', icon: 'CalendarClock', roles: ['admin', 'chro', 'hr'] },
-    ],
-  },
-  {
-    label: 'Setup & Configuration',
-    href: '/setup/pay-schedule',
-    icon: 'SlidersHorizontal',
-    roles: ['admin', 'finance'],
-    children: [
-      { label: 'Pay Schedule', href: '/setup/pay-schedule', icon: 'CalendarClock', roles: ['admin', 'finance'] },
-      { label: 'Statutory Components', href: '/setup/statutory-components', icon: 'Landmark', roles: ['admin', 'finance'] },
-      { label: 'Salary Components', href: '/setup/salary-components', icon: 'Coins', roles: ['admin', 'finance'] },
     ],
   },
   {

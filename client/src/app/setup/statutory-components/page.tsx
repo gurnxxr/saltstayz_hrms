@@ -51,7 +51,7 @@ export default function StatutoryComponentsPage() {
   return (
     <AppShell>
       <div className="space-y-6">
-        <Breadcrumb items={[{ label: 'Setup & Configuration' }, { label: 'Statutory Components' }]} />
+        <Breadcrumb items={[{ label: 'Payroll' }, { label: 'Statutory Components' }]} />
 
         {/* Header */}
         <div className="flex items-start justify-between">
