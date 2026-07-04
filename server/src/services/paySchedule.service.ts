@@ -14,6 +14,8 @@ export interface PaySchedule {
   fixed_working_days: number;
   pay_date_type: string;
   pay_date_day: number;
+  unmarked_day_policy: string; // present | absent — what an unmarked working day means
+  holidays_paid: boolean;      // regional holidays count as paid working days
 }
 
 const DEFAULTS: PaySchedule = {
@@ -22,6 +24,8 @@ const DEFAULTS: PaySchedule = {
   fixed_working_days: 30,
   pay_date_type: 'last_day',
   pay_date_day: 1,
+  unmarked_day_policy: 'present',
+  holidays_paid: true,
 };
 
 function parseRow(row: any) {
@@ -40,6 +44,8 @@ function parseRow(row: any) {
     fixed_working_days: Number(row.fixed_working_days),
     pay_date_type: row.pay_date_type,
     pay_date_day: Number(row.pay_date_day),
+    unmarked_day_policy: row.unmarked_day_policy === 'absent' ? 'absent' : 'present',
+    holidays_paid: row.holidays_paid === undefined || row.holidays_paid === null ? true : !!row.holidays_paid,
     updated_by: row.updated_by,
     updated_at: row.updated_at,
   };
@@ -82,12 +88,18 @@ export async function updatePaySchedule(input: any, userId?: number) {
     }
   }
 
+  // ── Attendance policies (Phase 3) ──
+  const unmarkedPolicy = input.unmarked_day_policy === 'absent' ? 'absent' : 'present';
+  const holidaysPaid = input.holidays_paid === undefined ? true : !!input.holidays_paid;
+
   const patch = {
     work_week: JSON.stringify(days.sort((a, b) => a - b)),
     salary_calculation_method: method,
     fixed_working_days: fixedDays,
     pay_date_type: payType,
     pay_date_day: payDay,
+    unmarked_day_policy: unmarkedPolicy,
+    holidays_paid: holidaysPaid ? 1 : 0,
     updated_by: userId || null,
     updated_at: db.fn.now(),
   };

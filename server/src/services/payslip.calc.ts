@@ -35,7 +35,7 @@ export interface StatutoryRates {
 export type LineCalcType = 'flat' | 'pct_of_base' | 'pct_of_basic' | 'remainder';
 
 export interface StructureLineInput {
-  component_id: number;
+  component_id: number | null; // null for injected manual adjustment lines
   name: string; // name_in_payslip
   category: 'earning' | 'deduction' | 'benefit' | 'reimbursement';
   calculation_type: LineCalcType;
@@ -43,6 +43,22 @@ export interface StructureLineInput {
   earning_type?: 'fixed' | 'variable';
   consider_epf?: 'no' | 'always' | 'if_below_15000';
   consider_esi?: boolean;
+  pro_rata?: boolean; // flat earning lines only: scale by payment/working days
+}
+
+/**
+ * Attendance context for a pay period (from the payable-days engine).
+ * Monthly-rated: pay is prorated by payment_days / working_days.
+ * Hourly-rated: pass `hours` — pay = base (hourly rate) × hours.
+ */
+export interface AttendanceContext {
+  period_days: number;
+  working_days: number;
+  lop_days: number;
+  payment_days: number;
+  hours?: number | null; // hourly-rated only: attendance working hours
+  counts?: Record<string, number>; // day-status counts for the review screen
+  lop_overridden?: boolean;        // HR replaced the computed LOP in review
 }
 
 export interface PayslipLine {
@@ -74,23 +90,40 @@ export interface PayslipBreakdown {
   employer_lwf: number;
   employer_costs_total: number; // Σ employer_costs lines
   ctc: number;                  // gross + employer statutory + employer costs + reimbursements
+  // Attendance context (present when the slip is attendance-driven)
+  days?: AttendanceContext;
 }
 
 /**
- * Computes a monthly payslip from resolved structure lines at the assigned base.
+ * Computes a payslip from resolved structure lines at the assigned base.
+ *
+ * With an AttendanceContext the pay becomes attendance-driven:
+ *  - monthly: the base is prorated by payment_days / working_days, so every
+ *    percentage line (and the remainder) shrinks with Loss of Pay; flat earning
+ *    lines scale too when their component is pro-rata.
+ *  - hourly (`hours` present): pay = base (hourly rate) × attendance hours.
  */
 export function computeFromStructure(
   lines: StructureLineInput[],
   base: number,
   statutory: StatutoryRates,
+  attendance?: AttendanceContext | null,
 ): PayslipBreakdown {
-  const b = round(base || 0);
+  const isHourly = attendance?.hours !== undefined && attendance?.hours !== null;
+  const factor = !attendance || isHourly
+    ? 1
+    : (attendance.working_days > 0 ? Math.max(0, attendance.payment_days) / attendance.working_days : 0);
+  const b = isHourly
+    ? round((base || 0) * (attendance!.hours || 0))
+    : round((base || 0) * factor);
 
   // ── Pass 1: flat + pct_of_base amounts; find Basic ──
   const amounts = new Map<StructureLineInput, number>();
   for (const line of lines) {
-    if (line.calculation_type === 'flat') amounts.set(line, round(line.value));
-    else if (line.calculation_type === 'pct_of_base') amounts.set(line, round((line.value / 100) * b));
+    if (line.calculation_type === 'flat') {
+      const scale = line.category === 'earning' && line.pro_rata && !isHourly ? factor : 1;
+      amounts.set(line, round(line.value * scale));
+    } else if (line.calculation_type === 'pct_of_base') amounts.set(line, round((line.value / 100) * b));
   }
   const basicLine = lines.find((l) => l.category === 'earning' && l.calculation_type === 'pct_of_base' && /basic/i.test(l.name))
     ?? lines.find((l) => l.category === 'earning' && l.calculation_type === 'pct_of_base');
@@ -163,6 +196,7 @@ export function computeFromStructure(
     basic, fixed_salary, variable_pay, gross_earnings,
     employee_pf, esi, lwf, total_deduction, net_pay,
     employer_pf, employer_esi, employer_lwf, employer_costs_total, ctc,
+    ...(attendance ? { days: attendance } : {}),
   };
 }
 

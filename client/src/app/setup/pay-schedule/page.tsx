@@ -35,6 +35,8 @@ export default function PaySchedulePage() {
   const [method, setMethod] = useState<'actual_days' | 'fixed_days'>('actual_days');
   const [payType, setPayType] = useState<'last_day' | 'fixed_day'>('last_day');
   const [payDay, setPayDay] = useState(1);
+  const [unmarkedPolicy, setUnmarkedPolicy] = useState<'present' | 'absent'>('present');
+  const [holidaysPaid, setHolidaysPaid] = useState(true);
   const [dirty, setDirty] = useState(false);
 
   // Hydrate the form once settings load.
@@ -44,6 +46,8 @@ export default function PaySchedulePage() {
     setMethod(data.salary_calculation_method === 'fixed_days' ? 'fixed_days' : 'actual_days');
     setPayType(data.pay_date_type === 'fixed_day' ? 'fixed_day' : 'last_day');
     setPayDay(Number(data.pay_date_day) || 1);
+    setUnmarkedPolicy(data.unmarked_day_policy === 'absent' ? 'absent' : 'present');
+    setHolidaysPaid(data.holidays_paid !== false);
     setDirty(false);
   }, [data]);
 
@@ -61,6 +65,8 @@ export default function PaySchedulePage() {
         salary_calculation_method: method,
         pay_date_type: payType,
         pay_date_day: payDay,
+        unmarked_day_policy: unmarkedPolicy,
+        holidays_paid: holidaysPaid,
       }),
     onSuccess: () => {
       toast.success('Pay schedule saved');
@@ -177,6 +183,37 @@ export default function PaySchedulePage() {
               <p className="text-xs text-secondary">
                 <span className="font-semibold text-foreground">Note:</span> If the selected pay date falls on a non-working day or holiday, payment will be processed on the previous working day.
               </p>
+            </section>
+
+            {/* ── Attendance Policies (payable-days engine) ── */}
+            <section className="space-y-3">
+              <h2 className="text-base font-semibold text-foreground">Attendance Policies <Req /></h2>
+              <p className="text-sm text-secondary">How the payable-days engine treats edge cases when computing Loss of Pay.</p>
+              <div className="space-y-4">
+                <div>
+                  <p className="text-sm font-medium text-foreground mb-1.5">A working day with no attendance record counts as</p>
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2.5 cursor-pointer w-fit">
+                      <input type="radio" name="unmarked-policy" className="accent-primary w-4 h-4"
+                        checked={unmarkedPolicy === 'present'} onChange={() => { setUnmarkedPolicy('present'); setDirty(true); }} />
+                      <span className="text-sm text-foreground">Present — no pay is deducted (typical for salaried staff)</span>
+                    </label>
+                    <label className="flex items-center gap-2.5 cursor-pointer w-fit">
+                      <input type="radio" name="unmarked-policy" className="accent-primary w-4 h-4"
+                        checked={unmarkedPolicy === 'absent'} onChange={() => { setUnmarkedPolicy('absent'); setDirty(true); }} />
+                      <span className="text-sm text-foreground">Absent — one day of pay is deducted (strict, biometric-driven)</span>
+                    </label>
+                  </div>
+                </div>
+                <label className="flex items-start gap-2.5 cursor-pointer w-fit">
+                  <input type="checkbox" className="accent-primary w-4 h-4 mt-0.5"
+                    checked={holidaysPaid} onChange={(e) => { setHolidaysPaid(e.target.checked); setDirty(true); }} />
+                  <span>
+                    <span className="text-sm font-medium text-foreground">Holidays are paid working days</span>
+                    <span className="block text-xs text-secondary mt-0.5">Regional holidays count as automatically-paid days (standard hospitality practice). Unchecked, they are excluded like weekly offs.</span>
+                  </span>
+                </label>
+              </div>
             </section>
 
             {/* ── Footer ── */}

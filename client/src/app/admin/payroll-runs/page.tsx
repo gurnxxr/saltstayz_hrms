@@ -8,7 +8,7 @@ import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import {
-  Play, Lock, LockOpen, Loader2, CheckCircle2, AlertTriangle,
+  Play, Lock, LockOpen, Loader2, CheckCircle2, AlertTriangle, Download, Pencil, X, ClipboardList,
 } from 'lucide-react';
 import Breadcrumb from '@/components/ui/Breadcrumb';
 import { formatINR } from '@/lib/utils';
@@ -35,10 +35,23 @@ export default function PayrollRunsPage() {
   const isFutureMonth = (m: number, y: number) =>
     y > now.getFullYear() || (y === now.getFullYear() && m > now.getMonth() + 1);
 
+  // Review-step adjust dialog
+  const [adjusting, setAdjusting] = useState<any | null>(null);
+  const [adjForm, setAdjForm] = useState({ lop_override: '', adjustment_amount: '', adjustment_label: '', note: '' });
+
   const { data: runs = [], isLoading } = useQuery({
     queryKey: ['payroll-runs'],
     queryFn: () => api.get('/payroll/runs').then(r => r.data),
     enabled: canManage,
+  });
+
+  const currentRun = runs.find((r: any) => r.month === month && r.year === year);
+
+  // Review grid: per-employee days / LOP / net for the selected period.
+  const { data: details } = useQuery({
+    queryKey: ['run-details', month, year],
+    queryFn: () => api.get(`/payroll/runs/details?month=${month}&year=${year}`).then(r => r.data),
+    enabled: canManage && !!currentRun,
   });
 
   const runMutation = useMutation({
@@ -46,6 +59,7 @@ export default function PayrollRunsPage() {
     onSuccess: (data) => {
       setLastRun(data);
       queryClient.invalidateQueries({ queryKey: ['payroll-runs'] });
+      queryClient.invalidateQueries({ queryKey: ['run-details'] });
       toast.success(`Payroll run: ${data.generated} payslip(s) generated`);
     },
     onError: (err: any) => toast.error(err.response?.data?.error || 'Payroll run failed'),
@@ -56,10 +70,50 @@ export default function PayrollRunsPage() {
       api.post(`/payroll/runs/${vars.lock ? 'lock' : 'unlock'}`, { month: vars.month, year: vars.year }).then(r => r.data),
     onSuccess: (_d, vars) => {
       queryClient.invalidateQueries({ queryKey: ['payroll-runs'] });
+      queryClient.invalidateQueries({ queryKey: ['run-details'] });
       toast.success(vars.lock ? 'Payroll locked' : 'Payroll unlocked');
     },
     onError: (err: any) => toast.error(err.response?.data?.error || 'Action failed'),
   });
+
+  const adjustMutation = useMutation({
+    mutationFn: (vars: { employeeId: number }) => api.put(`/payroll/runs/adjustments/${vars.employeeId}`, {
+      month, year,
+      lop_override: adjForm.lop_override === '' ? null : Number(adjForm.lop_override),
+      adjustment_amount: Number(adjForm.adjustment_amount) || 0,
+      adjustment_label: adjForm.adjustment_label,
+      note: adjForm.note,
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['run-details'] });
+      queryClient.invalidateQueries({ queryKey: ['payroll-runs'] });
+      toast.success('Correction saved — payslip regenerated');
+      setAdjusting(null);
+    },
+    onError: (err: any) => toast.error(err.response?.data?.error || 'Failed to save correction'),
+  });
+
+  const openAdjust = (slip: any) => {
+    setAdjForm({
+      lop_override: slip.adjustment?.lop_override != null ? String(slip.adjustment.lop_override) : '',
+      adjustment_amount: slip.adjustment?.adjustment_amount ? String(slip.adjustment.adjustment_amount) : '',
+      adjustment_label: slip.adjustment?.adjustment_label || '',
+      note: slip.adjustment?.note || '',
+    });
+    setAdjusting(slip);
+  };
+
+  async function downloadRegister() {
+    try {
+      const res = await api.get(`/payroll/runs/export?month=${month}&year=${year}`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'text/csv' }));
+      const a = document.createElement('a');
+      a.href = url; a.download = `Salary_Register_${year}_${String(month).padStart(2, '0')}.csv`; a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error('Failed to export the salary register');
+    }
+  }
 
   if (!canManage) {
     return (
@@ -136,6 +190,89 @@ export default function PayrollRunsPage() {
             </div>
           )}
         </div>
+
+        {/* Review grid — step 2 of the run journey */}
+        {currentRun && details && (
+          <div className="bg-card rounded-xl border border-border overflow-hidden">
+            <div className="px-6 py-4 border-b border-border flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                  <ClipboardList size={15} className="text-primary" /> Review — {MONTHS[month - 1]} {year}
+                </h2>
+                <p className="text-xs text-secondary mt-0.5">
+                  {details.slips.length} payslip(s) · {currentRun.status === 'locked' ? 'locked (read-only)' : 'draft — correct LOP or add adjustments, then lock'}
+                </p>
+              </div>
+              <button onClick={downloadRegister}
+                className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted transition-colors">
+                <Download size={14} /> Salary Register (CSV)
+              </button>
+            </div>
+            <div className="overflow-x-auto max-h-[480px] overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-card">
+                  <tr className="border-b border-border text-left text-secondary">
+                    <th className="px-4 py-2.5 font-medium">Employee</th>
+                    <th className="px-3 py-2.5 font-medium text-right">Working</th>
+                    <th className="px-3 py-2.5 font-medium text-right">LOP</th>
+                    <th className="px-3 py-2.5 font-medium text-right">Paid Days</th>
+                    <th className="px-3 py-2.5 font-medium text-right">Gross</th>
+                    <th className="px-3 py-2.5 font-medium text-right">Net</th>
+                    <th className="px-4 py-2.5 font-medium">Flags</th>
+                    <th className="px-4 py-2.5 font-medium text-right"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {details.slips.map((s: any) => {
+                    const unmarked = s.days?.counts?.unmarked ?? 0;
+                    return (
+                      <tr key={s.employee_id} className="hover:bg-muted/20">
+                        <td className="px-4 py-2">
+                          <p className="font-medium text-foreground">{s.name}</p>
+                          <p className="text-xs text-secondary">{s.employee_code} · {s.designation || '—'}</p>
+                        </td>
+                        <td className="px-3 py-2 text-right text-secondary">{s.days?.working_days ?? '—'}</td>
+                        <td className={`px-3 py-2 text-right font-medium ${(s.days?.lop_days ?? 0) > 0 ? 'text-red-600' : 'text-secondary'}`}>
+                          {s.days?.lop_days ?? '—'}{s.days?.lop_overridden ? '*' : ''}
+                        </td>
+                        <td className="px-3 py-2 text-right text-foreground">{s.days?.hours != null ? `${s.days.hours}h` : (s.days?.payment_days ?? '—')}</td>
+                        <td className="px-3 py-2 text-right text-foreground">{formatINR(s.gross_earnings)}</td>
+                        <td className="px-3 py-2 text-right font-medium text-green-700">{formatINR(s.net_pay)}</td>
+                        <td className="px-4 py-2">
+                          <div className="flex flex-wrap gap-1">
+                            {unmarked > 0 && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700" title="Working days without an attendance record">
+                                {unmarked} unmarked
+                              </span>
+                            )}
+                            {s.adjustment && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-100 text-blue-700" title={s.adjustment.note || ''}>
+                                adjusted
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-2 text-right">
+                          {currentRun.status !== 'locked' && (
+                            <button onClick={() => openAdjust(s)}
+                              className="p-1.5 rounded-lg text-secondary hover:text-foreground hover:bg-muted transition-colors" title="Correct LOP / add adjustment">
+                              <Pencil size={14} />
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {details.skipped?.length > 0 && (
+              <div className="px-6 py-3 border-t border-border text-xs text-amber-700">
+                Not generated ({details.skipped.length}): {details.skipped.slice(0, 8).map((s: any) => s.employee_code).join(', ')}{details.skipped.length > 8 ? '…' : ''} — assign a salary structure and re-run.
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Runs table */}
         <div className="bg-card rounded-xl border border-border overflow-hidden">
@@ -216,6 +353,72 @@ export default function PayrollRunsPage() {
           )}
         </div>
       </div>
+
+      {/* Adjust dialog — LOP override + manual line, with a mandatory note */}
+      {adjusting && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setAdjusting(null)} />
+          <div className="relative bg-card rounded-xl border border-border shadow-xl w-full max-w-md">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+              <div>
+                <h3 className="text-base font-semibold text-foreground">Correct — {adjusting.name}</h3>
+                <p className="text-xs text-secondary mt-0.5">
+                  Computed: {adjusting.days?.working_days ?? '—'} working · {adjusting.days?.lop_days ?? '—'} LOP · {adjusting.days?.payment_days ?? '—'} paid
+                  {adjusting.days?.counts ? ` (${adjusting.days.counts.absent} absent, ${adjusting.days.counts.half_day} half-day, ${adjusting.days.counts.unpaid_leave} unpaid leave, ${adjusting.days.counts.unmarked} unmarked)` : ''}
+                </p>
+              </div>
+              <button onClick={() => setAdjusting(null)} className="p-1 rounded-lg text-secondary hover:text-foreground hover:bg-muted transition-colors">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-1">LOP override (days)</label>
+                <input type="number" step="0.5" min={0} value={adjForm.lop_override}
+                  onChange={(e) => setAdjForm(p => ({ ...p, lop_override: e.target.value }))}
+                  placeholder={`computed: ${adjusting.days?.lop_days ?? 0}`}
+                  className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+                <p className="text-xs text-secondary mt-1">Leave blank to keep the computed LOP.</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-1">Adjustment ₹ (±)</label>
+                  <input type="number" step="any" value={adjForm.adjustment_amount}
+                    onChange={(e) => setAdjForm(p => ({ ...p, adjustment_amount: e.target.value }))}
+                    placeholder="0"
+                    className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-1">Label</label>
+                  <input value={adjForm.adjustment_label}
+                    onChange={(e) => setAdjForm(p => ({ ...p, adjustment_label: e.target.value }))}
+                    placeholder="e.g. Arrears"
+                    className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-1">Reason<span className="text-red-600"> *</span></label>
+                <textarea rows={2} value={adjForm.note}
+                  onChange={(e) => setAdjForm(p => ({ ...p, note: e.target.value }))}
+                  placeholder="Why this correction is needed (kept on record)"
+                  className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none" />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 px-5 py-4 border-t border-border">
+              <button onClick={() => setAdjusting(null)} className="px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted transition-colors">
+                Cancel
+              </button>
+              <button
+                onClick={() => adjustMutation.mutate({ employeeId: adjusting.employee_id })}
+                disabled={adjustMutation.isPending || !adjForm.note.trim()}
+                className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
+              >
+                {adjustMutation.isPending && <Loader2 size={14} className="animate-spin" />} Save & regenerate
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </AppShell>
   );
 }

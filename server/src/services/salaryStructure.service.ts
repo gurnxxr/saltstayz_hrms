@@ -2,6 +2,7 @@ import db from '../config/database';
 import { NotFoundError, ValidationError } from '../utils/errors';
 import {
   computeFromStructure, type StructureLineInput, type PayslipBreakdown, type LineCalcType,
+  type AttendanceContext,
 } from './payslip.calc';
 import { getStatutoryRates } from './statutory.service';
 
@@ -28,6 +29,7 @@ function toLineInput(row: any): StructureLineInput {
     earning_type: cfg.earningType === 'variable' ? 'variable' : 'fixed',
     consider_epf: ['always', 'if_below_15000'].includes(cfg.considerEpf) ? cfg.considerEpf : 'no',
     consider_esi: !!cfg.considerEsi,
+    pro_rata: cfg.proRata !== false,
   };
 }
 
@@ -43,10 +45,15 @@ export async function resolveStructureLines(structureId: number): Promise<Struct
 }
 
 /** Computes the breakdown for a saved structure at a given base. */
-export async function computeForStructure(structure: any, base: number): Promise<PayslipBreakdown> {
+export async function computeForStructure(
+  structure: any,
+  base: number,
+  attendance?: AttendanceContext | null,
+  extraLines?: StructureLineInput[],
+): Promise<PayslipBreakdown> {
   const lines = await resolveStructureLines(structure.id);
   const rates = await getStatutoryRates(structure.city);
-  return computeFromStructure(lines, base, rates);
+  return computeFromStructure([...lines, ...(extraLines ?? [])], base, rates, attendance);
 }
 
 export async function getStructureRow(id: number) {

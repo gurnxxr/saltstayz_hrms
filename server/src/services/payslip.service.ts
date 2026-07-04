@@ -1,10 +1,14 @@
 import db from '../config/database';
 import { AppError, NotFoundError, ValidationError } from '../utils/errors';
-import { payDateFor, monthName, type PayslipBreakdown } from './payslip.calc';
+import {
+  payDateFor, monthName,
+  type PayslipBreakdown, type AttendanceContext, type StructureLineInput,
+} from './payslip.calc';
 import {
   getAssignment, getStructureByJobTitle, getStructureRow, computeForStructure,
 } from './salaryStructure.service';
 import { getPaySchedule } from './paySchedule.service';
+import { computePayableDays, getMonthlyHours } from './payableDays.service';
 import { notifyEmployee } from './notification.service';
 
 function num(v: any): number {
@@ -59,7 +63,21 @@ export interface ComputedPayslip {
  * and/or designation structure. Returns null if neither is configured. Shared by
  * payslip generation and the offboarding Full & Final settlement.
  */
-export async function getMonthlyBreakdown(employeeId: number): Promise<PayslipBreakdown | null> {
+/** HR review-step corrections for one employee in one run. */
+export async function getAdjustment(employeeId: number, month: number, year: number) {
+  return db('payroll_adjustments').where({ employee_id: employeeId, month, year }).first();
+}
+
+/**
+ * Resolves an employee's payslip breakdown. With a month/year the slip is
+ * ATTENDANCE-DRIVEN: the payable-days engine turns attendance + approved
+ * leaves + regional holidays into LOP, and pay is prorated (monthly) or
+ * computed from hours (hourly). Without a period (offboarding F&F) it is a
+ * plain full-month breakdown.
+ */
+export async function getMonthlyBreakdown(
+  employeeId: number, month?: number, year?: number,
+): Promise<PayslipBreakdown | null> {
   // Explicit assignment wins; employees without one fall back to their
   // designation's structure at its default base (new hires keep working).
   const assignment = await getAssignment(employeeId);
@@ -75,11 +93,51 @@ export async function getMonthlyBreakdown(employeeId: number): Promise<PayslipBr
   }
   if (!structure || base <= 0) return null;
 
-  if (structure.payment_basis === 'hourly') {
-    throw new AppError('This employee is on an hourly-rated structure — hourly payroll arrives with the payable-days engine (Phase 3).', 422);
+  const hourly = structure.payment_basis === 'hourly';
+  const hasPeriod = month !== undefined && year !== undefined;
+  if (hourly && !hasPeriod) {
+    throw new AppError('Hourly-rated pay needs an attendance period — generate a monthly payslip instead.', 422);
   }
 
-  return computeForStructure(structure, base);
+  let attendance: AttendanceContext | null = null;
+  const extraLines: StructureLineInput[] = [];
+  if (hasPeriod) {
+    const days = await computePayableDays(employeeId, month!, year!);
+    attendance = {
+      period_days: days.period_days,
+      working_days: days.working_days,
+      lop_days: days.lop_days,
+      payment_days: days.payment_days,
+      counts: days.counts as any,
+    };
+    if (hourly) attendance.hours = await getMonthlyHours(employeeId, month!, year!);
+
+    // Review-step corrections: LOP override and/or a manual adjustment line.
+    const adjustment = await getAdjustment(employeeId, month!, year!);
+    if (adjustment) {
+      if (adjustment.lop_override !== null && adjustment.lop_override !== undefined) {
+        attendance.lop_days = num(adjustment.lop_override);
+        attendance.payment_days = Math.max(0, attendance.working_days - attendance.lop_days);
+        attendance.lop_overridden = true;
+      }
+      const amount = num(adjustment.adjustment_amount);
+      if (amount !== 0) {
+        extraLines.push({
+          component_id: null,
+          name: adjustment.adjustment_label || 'Adjustment',
+          category: amount > 0 ? 'earning' : 'deduction',
+          calculation_type: 'flat',
+          value: Math.abs(amount),
+          earning_type: 'variable',
+          consider_epf: 'no',
+          consider_esi: false,
+          pro_rata: false,
+        });
+      }
+    }
+  }
+
+  return computeForStructure(structure, base, attendance, extraLines);
 }
 
 export async function computeForEmployee(
@@ -88,7 +146,7 @@ export async function computeForEmployee(
   assertValidPeriod(month, year);
 
   const emp = await employeeOrThrow(employeeId);
-  const breakdown = await getMonthlyBreakdown(employeeId);
+  const breakdown = await getMonthlyBreakdown(employeeId, month, year);
   if (!breakdown) {
     throw new AppError('Salary not configured for this employee or their designation. Please contact HR.', 422);
   }
@@ -282,6 +340,156 @@ export async function runPayroll(month: number, year: number, userId?: number | 
     total_net: totalNet,
     total_ctc: totalCtc,
   };
+}
+
+// ─── Review step: adjustments, details grid, salary register ───
+
+/** Recomputes a run's totals from its stored payslips (after adjustments). */
+async function refreshRunTotals(runId: number, month: number, year: number) {
+  const agg = await db('payslip_history').where({ month, year })
+    .count('id as c').sum({ net: 'net_pay' }).sum({ ctc: 'ctc' }).first();
+  await db('payroll_runs').where('id', runId).update({
+    employee_count: Number((agg as any)?.c ?? 0),
+    total_net: Number((agg as any)?.net ?? 0),
+    total_ctc: Number((agg as any)?.ctc ?? 0),
+    updated_at: db.fn.now(),
+  });
+}
+
+/**
+ * Saves HR's review-step correction for one employee (LOP override and/or a
+ * manual adjustment line, with a note) and regenerates that employee's slip.
+ * Blocked once the run is locked.
+ */
+export async function upsertAdjustment(
+  employeeId: number, month: number, year: number,
+  data: { lop_override?: number | null; adjustment_amount?: number; adjustment_label?: string; note?: string },
+  userId?: number | null,
+) {
+  assertValidPeriod(month, year);
+  await employeeOrThrow(employeeId);
+  const run = await getRun(month, year);
+  if (run?.status === 'locked') throw new AppError('Payroll for this month is locked.', 409);
+
+  const lopOverride = data.lop_override === null || data.lop_override === undefined || data.lop_override === ('' as any)
+    ? null : Number(data.lop_override);
+  if (lopOverride !== null && (!Number.isFinite(lopOverride) || lopOverride < 0 || lopOverride > 31)) {
+    throw new ValidationError('LOP override must be between 0 and 31 days');
+  }
+  const amount = Number(data.adjustment_amount) || 0;
+  const note = String(data.note || '').trim();
+  if ((lopOverride !== null || amount !== 0) && !note) {
+    throw new ValidationError('A note explaining the correction is required');
+  }
+
+  const patch = {
+    lop_override: lopOverride,
+    adjustment_amount: amount,
+    adjustment_label: data.adjustment_label ? String(data.adjustment_label).trim() : null,
+    note: note || null,
+    updated_by: userId ?? null,
+    updated_at: db.fn.now(),
+  };
+  const existing = await getAdjustment(employeeId, month, year);
+  if (existing) await db('payroll_adjustments').where('id', existing.id).update(patch);
+  else await db('payroll_adjustments').insert({ employee_id: employeeId, month, year, ...patch });
+
+  // Regenerate this employee's slip so the review grid shows the corrected numbers.
+  const computed = await computeForEmployee(employeeId, month, year);
+  if (run) {
+    await writePayslipRecord(computed, run.id, userId);
+    await refreshRunTotals(run.id, month, year);
+  }
+  return { adjustment: await getAdjustment(employeeId, month, year), breakdown: computed.breakdown };
+}
+
+/**
+ * The review grid: every generated slip for the period with days/LOP/net plus
+ * warnings (unmarked days, LOP overrides, manual adjustments), and the
+ * employees that were skipped.
+ */
+export async function getRunDetails(month: number, year: number) {
+  const run = await getRun(month, year);
+  const rows = await db('payslip_history as ph')
+    .join('employees as e', 'e.id', 'ph.employee_id')
+    .leftJoin('job_titles as jt', 'jt.id', 'e.job_title_id')
+    .where({ 'ph.month': month, 'ph.year': year })
+    .select(
+      'ph.employee_id', 'ph.gross_earnings', 'ph.total_deduction', 'ph.net_pay', 'ph.ctc', 'ph.snapshot',
+      'e.employee_code', 'e.first_name', 'e.last_name', 'e.branch_name', 'jt.title as designation',
+    )
+    .orderBy('e.first_name');
+
+  const adjustments = await db('payroll_adjustments').where({ month, year });
+  const adjByEmployee = new Map<number, any>(adjustments.map((a: any) => [a.employee_id, a]));
+
+  const slips = rows.map((r: any) => {
+    let days: any = null;
+    try { days = JSON.parse(r.snapshot)?.breakdown?.days ?? null; } catch { /* legacy snapshot */ }
+    const adj = adjByEmployee.get(r.employee_id);
+    return {
+      employee_id: r.employee_id,
+      employee_code: r.employee_code,
+      name: `${r.first_name} ${r.last_name}`,
+      designation: r.designation || null,
+      branch: r.branch_name || null,
+      gross_earnings: num(r.gross_earnings),
+      total_deduction: num(r.total_deduction),
+      net_pay: num(r.net_pay),
+      ctc: num(r.ctc),
+      days,
+      adjustment: adj ? {
+        lop_override: adj.lop_override === null ? null : num(adj.lop_override),
+        adjustment_amount: num(adj.adjustment_amount),
+        adjustment_label: adj.adjustment_label,
+        note: adj.note,
+      } : null,
+    };
+  });
+
+  const covered = new Set(rows.map((r: any) => r.employee_id));
+  const skipped = (await db('employees')
+    .where('is_active', true)
+    .select('id', 'employee_code', 'first_name', 'last_name'))
+    .filter((e: any) => !covered.has(e.id))
+    .map((e: any) => ({ employee_id: e.id, employee_code: e.employee_code, name: `${e.first_name} ${e.last_name}` }));
+
+  return { run: run ?? null, slips, skipped };
+}
+
+const csvCell = (v: any) => {
+  const s = v === null || v === undefined ? '' : String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+
+/**
+ * Salary register for the bank hand-off: one CSV row per generated slip with
+ * days, net pay, and bank account details where available.
+ */
+export async function getSalaryRegister(month: number, year: number): Promise<string> {
+  const { slips } = await getRunDetails(month, year);
+  const bank = await db('employee_bank_details').select(
+    'employee_id', 'account_name', 'bank_account_number', 'ifsc_code', 'payment_mode',
+  );
+  const bankByEmployee = new Map<number, any>(bank.map((b: any) => [b.employee_id, b]));
+
+  const header = [
+    'Employee Code', 'Name', 'Designation', 'Branch',
+    'Working Days', 'LOP Days', 'Payment Days',
+    'Gross Earnings', 'Total Deductions', 'Net Pay',
+    'Account Name', 'Bank Account Number', 'IFSC', 'Payment Mode',
+  ];
+  const lines = [header.join(',')];
+  for (const s of slips) {
+    const b = bankByEmployee.get(s.employee_id);
+    lines.push([
+      s.employee_code, s.name, s.designation ?? '', s.branch ?? '',
+      s.days?.working_days ?? '', s.days?.lop_days ?? '', s.days?.payment_days ?? '',
+      Math.round(s.gross_earnings), Math.round(s.total_deduction), Math.round(s.net_pay),
+      b?.account_name ?? '', b?.bank_account_number ?? '', b?.ifsc_code ?? '', b?.payment_mode ?? '',
+    ].map(csvCell).join(','));
+  }
+  return lines.join('\n');
 }
 
 export async function lockRun(month: number, year: number, userId?: number | null) {

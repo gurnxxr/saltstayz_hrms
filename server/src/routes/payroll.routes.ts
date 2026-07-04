@@ -28,10 +28,14 @@ router.delete('/assignments/:employeeId', authorize('payroll', 'update'), ADMIN_
 // ─── Generate payslip for any employee (HR / Finance / Admin) ───
 router.get('/employees/:employeeId/payslip', authorize('payroll', 'read'), PAYROLL_STAFF, ctrl.computeEmployeePayslip);
 router.get('/employees/:employeeId/payslip/pdf', authorize('payroll', 'read'), PAYROLL_STAFF, ctrl.downloadEmployeePayslip);
+router.get('/employees/:employeeId/payable-days', authorize('payroll', 'read'), PAYROLL_STAFF, ctrl.getPayableDays);
 
-// ─── Payroll runs: bulk generate + lock — org-level control, Admin only ───
+// ─── Payroll runs: generate → review → lock — org-level control, Admin only ───
 router.get('/runs', authorize('payroll', 'read'), ADMIN_ONLY, ctrl.listRuns);
+router.get('/runs/details', authorize('payroll', 'read'), ADMIN_ONLY, ctrl.getRunDetails);
+router.get('/runs/export', authorize('payroll', 'read'), ADMIN_ONLY, ctrl.exportRegister);
 router.post('/runs', authorize('payroll', 'update'), ADMIN_ONLY, ctrl.runPayroll);
+router.put('/runs/adjustments/:employeeId', authorize('payroll', 'update'), ADMIN_ONLY, ctrl.upsertAdjustment);
 router.post('/runs/lock', authorize('payroll', 'update'), ADMIN_ONLY, ctrl.lockRun);
 router.post('/runs/unlock', authorize('payroll', 'approve'), ADMIN_ONLY, ctrl.unlockRun);
 

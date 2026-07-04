@@ -137,6 +137,62 @@ describe('computeFromStructure — deductions, benefits, totals', () => {
   });
 });
 
+describe('computeFromStructure — attendance-driven proration (Phase 3)', () => {
+  // The plan's worked example: base 18000, 6-day week June (26 working days),
+  // 2 absents + 1 half-day + 1 unpaid leave day → LOP 3.5 → payment days 22.5.
+  const JUNE = { period_days: 30, working_days: 26, lop_days: 3.5, payment_days: 22.5 };
+
+  it('prorates the base by payment/working days (earned gross 15,577)', () => {
+    const b = computeFromStructure(standardStructure(), 18000, RATES, JUNE);
+    expect(b.fixed_salary).toBe(15577); // 18000 × 22.5 / 26
+    expect(b.esi).toBe(117);            // ceil(0.75% of 15,577)
+    expect(b.lwf).toBe(31);             // 0.2% of 15,577 = 31.15 → 31, below the 35 cap
+    expect(b.days?.lop_days).toBe(3.5);
+    expect(b.days?.payment_days).toBe(22.5);
+    // statutory shrinks with the prorated wage base
+    const full = computeFromStructure(standardStructure(), 18000, RATES);
+    expect(b.employee_pf).toBeLessThan(full.employee_pf);
+    expect(b.net_pay).toBeLessThan(full.net_pay);
+  });
+
+  it('full attendance pays the full base', () => {
+    const att = { period_days: 30, working_days: 26, lop_days: 0, payment_days: 26 };
+    const b = computeFromStructure(standardStructure(), 18000, RATES, att);
+    expect(b.fixed_salary).toBe(18000);
+  });
+
+  it('flat earning lines scale only when pro-rata', () => {
+    const proRataAllowance: StructureLineInput = {
+      component_id: 30, name: 'Transport', category: 'earning', calculation_type: 'flat', value: 1000,
+      earning_type: 'fixed', consider_epf: 'no', consider_esi: false, pro_rata: true,
+    };
+    const fixedPli: StructureLineInput = {
+      component_id: 9, name: 'PLI', category: 'earning', calculation_type: 'flat', value: 720,
+      earning_type: 'variable', consider_epf: 'no', consider_esi: false, pro_rata: false,
+    };
+    const att = { period_days: 30, working_days: 26, lop_days: 13, payment_days: 13 }; // half the month
+    const b = computeFromStructure(standardStructure([proRataAllowance, fixedPli]), 18000, RATES, att);
+    expect(b.earnings.find((l) => l.name === 'Transport')?.amount).toBe(500); // scaled
+    expect(b.earnings.find((l) => l.name === 'PLI')?.amount).toBe(720);       // not scaled
+  });
+
+  it('zero payment days → zero pay, zero statutory', () => {
+    const att = { period_days: 30, working_days: 26, lop_days: 26, payment_days: 0 };
+    const b = computeFromStructure(standardStructure(), 18000, RATES, att);
+    expect(b.fixed_salary).toBe(0);
+    expect(b.employee_pf + b.esi + b.lwf).toBe(0);
+    expect(b.net_pay).toBe(0);
+  });
+
+  it('hourly basis: pay = rate × attendance hours', () => {
+    const att = { period_days: 30, working_days: 26, lop_days: 0, payment_days: 26, hours: 176 };
+    const b = computeFromStructure(standardStructure(), 100, RATES, att); // ₹100/hour
+    expect(b.fixed_salary).toBe(17600);
+    expect(b.basic).toBe(8800);
+    expect(b.days?.hours).toBe(176);
+  });
+});
+
 describe('legacyBreakdownToLines', () => {
   it('adapts a pre-Phase-2 snapshot to the lines shape', () => {
     const old = {

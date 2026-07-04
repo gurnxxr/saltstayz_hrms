@@ -2,6 +2,7 @@ import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../types';
 import * as payslip from '../services/payslip.service';
 import * as structures from '../services/salaryStructure.service';
+import { computePayableDays } from '../services/payableDays.service';
 import { generatePayslipPdf } from '../services/payslipPdf.service';
 import { ValidationError } from '../utils/errors';
 import type { ComputedPayslip } from '../services/payslip.service';
@@ -133,11 +134,46 @@ export async function downloadEmployeePayslip(req: AuthRequest, res: Response, n
   } catch (err) { next(err); }
 }
 
-// ─── Payroll runs (bulk + lock) ───
+/** Day-by-day payable-days trace for the review dialog. */
+export async function getPayableDays(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json(await computePayableDays(
+      Number(req.params.employeeId), Number(req.query.month), Number(req.query.year),
+    ));
+  } catch (err) { next(err); }
+}
+
+// ─── Payroll runs (bulk + review + lock) ───
 
 export async function listRuns(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     res.json(await payslip.listRuns());
+  } catch (err) { next(err); }
+}
+
+export async function getRunDetails(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json(await payslip.getRunDetails(Number(req.query.month), Number(req.query.year)));
+  } catch (err) { next(err); }
+}
+
+export async function upsertAdjustment(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json(await payslip.upsertAdjustment(
+      Number(req.params.employeeId), Number(req.body.month), Number(req.body.year),
+      req.body, req.user?.userId ?? null,
+    ));
+  } catch (err) { next(err); }
+}
+
+export async function exportRegister(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const month = Number(req.query.month);
+    const year = Number(req.query.year);
+    const csv = await payslip.getSalaryRegister(month, year);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="Salary_Register_${year}_${String(month).padStart(2, '0')}.csv"`);
+    res.send(csv);
   } catch (err) { next(err); }
 }
 
