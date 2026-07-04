@@ -29,6 +29,18 @@ export const NAVIGATION: NavItem[] = [
     module: 'attendance',
   },
   {
+    label: 'Leaves',
+    href: '/leaves/application',
+    icon: 'CalendarDays',
+    roles: ['admin', 'chro', 'hr'],
+    children: [
+      { label: 'Application', href: '/leaves/application', icon: 'FileText', roles: ['admin', 'chro', 'hr'] },
+      { label: 'Encashment', href: '/leaves/encashment', icon: 'Coins', roles: ['admin', 'chro', 'hr'] },
+      { label: 'Control Panel', href: '/leaves/control-panel', icon: 'SlidersHorizontal', roles: ['admin', 'chro', 'hr'] },
+      { label: 'Allocation', href: '/leaves/allocation', icon: 'CalendarPlus', roles: ['admin', 'chro', 'hr'] },
+    ],
+  },
+  {
     label: 'Recruitment',
     href: '/recruitment',
     icon: 'Briefcase',
