@@ -10,6 +10,9 @@ router.use(authenticate);
 const gate = authorizeRoles('admin', 'finance');
 
 router.get('/', gate, ctrl.getStatutory);
+// Resolved rates (read-only, no org identifiers) — also needed by the
+// salary-structure preview, which CHRO/HR can open.
+router.get('/rates', authorizeRoles('admin', 'chro', 'hr', 'finance'), ctrl.getRates);
 router.put('/epf', gate, ctrl.saveEpf);
 router.put('/esi', gate, ctrl.saveEsi);
 router.put('/bonus', gate, ctrl.saveBonus);

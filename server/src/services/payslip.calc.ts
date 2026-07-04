@@ -1,70 +1,55 @@
 /**
- * Payslip computation engine.
+ * Payslip computation engine (pure — no DB access).
  *
- * All amounts are monthly and rounded to the nearest rupee. Every formula here
- * maps 1:1 to the salary-structure spec:
+ * All amounts are monthly and rounded to the nearest rupee (ESI rounds UP, per
+ * statute). The salary COMPOSITION (Basic/HRA split, gratuity) comes from the
+ * designation structure; all STATUTORY rates (EPF, ESI, LWF) are injected via
+ * `StatutoryRates`, resolved from the editable Statutory Components settings —
+ * never hardcoded here.
  *
- *   A. Fixed Salary (= Gross, defined per minimum wage)
- *      Basic            = 50% of Gross
- *      HRA              = 50% of Basic
+ *   A. Fixed Salary (= Gross)
+ *      Basic            = pct.basic% of Gross
+ *      HRA              = pct.hra% of Basic
  *      Other Allowance  = Gross - Basic - HRA   (the remainder)
  *   B. Variable Pay
  *      PLI              = manual
  *   E. Deductions
- *      Employee PF      = 12% of (Basic + Other Allowance)
- *      ESI              = 0.75% of Gross
- *      LWF              = fixed, per city
+ *      Employee PF      = epf.employeeRatePct% of (Basic + Other Allowance), if enabled
+ *      ESI              = esi.employeeRatePct% of Gross, if enabled and Gross ≤ wage ceiling
+ *      LWF              = employeePct% of Gross capped at employeeMaxAmount, if enabled
  *      Meal             = manual
  *      Accommodation    = manual
  *   Net In Hand        = A + B - E
  *   C. Retirals (employer)
- *      Employer PF      = 12% of (Basic + Other Allowance)
- *      Gratuity         = 4.81% of Basic
- *      Employer LWF     = fixed, per city
+ *      Employer PF      = epf.employerRatePct% of (Basic + Other Allowance)
+ *      Gratuity         = pct.gratuity% of Basic
+ *      Employer LWF     = employee LWF × employerMultiplier
  *   D. Benefits
- *      Employer ESI     = 3.25% of Gross
+ *      Employer ESI     = esi.employerRatePct% of Gross (same eligibility)
  *      Accommodation Allowance = tentative cost (manual)
  *   CTC                = A + B + C + D
  */
 
 const round = (n: number) => Math.round(n);
+const ceil = (n: number) => Math.ceil(n);
 
-// Labour Welfare Fund — fixed monthly contribution, varies by state/city.
-// Values are indicative; HR can override per-employee via salary_setup.
-export const LWF_BY_CITY: Record<string, { employee: number; employer: number }> = {
-  Delhi: { employee: 0.75, employer: 2.25 },
-  Gurugram: { employee: 31, employer: 62 },
-  Haryana: { employee: 31, employer: 62 },
-  Noida: { employee: 0, employer: 0 },
-  Mumbai: { employee: 25, employer: 75 },
-  Maharashtra: { employee: 25, employer: 75 },
-  Bengaluru: { employee: 20, employer: 40 },
-  Karnataka: { employee: 20, employer: 40 },
-  Chandigarh: { employee: 5, employer: 20 },
-};
+// ─── Composition percentages (per designation structure) ───
 
-const DEFAULT_LWF = { employee: 20, employer: 40 };
-
-export function lwfForCity(city?: string | null) {
-  if (!city) return DEFAULT_LWF;
-  return LWF_BY_CITY[city] || DEFAULT_LWF;
-}
-
-// Default percentages — overridable per designation via the salary structure.
 export interface SalaryPercentages {
-  basic: number;        // % of Gross
-  hra: number;          // % of Basic
-  employee_pf: number;  // % of (Basic + Other Allowance)
-  esi: number;          // % of Gross
-  employer_pf: number;  // % of (Basic + Other Allowance)
-  gratuity: number;     // % of Basic
-  employer_esi: number; // % of Gross
+  basic: number;    // % of Gross
+  hra: number;      // % of Basic
+  gratuity: number; // % of Basic (employer retiral)
 }
 
-export const DEFAULT_PERCENTAGES: SalaryPercentages = {
-  basic: 50, hra: 50, employee_pf: 12, esi: 0.75,
-  employer_pf: 12, gratuity: 4.81, employer_esi: 3.25,
-};
+export const DEFAULT_COMPOSITION: SalaryPercentages = { basic: 50, hra: 50, gratuity: 4.81 };
+
+// ─── Statutory rates (resolved from statutory_settings — see statutory.service) ───
+
+export interface StatutoryRates {
+  epf: { enabled: boolean; employeeRatePct: number; employerRatePct: number };
+  esi: { enabled: boolean; employeeRatePct: number; employerRatePct: number; wageCeiling: number };
+  lwf: { enabled: boolean; employeePct: number; employeeMaxAmount: number; employerMultiplier: number };
+}
 
 export interface SalaryInputs {
   gross: number;
@@ -73,7 +58,7 @@ export interface SalaryInputs {
   meal?: number;
   accommodation?: number;
   accommodation_allowance?: number;
-  lwf_employee?: number | null;
+  lwf_employee?: number | null;  // explicit per-employee/structure override
   lwf_employer?: number | null;
   pct?: Partial<SalaryPercentages>;
 }
@@ -109,8 +94,8 @@ export interface PayslipBreakdown {
   ctc: number; // A + B + C + D
 }
 
-export function computePayslip(input: SalaryInputs): PayslipBreakdown {
-  const p: SalaryPercentages = { ...DEFAULT_PERCENTAGES, ...(input.pct || {}) };
+export function computePayslip(input: SalaryInputs, statutory: StatutoryRates): PayslipBreakdown {
+  const p: SalaryPercentages = { ...DEFAULT_COMPOSITION, ...(input.pct || {}) };
   const gross = round(input.gross || 0);
   const pli = round(input.pli || 0);
   const meal = round(input.meal || 0);
@@ -126,27 +111,36 @@ export function computePayslip(input: SalaryInputs): PayslipBreakdown {
   // B. Variable Pay
   const gross_earnings = fixed_salary + pli;
 
-  // LWF (override > city lookup)
-  const cityLwf = lwfForCity(input.city);
-  const lwf = round(input.lwf_employee ?? cityLwf.employee);
-  const employer_lwf = round(input.lwf_employer ?? cityLwf.employer);
+  // LWF — % of gross capped at the state max (explicit override wins)
+  const lwfCfg = statutory.lwf;
+  const lwfCalc = lwfCfg.enabled
+    ? Math.min(round((lwfCfg.employeePct / 100) * gross), round(lwfCfg.employeeMaxAmount))
+    : 0;
+  const lwf = round(input.lwf_employee ?? lwfCalc);
+  const employer_lwf = round(input.lwf_employer ?? (lwfCfg.enabled ? lwfCalc * lwfCfg.employerMultiplier : 0));
+
+  // EPF — on PF wages (Basic + Other Allowance)
+  const pfBase = basic + other_allowance;
+  const employee_pf = statutory.epf.enabled ? round((statutory.epf.employeeRatePct / 100) * pfBase) : 0;
+  const employer_pf = statutory.epf.enabled ? round((statutory.epf.employerRatePct / 100) * pfBase) : 0;
+
+  // ESI — only while gross is within the wage ceiling; contributions round UP per statute
+  const esiEligible = statutory.esi.enabled
+    && (statutory.esi.wageCeiling <= 0 || gross <= statutory.esi.wageCeiling);
+  const esi = esiEligible ? ceil((statutory.esi.employeeRatePct / 100) * gross) : 0;
+  const employer_esi = esiEligible ? ceil((statutory.esi.employerRatePct / 100) * gross) : 0;
 
   // E. Deductions
-  const pfBase = basic + other_allowance;
-  const employee_pf = round((p.employee_pf / 100) * pfBase);
-  const esi = round((p.esi / 100) * gross);
   const total_deduction = employee_pf + esi + lwf + meal + accommodation;
 
   // Net In Hand (A + B - E)
   const net_pay = fixed_salary + pli - total_deduction;
 
   // C. Retirals (employer contributions)
-  const employer_pf = round((p.employer_pf / 100) * pfBase);
   const gratuity = round((p.gratuity / 100) * basic);
   const retirals = employer_pf + gratuity + employer_lwf;
 
   // D. Benefits
-  const employer_esi = round((p.employer_esi / 100) * gross);
   const benefits = employer_esi + accommodationAllowance;
 
   // CTC (A + B + C + D)
@@ -172,8 +166,29 @@ export function monthName(month: number) {
   return MONTHS[month - 1] || '';
 }
 
-/** Pay date = last calendar day of the selected month. */
-export function payDateFor(month: number, year: number): string {
+export interface PayDateSchedule {
+  pay_date_type: string; // 'last_day' | 'fixed_day'
+  pay_date_day: number;
+}
+
+/**
+ * Pay date for a salary month, honouring the Pay Schedule settings:
+ *  - last_day (default): the last calendar day of the salary month
+ *  - fixed_day N: day N of the FOLLOWING month (salary is paid after the month
+ *    ends), clamped to that month's length
+ */
+export function payDateFor(month: number, year: number, schedule?: PayDateSchedule | null): string {
+  const fmt = (y: number, m: number, d: number) =>
+    `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+
+  if (schedule?.pay_date_type === 'fixed_day') {
+    const nextMonth = month === 12 ? 1 : month + 1;
+    const nextYear = month === 12 ? year + 1 : year;
+    const daysInNext = new Date(nextYear, nextMonth, 0).getDate();
+    const day = Math.min(Math.max(1, Math.trunc(schedule.pay_date_day) || 1), daysInNext);
+    return fmt(nextYear, nextMonth, day);
+  }
+
   const lastDay = new Date(year, month, 0).getDate();
-  return `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+  return fmt(year, month, lastDay);
 }

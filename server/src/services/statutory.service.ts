@@ -1,5 +1,6 @@
 import db from '../config/database';
 import { ValidationError } from '../utils/errors';
+import type { StatutoryRates } from './payslip.calc';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Statutory Components settings. `statutory_settings` holds one row per
@@ -47,6 +48,69 @@ function num(v: any, name: string, min: number, max: number) {
 }
 
 // ─── Read: the whole module in one shot ───
+
+// ─── Rates resolution for the payslip engine ───
+
+// Legacy salary_setup/structure rows store a "city"; statutory config is per state.
+const CITY_TO_STATE: Record<string, string> = {
+  Gurugram: 'Haryana', Faridabad: 'Haryana', Haryana: 'Haryana',
+  Delhi: 'Delhi', 'New Delhi': 'Delhi',
+  Noida: 'Uttar Pradesh', 'Greater Noida': 'Uttar Pradesh', 'Uttar Pradesh': 'Uttar Pradesh',
+  Chandigarh: 'Chandigarh',
+  Dehradun: 'Uttarakhand', Uttarakhand: 'Uttarakhand',
+};
+
+export const DEFAULT_STATUTORY_STATE = 'Haryana'; // head office
+
+export function resolveStatutoryState(cityOrState?: string | null): string {
+  if (!cityOrState) return DEFAULT_STATUTORY_STATE;
+  const trimmed = String(cityOrState).trim();
+  if (STATUTORY_STATES.includes(trimmed)) return trimmed;
+  return CITY_TO_STATE[trimmed] || DEFAULT_STATUTORY_STATE;
+}
+
+/**
+ * Resolves the effective statutory rates for an employee's city/state — the single
+ * source the payslip engine uses. Rates come from the editable statutory_settings
+ * rows (EPF/ESI org-wide, LWF per state); a disabled component contributes zero.
+ */
+export async function getStatutoryRates(cityOrState?: string | null): Promise<StatutoryRates> {
+  const state = resolveStatutoryState(cityOrState);
+  const rows = await db(TABLE)
+    .whereIn('component', ['epf', 'esi', 'lwf'])
+    .where(function (this: any) {
+      this.whereNull('state').orWhere('state', state);
+    })
+    .select('*');
+
+  const epfRow = rows.find((r: any) => r.component === 'epf' && r.state == null);
+  const esiRow = rows.find((r: any) => r.component === 'esi' && r.state == null);
+  const lwfRow = rows.find((r: any) => r.component === 'lwf' && r.state === state);
+
+  const epfCfg = parseConfig(epfRow, EPF_DEFAULT);
+  const esiCfg = parseConfig(esiRow, ESI_DEFAULT);
+  const lwfCfg = parseConfig(lwfRow, LWF_DEFAULT);
+
+  return {
+    epf: {
+      enabled: !!(epfRow && epfRow.enabled),
+      employeeRatePct: Number(epfCfg.employeeRatePct) || 0,
+      employerRatePct: Number(epfCfg.employerRatePct) || 0,
+    },
+    esi: {
+      enabled: !!(esiRow && esiRow.enabled),
+      employeeRatePct: Number(esiCfg.employeeRatePct) || 0,
+      employerRatePct: Number(esiCfg.employerRatePct) || 0,
+      wageCeiling: Number(esiCfg.wageCeiling) || 0,
+    },
+    lwf: {
+      enabled: !!(lwfRow && lwfRow.enabled),
+      employeePct: Number(lwfCfg.employeePct) || 0,
+      employeeMaxAmount: Number(lwfCfg.employeeMaxAmount) || 0,
+      employerMultiplier: Number(lwfCfg.employerMultiplier) || 1,
+    },
+  };
+}
 
 export async function getAllStatutory() {
   const rows = await db(TABLE).select('*');

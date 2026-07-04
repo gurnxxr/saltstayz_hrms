@@ -1,6 +1,7 @@
 import db from '../config/database';
 import { NotFoundError, ValidationError } from '../utils/errors';
-import { computePayslip, DEFAULT_PERCENTAGES, type SalaryInputs, type PayslipBreakdown } from './payslip.calc';
+import { computePayslip, DEFAULT_COMPOSITION, type SalaryInputs, type PayslipBreakdown } from './payslip.calc';
+import { getStatutoryRates } from './statutory.service';
 
 const TABLE = 'designation_salary_structures';
 
@@ -8,7 +9,12 @@ function num(v: any): number {
   return v === null || v === undefined || v === '' ? 0 : Number(v);
 }
 
-/** Builds the calc inputs (gross, amounts, percentages) from a stored structure row. */
+/**
+ * Builds the calc inputs (gross, amounts, composition percentages) from a stored
+ * structure row. Statutory rates (PF/ESI/LWF) are NOT taken from the structure —
+ * they come from Statutory Components settings (the legacy pct_employee_pf/pct_esi
+ * columns are ignored; retired in Phase 2).
+ */
 export function structureToInputs(s: any): SalaryInputs {
   return {
     gross: num(s.gross),
@@ -20,19 +26,16 @@ export function structureToInputs(s: any): SalaryInputs {
     lwf_employee: s.lwf_employee === null || s.lwf_employee === undefined ? null : num(s.lwf_employee),
     lwf_employer: s.lwf_employer === null || s.lwf_employer === undefined ? null : num(s.lwf_employer),
     pct: {
-      basic: num(s.pct_basic ?? DEFAULT_PERCENTAGES.basic),
-      hra: num(s.pct_hra ?? DEFAULT_PERCENTAGES.hra),
-      employee_pf: num(s.pct_employee_pf ?? DEFAULT_PERCENTAGES.employee_pf),
-      esi: num(s.pct_esi ?? DEFAULT_PERCENTAGES.esi),
-      employer_pf: num(s.pct_employer_pf ?? DEFAULT_PERCENTAGES.employer_pf),
-      gratuity: num(s.pct_gratuity ?? DEFAULT_PERCENTAGES.gratuity),
-      employer_esi: num(s.pct_employer_esi ?? DEFAULT_PERCENTAGES.employer_esi),
+      basic: num(s.pct_basic ?? DEFAULT_COMPOSITION.basic),
+      hra: num(s.pct_hra ?? DEFAULT_COMPOSITION.hra),
+      gratuity: num(s.pct_gratuity ?? DEFAULT_COMPOSITION.gratuity),
     },
   };
 }
 
-export function breakdownForStructure(s: any): PayslipBreakdown {
-  return computePayslip(structureToInputs(s));
+export async function breakdownForStructure(s: any): Promise<PayslipBreakdown> {
+  const rates = await getStatutoryRates(s.city);
+  return computePayslip(structureToInputs(s), rates);
 }
 
 // Advertised CTC headroom above the structure's exact CTC (the structure CTC is the floor).
@@ -57,7 +60,7 @@ export async function getCtcRange(jobTitleId: number): Promise<CtcRange> {
   if (!row) {
     return { configured: false, monthly_ctc: 0, annual_low: 0, annual_high: 0, label: '' };
   }
-  const monthly_ctc = Math.round(breakdownForStructure(row).ctc);
+  const monthly_ctc = Math.round((await breakdownForStructure(row)).ctc);
   const annual_low = monthly_ctc * 12;
   const annual_high = Math.round(annual_low * (1 + JD_CTC_BAND_PCT / 100));
   const lpa = (n: number) => (n / 100000).toFixed(2);
@@ -81,7 +84,7 @@ export async function listStructures() {
     .groupBy('job_title_id');
   const countMap = new Map<number, number>(counts.map((r: any) => [r.job_title_id, Number(r.c)]));
 
-  return rows.map((r: any) => {
+  return Promise.all(rows.map(async (r: any) => {
     const configured = r.gross !== null && r.gross !== undefined;
     return {
       job_title_id: r.job_title_id,
@@ -89,9 +92,9 @@ export async function listStructures() {
       configured,
       employee_count: countMap.get(r.job_title_id) ?? 0,
       structure: configured ? structureFields(r) : null,
-      breakdown: configured ? breakdownForStructure(r) : null,
+      breakdown: configured ? await breakdownForStructure(r) : null,
     };
-  });
+  }));
 }
 
 function structureFields(r: any) {
@@ -127,7 +130,7 @@ export async function getStructure(jobTitleId: number) {
     designation: jt.title,
     configured: !!row,
     structure: row ? structureFields(row) : null,
-    breakdown: row ? breakdownForStructure(row) : null,
+    breakdown: row ? await breakdownForStructure(row) : null,
   };
 }
 

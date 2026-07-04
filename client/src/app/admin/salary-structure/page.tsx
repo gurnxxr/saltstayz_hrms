@@ -10,26 +10,24 @@ import Breadcrumb from '@/components/ui/Breadcrumb';
 import { formatINR } from '@/lib/utils';
 import { Search, Briefcase, Loader2, Save, IndianRupee, AlertCircle } from 'lucide-react';
 
-const CITIES = ['Haryana', 'Delhi', 'Gurugram', 'Noida', 'Mumbai', 'Maharashtra', 'Bengaluru', 'Karnataka', 'Chandigarh'];
-const LWF_BY_CITY: Record<string, { employee: number; employer: number }> = {
-  Delhi: { employee: 0.75, employer: 2.25 }, Gurugram: { employee: 31, employer: 62 },
-  Haryana: { employee: 31, employer: 62 }, Noida: { employee: 0, employer: 0 },
-  Mumbai: { employee: 25, employer: 75 }, Maharashtra: { employee: 25, employer: 75 },
-  Bengaluru: { employee: 20, employer: 40 }, Karnataka: { employee: 20, employer: 40 },
-  Chandigarh: { employee: 5, employer: 20 },
-};
+// Operating cities/states — resolve to a statutory state on the server.
+const CITIES = ['Haryana', 'Gurugram', 'Faridabad', 'Delhi', 'Noida', 'Greater Noida', 'Uttar Pradesh', 'Chandigarh', 'Dehradun', 'Uttarakhand'];
 const num = (v: any) => (v === '' || v === null || v === undefined ? 0 : Number(v));
 
 const emptyStruct = {
   gross: '', city: 'Haryana',
-  pct_basic: 50, pct_hra: 50, pct_employee_pf: 12, pct_esi: 0.75,
-  pct_employer_pf: 12, pct_gratuity: 4.81, pct_employer_esi: 3.25,
+  pct_basic: 50, pct_hra: 50, pct_gratuity: 4.81,
   pli: 0, lwf_employee: '', lwf_employer: '', meal: 0, accommodation: 0, accommodation_allowance: 0,
 };
 
-// Mirrors the server payslip.calc engine for live preview.
-function computeBreakdown(s: any) {
+// Mirrors the server payslip.calc engine for live preview. Statutory rates
+// (EPF/ESI/LWF) come from GET /statutory/rates — editable in Payroll → Statutory
+// Components — so this preview always matches what payslips will actually compute.
+function computeBreakdown(s: any, statutory: any) {
   const r = Math.round;
+  const epf = statutory?.epf || {};
+  const esiCfg = statutory?.esi || {};
+  const lwfCfg = statutory?.lwf || {};
   const gross = r(num(s.gross)), pli = r(num(s.pli)), meal = r(num(s.meal));
   const accommodation = r(num(s.accommodation)), accAllow = r(num(s.accommodation_allowance));
   const basic = r(gross * num(s.pct_basic) / 100);
@@ -37,18 +35,24 @@ function computeBreakdown(s: any) {
   const other = gross - basic - hra;
   const fixed = gross;
   const grossEarnings = fixed + pli;
-  const cityLwf = LWF_BY_CITY[s.city] || { employee: 20, employer: 40 };
-  const lwf = r(s.lwf_employee !== '' && s.lwf_employee !== null ? num(s.lwf_employee) : cityLwf.employee);
-  const empLwf = r(s.lwf_employer !== '' && s.lwf_employer !== null ? num(s.lwf_employer) : cityLwf.employer);
+  const lwfCalc = lwfCfg.enabled
+    ? Math.min(r(num(lwfCfg.employeePct) / 100 * gross), r(num(lwfCfg.employeeMaxAmount)))
+    : 0;
+  const lwf = r(s.lwf_employee !== '' && s.lwf_employee !== null ? num(s.lwf_employee) : lwfCalc);
+  const empLwf = r(s.lwf_employer !== '' && s.lwf_employer !== null
+    ? num(s.lwf_employer)
+    : (lwfCfg.enabled ? lwfCalc * (num(lwfCfg.employerMultiplier) || 1) : 0));
   const pfBase = basic + other;
-  const empPf = r(num(s.pct_employee_pf) / 100 * pfBase);
-  const esi = r(num(s.pct_esi) / 100 * gross);
+  const empPf = epf.enabled ? r(num(epf.employeeRatePct) / 100 * pfBase) : 0;
+  const erPf = epf.enabled ? r(num(epf.employerRatePct) / 100 * pfBase) : 0;
+  const ceiling = num(esiCfg.wageCeiling);
+  const esiEligible = !!esiCfg.enabled && (ceiling <= 0 || gross <= ceiling);
+  const esi = esiEligible ? Math.ceil(num(esiCfg.employeeRatePct) / 100 * gross) : 0;
+  const erEsi = esiEligible ? Math.ceil(num(esiCfg.employerRatePct) / 100 * gross) : 0;
   const totalDed = empPf + esi + lwf + meal + accommodation;
   const net = fixed + pli - totalDed;
-  const erPf = r(num(s.pct_employer_pf) / 100 * pfBase);
   const gratuity = r(num(s.pct_gratuity) / 100 * basic);
   const retirals = erPf + gratuity + empLwf;
-  const erEsi = r(num(s.pct_employer_esi) / 100 * gross);
   const benefits = erEsi + accAllow;
   const ctc = fixed + pli + retirals + benefits;
   return { basic, hra, other, fixed, pli, grossEarnings, empPf, esi, lwf, meal, accommodation, totalDed, net, erPf, gratuity, empLwf, retirals, erEsi, accAllow, benefits, ctc };
@@ -73,8 +77,7 @@ export default function SalaryStructurePage() {
       const s = selected.structure;
       setForm({
         gross: s.gross ?? '', city: s.city ?? 'Haryana',
-        pct_basic: s.pct_basic, pct_hra: s.pct_hra, pct_employee_pf: s.pct_employee_pf, pct_esi: s.pct_esi,
-        pct_employer_pf: s.pct_employer_pf, pct_gratuity: s.pct_gratuity, pct_employer_esi: s.pct_employer_esi,
+        pct_basic: s.pct_basic, pct_hra: s.pct_hra, pct_gratuity: s.pct_gratuity,
         pli: s.pli, lwf_employee: s.lwf_employee ?? '', lwf_employer: s.lwf_employer ?? '',
         meal: s.meal, accommodation: s.accommodation, accommodation_allowance: s.accommodation_allowance,
       });
@@ -82,6 +85,12 @@ export default function SalaryStructurePage() {
       setForm(emptyStruct);
     }
   }, [selected]);
+
+  // Live statutory rates for the selected city/state — keeps the preview honest.
+  const { data: statutory } = useQuery({
+    queryKey: ['statutory-rates', form.city],
+    queryFn: () => api.get(`/statutory/rates?city=${encodeURIComponent(form.city || '')}`).then(r => r.data),
+  });
 
   const saveMutation = useMutation({
     mutationFn: () => api.put(`/admin/salary-structures/${selectedId}`, {
@@ -100,7 +109,7 @@ export default function SalaryStructurePage() {
 
   const needsSetup = useMemo(() => list.filter((x: any) => !x.configured).length, [list]);
 
-  const b = computeBreakdown(form);
+  const b = computeBreakdown(form, statutory);
   const set = (k: string, v: any) => setForm((p: any) => ({ ...p, [k]: v }));
 
   return (
@@ -170,9 +179,10 @@ export default function SalaryStructurePage() {
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <Field label="Gross (Fixed A) ₹" value={form.gross} onChange={(v) => set('gross', v)} />
                   <div>
-                    <label className="block text-xs font-medium text-secondary mb-1">City (LWF)</label>
+                    <label className="block text-xs font-medium text-secondary mb-1">City / State (statutory)</label>
                     <select value={form.city} onChange={(e) => set('city', e.target.value)}
                       className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm">
+                      {!CITIES.includes(form.city) && form.city && <option value={form.city}>{form.city}</option>}
                       {CITIES.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                   </div>
@@ -180,20 +190,21 @@ export default function SalaryStructurePage() {
                   <Field label="Meal (deduction) ₹" value={form.meal} onChange={(v) => set('meal', v)} />
                   <Field label="Accommodation (deduction) ₹" value={form.accommodation} onChange={(v) => set('accommodation', v)} />
                   <Field label="Accom. Allowance (benefit) ₹" value={form.accommodation_allowance} onChange={(v) => set('accommodation_allowance', v)} />
-                  <Field label="LWF Employee ₹" value={form.lwf_employee} onChange={(v) => set('lwf_employee', v)} placeholder="city default" />
-                  <Field label="LWF Employer ₹" value={form.lwf_employer} onChange={(v) => set('lwf_employer', v)} placeholder="city default" />
+                  <Field label="LWF Employee ₹" value={form.lwf_employee} onChange={(v) => set('lwf_employee', v)} placeholder="state default" />
+                  <Field label="LWF Employer ₹" value={form.lwf_employer} onChange={(v) => set('lwf_employer', v)} placeholder="state default" />
                 </div>
 
-                <p className="text-xs font-semibold text-secondary uppercase mt-5 mb-2">Percentages</p>
+                <p className="text-xs font-semibold text-secondary uppercase mt-5 mb-2">Composition</p>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <Field label="Basic (% of Gross)" value={form.pct_basic} onChange={(v) => set('pct_basic', v)} />
                   <Field label="HRA (% of Basic)" value={form.pct_hra} onChange={(v) => set('pct_hra', v)} />
-                  <Field label="Employee PF (% of Basic+Other)" value={form.pct_employee_pf} onChange={(v) => set('pct_employee_pf', v)} />
-                  <Field label="ESI (% of Gross)" value={form.pct_esi} onChange={(v) => set('pct_esi', v)} />
-                  <Field label="Employer PF (% of Basic+Other)" value={form.pct_employer_pf} onChange={(v) => set('pct_employer_pf', v)} />
                   <Field label="Gratuity (% of Basic)" value={form.pct_gratuity} onChange={(v) => set('pct_gratuity', v)} />
-                  <Field label="Employer ESI (% of Gross)" value={form.pct_employer_esi} onChange={(v) => set('pct_employer_esi', v)} />
                 </div>
+                <p className="text-xs text-secondary mt-3">
+                  EPF, ESI and LWF rates are statutory — set state-wise in{' '}
+                  <a href="/setup/statutory-components" className="underline hover:text-foreground">Payroll → Statutory Components</a>{' '}
+                  and applied automatically to every payslip.
+                </p>
               </div>
 
               {/* Live breakdown */}
@@ -211,18 +222,18 @@ export default function SalaryStructurePage() {
                     <Row label="B. Variable Pay" value={b.pli} head />
                     <Row label="PLI" value={b.pli} sub />
                     <Row label="E. Deduction" value={b.totalDed} head />
-                    <Row label="Employee PF" value={b.empPf} sub note={`${form.pct_employee_pf}% of Basic+Other`} />
-                    <Row label="ESI" value={b.esi} sub note={`${form.pct_esi}% of Gross`} />
-                    <Row label="LWF" value={b.lwf} sub note="Fixed — per city" />
+                    <Row label="Employee PF" value={b.empPf} sub note={statutory?.epf?.enabled ? `${statutory.epf.employeeRatePct}% of Basic+Other` : 'EPF disabled'} />
+                    <Row label="ESI" value={b.esi} sub note={statutory?.esi?.enabled ? `${statutory.esi.employeeRatePct}% of Gross (≤ ₹${Number(statutory.esi.wageCeiling).toLocaleString('en-IN')})` : 'ESI disabled'} />
+                    <Row label="LWF" value={b.lwf} sub note="State-wise — Statutory Components" />
                     <Row label="Meal" value={b.meal} sub note="Manual" />
                     <Row label="Accommodation" value={b.accommodation} sub note="Manual" />
                     <Row label="Net In Hand (A+B−E)" value={b.net} strong highlight />
                     <Row label="C. Retirals (Employer)" value={b.retirals} head />
-                    <Row label="Employer PF" value={b.erPf} sub note={`${form.pct_employer_pf}% of Basic+Other`} />
+                    <Row label="Employer PF" value={b.erPf} sub note={statutory?.epf?.enabled ? `${statutory.epf.employerRatePct}% of Basic+Other` : 'EPF disabled'} />
                     <Row label="Gratuity" value={b.gratuity} sub note={`${form.pct_gratuity}% of Basic`} />
-                    <Row label="Employer LWF" value={b.empLwf} sub note="Fixed — per city" />
+                    <Row label="Employer LWF" value={b.empLwf} sub note="State-wise — Statutory Components" />
                     <Row label="D. Benefit" value={b.benefits} head />
-                    <Row label="Employer ESI / Medical" value={b.erEsi} sub note={`${form.pct_employer_esi}% of Gross`} />
+                    <Row label="Employer ESI / Medical" value={b.erEsi} sub note={statutory?.esi?.enabled ? `${statutory.esi.employerRatePct}% of Gross` : 'ESI disabled'} />
                     <Row label="Accommodation Allowance" value={b.accAllow} sub note="Tentative" />
                     <Row label="CTC (A+B+C+D)" value={b.ctc} strong highlight />
                   </tbody>

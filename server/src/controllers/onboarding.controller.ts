@@ -96,7 +96,7 @@ export async function downloadOfferLetterPdf(req: AuthRequest, res: Response, ne
     let salaryBreakdown = tpl.breakdown;
     if (!salaryBreakdown && letter.job_title_id) {
       const struct = await getStructureRow(letter.job_title_id);
-      if (struct) salaryBreakdown = breakdownForStructure(struct);
+      if (struct) salaryBreakdown = await breakdownForStructure(struct);
     }
 
     const pdfBuffer = await generateOfferLetterPdf({

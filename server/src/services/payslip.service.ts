@@ -5,6 +5,8 @@ import {
   type PayslipBreakdown, type SalaryInputs,
 } from './payslip.calc';
 import { getStructureRow, structureToInputs } from './salaryStructure.service';
+import { getStatutoryRates } from './statutory.service';
+import { getPaySchedule } from './paySchedule.service';
 import { notifyEmployee } from './notification.service';
 
 function num(v: any): number {
@@ -126,7 +128,7 @@ export async function getMonthlyBreakdown(employeeId: number): Promise<PayslipBr
   if (!setup && !designationStructure) return null;
 
   // Per-employee salary setup overrides amounts; the designation structure provides
-  // the configured percentages (and is the full source for new hires with no setup).
+  // the configured composition (and is the full source for new hires with no setup).
   let inputs: SalaryInputs;
   if (setup) {
     inputs = inputsFromSetup(setup);
@@ -134,7 +136,11 @@ export async function getMonthlyBreakdown(employeeId: number): Promise<PayslipBr
   } else {
     inputs = structureToInputs(designationStructure);
   }
-  return computePayslip(inputs);
+
+  // Statutory rates (EPF/ESI/LWF) come from the editable Statutory Components
+  // settings, resolved for the employee's city/state — never hardcoded.
+  const rates = await getStatutoryRates(inputs.city);
+  return computePayslip(inputs, rates);
 }
 
 export async function computeForEmployee(
@@ -148,6 +154,9 @@ export async function computeForEmployee(
     throw new AppError('Salary not configured for this employee or their designation. Please contact HR.', 422);
   }
 
+  // Pay date honours the Pay Schedule settings (last day vs fixed day of next month).
+  const schedule = await getPaySchedule();
+
   return {
     employee: {
       id: emp.id,
@@ -160,7 +169,7 @@ export async function computeForEmployee(
     month,
     year,
     monthLabel: `${monthName(month)} ${year}`,
-    payDate: payDateFor(month, year),
+    payDate: payDateFor(month, year, schedule),
     breakdown,
   };
 }

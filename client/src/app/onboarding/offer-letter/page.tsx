@@ -344,18 +344,15 @@ function LegacyOfferLetterPage() {
 
 // ─── Offer-letter editor: structure-prefilled, with base-salary adjustment ───
 
-const LWF_BY_CITY: Record<string, { employee: number; employer: number }> = {
-  Delhi: { employee: 0.75, employer: 2.25 }, Gurugram: { employee: 31, employer: 62 },
-  Haryana: { employee: 31, employer: 62 }, Noida: { employee: 0, employer: 0 },
-  Mumbai: { employee: 25, employer: 75 }, Maharashtra: { employee: 25, employer: 75 },
-  Bengaluru: { employee: 20, employer: 40 }, Karnataka: { employee: 20, employer: 40 },
-  Chandigarh: { employee: 5, employer: 20 },
-};
-
-// Mirrors server payslip.calc — recompute the breakdown from an adjusted monthly gross.
-function computeOfferBreakdown(inputs: any, gross: number) {
+// Mirrors server payslip.calc — recompute the breakdown from an adjusted monthly
+// gross. Statutory rates (EPF/ESI/LWF) come resolved from the server (`statutory`
+// on offer-defaults), so screen edits in Payroll → Statutory Components apply here too.
+function computeOfferBreakdown(inputs: any, gross: number, statutory: any) {
   const r = Math.round;
   const p = inputs?.pct || {};
+  const epf = statutory?.epf || {};
+  const esiCfg = statutory?.esi || {};
+  const lwfCfg = statutory?.lwf || {};
   const g = r(gross || 0);
   const basic = r(g * (Number(p.basic ?? 50) / 100));
   const hra = r(basic * (Number(p.hra ?? 50) / 100));
@@ -364,17 +361,22 @@ function computeOfferBreakdown(inputs: any, gross: number) {
   const meal = r(Number(inputs?.meal) || 0);
   const accommodation = r(Number(inputs?.accommodation) || 0);
   const accAllow = r(Number(inputs?.accommodation_allowance) || 0);
-  const cityLwf = LWF_BY_CITY[inputs?.city] || { employee: 20, employer: 40 };
-  const lwf = r(inputs?.lwf_employee ?? cityLwf.employee);
-  const empLwf = r(inputs?.lwf_employer ?? cityLwf.employer);
+  // LWF: employeePct% of gross capped at the state max (explicit override wins)
+  const lwfCalc = lwfCfg.enabled
+    ? Math.min(r((Number(lwfCfg.employeePct) || 0) / 100 * g), r(Number(lwfCfg.employeeMaxAmount) || 0))
+    : 0;
+  const lwf = r(inputs?.lwf_employee ?? lwfCalc);
+  const empLwf = r(inputs?.lwf_employer ?? (lwfCfg.enabled ? lwfCalc * (Number(lwfCfg.employerMultiplier) || 1) : 0));
   const pfBase = basic + other;
-  const empPf = r((Number(p.employee_pf ?? 12) / 100) * pfBase);
-  const esi = r((Number(p.esi ?? 0.75) / 100) * g);
+  const empPf = epf.enabled ? r((Number(epf.employeeRatePct) || 0) / 100 * pfBase) : 0;
+  const erPf = epf.enabled ? r((Number(epf.employerRatePct) || 0) / 100 * pfBase) : 0;
+  const ceiling = Number(esiCfg.wageCeiling) || 0;
+  const esiEligible = !!esiCfg.enabled && (ceiling <= 0 || g <= ceiling);
+  const esi = esiEligible ? Math.ceil((Number(esiCfg.employeeRatePct) || 0) / 100 * g) : 0;
+  const erEsi = esiEligible ? Math.ceil((Number(esiCfg.employerRatePct) || 0) / 100 * g) : 0;
   const totalDed = empPf + esi + lwf + meal + accommodation;
   const net = g + pli - totalDed;
-  const erPf = r((Number(p.employer_pf ?? 12) / 100) * pfBase);
   const gratuity = r((Number(p.gratuity ?? 4.81) / 100) * basic);
-  const erEsi = r((Number(p.employer_esi ?? 3.25) / 100) * g);
   const ctc = g + pli + (erPf + gratuity + empLwf) + (erEsi + accAllow);
   return { basic, hra, other, grossEarnings: g + pli, net, ctc, annualCtc: ctc * 12 };
 }
@@ -412,7 +414,7 @@ function EmployeeOfferEditor({ employeeId }: { employeeId: string }) {
 
   const baseGross = Number(def?.base_gross) || 0;
   const finalNum = Math.round(Number(finalBase) || 0);
-  const bd = def?.inputs ? computeOfferBreakdown(def.inputs, finalNum) : null;
+  const bd = def?.inputs ? computeOfferBreakdown(def.inputs, finalNum, def?.statutory) : null;
   // Manpower & Budget Control: offered monthly CTC cannot exceed the sanctioned band.
   const bandMax = def?.band_max ?? null;
   const overBand = bandMax != null && bd != null && bd.ctc > bandMax;

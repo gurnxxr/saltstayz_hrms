@@ -5,6 +5,7 @@ import { NotFoundError, ValidationError } from '../utils/errors';
 import { notifyEmployee, notifyRole } from './notification.service';
 import { getStructureRow, breakdownForStructure, getCtcRange, structureToInputs } from './salaryStructure.service';
 import { computePayslip } from './payslip.calc';
+import { getStatutoryRates } from './statutory.service';
 import { generateOfferLetterPdf } from './offerLetterPdf.service';
 import { createEmployeeFromCandidate } from './recruitment.service';
 import { getBandForEmployee } from './manpower.service';
@@ -314,7 +315,7 @@ export async function downloadCandidateOfferPdf(candidateId: number) {
   if (!c.offer_data) throw new ValidationError('Generate the offer letter first.');
 
   const struct = await getStructureRow(c.job_title_id);
-  const salaryBreakdown = struct ? breakdownForStructure(struct) : undefined;
+  const salaryBreakdown = struct ? await breakdownForStructure(struct) : undefined;
 
   const joiningDate = c.offer_data.joining_date
     ? new Date(c.offer_data.joining_date).toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' })
@@ -509,7 +510,8 @@ async function offerBreakdownFor(jobTitleId: number, baseGross?: number) {
   if (!struct) return null;
   const structGross = Math.round(Number(struct.gross) || 0);
   const gross = baseGross != null && baseGross > 0 ? Math.round(baseGross) : structGross;
-  const breakdown = computePayslip({ ...structureToInputs(struct), gross });
+  const rates = await getStatutoryRates(struct.city);
+  const breakdown = computePayslip({ ...structureToInputs(struct), gross }, rates);
   return { structGross, gross, breakdown, annual_ctc: Math.round(breakdown.ctc) * 12 };
 }
 
@@ -535,6 +537,8 @@ export async function getOfferDefaults(employeeId: number) {
     base_gross: struct ? Math.round(Number(struct.gross) || 0) : 0,
     ctc_label: range.label,
     inputs: struct ? structureToInputs(struct) : null,
+    // Resolved statutory rates so the client's live recompute matches the server.
+    statutory: struct ? await getStatutoryRates(struct.city) : null,
     already_issued: !!issued,
     // Sanctioned monthly-CTC band cap (null when no band is configured for this role/property).
     band_max: band.configured ? band.band_max : null,
