@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import { formatINR } from '@/lib/utils';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { ArrowLeft, FileText, Download, Eye, Loader2, Percent, IndianRupee, AlertTriangle } from 'lucide-react';
 
 export default function OfferLetterPage() {
@@ -343,43 +344,8 @@ function LegacyOfferLetterPage() {
 }
 
 // ─── Offer-letter editor: structure-prefilled, with base-salary adjustment ───
-
-// Mirrors server payslip.calc — recompute the breakdown from an adjusted monthly
-// gross. Statutory rates (EPF/ESI/LWF) come resolved from the server (`statutory`
-// on offer-defaults), so screen edits in Payroll → Statutory Components apply here too.
-function computeOfferBreakdown(inputs: any, gross: number, statutory: any) {
-  const r = Math.round;
-  const p = inputs?.pct || {};
-  const epf = statutory?.epf || {};
-  const esiCfg = statutory?.esi || {};
-  const lwfCfg = statutory?.lwf || {};
-  const g = r(gross || 0);
-  const basic = r(g * (Number(p.basic ?? 50) / 100));
-  const hra = r(basic * (Number(p.hra ?? 50) / 100));
-  const other = g - basic - hra;
-  const pli = r(Number(inputs?.pli) || 0);
-  const meal = r(Number(inputs?.meal) || 0);
-  const accommodation = r(Number(inputs?.accommodation) || 0);
-  const accAllow = r(Number(inputs?.accommodation_allowance) || 0);
-  // LWF: employeePct% of gross capped at the state max (explicit override wins)
-  const lwfCalc = lwfCfg.enabled
-    ? Math.min(r((Number(lwfCfg.employeePct) || 0) / 100 * g), r(Number(lwfCfg.employeeMaxAmount) || 0))
-    : 0;
-  const lwf = r(inputs?.lwf_employee ?? lwfCalc);
-  const empLwf = r(inputs?.lwf_employer ?? (lwfCfg.enabled ? lwfCalc * (Number(lwfCfg.employerMultiplier) || 1) : 0));
-  const pfBase = basic + other;
-  const empPf = epf.enabled ? r((Number(epf.employeeRatePct) || 0) / 100 * pfBase) : 0;
-  const erPf = epf.enabled ? r((Number(epf.employerRatePct) || 0) / 100 * pfBase) : 0;
-  const ceiling = Number(esiCfg.wageCeiling) || 0;
-  const esiEligible = !!esiCfg.enabled && (ceiling <= 0 || g <= ceiling);
-  const esi = esiEligible ? Math.ceil((Number(esiCfg.employeeRatePct) || 0) / 100 * g) : 0;
-  const erEsi = esiEligible ? Math.ceil((Number(esiCfg.employerRatePct) || 0) / 100 * g) : 0;
-  const totalDed = empPf + esi + lwf + meal + accommodation;
-  const net = g + pli - totalDed;
-  const gratuity = r((Number(p.gratuity ?? 4.81) / 100) * basic);
-  const ctc = g + pli + (erPf + gratuity + empLwf) + (erEsi + accAllow);
-  return { basic, hra, other, grossEarnings: g + pli, net, ctc, annualCtc: ctc * 12 };
-}
+// The breakdown is computed by the SERVER (component-based structure + live
+// statutory settings) via /offer-breakdown — no duplicated salary math here.
 
 function OfferRow({ label, value, strong }: { label: string; value: number; strong?: boolean }) {
   return (
@@ -414,7 +380,16 @@ function EmployeeOfferEditor({ employeeId }: { employeeId: string }) {
 
   const baseGross = Number(def?.base_gross) || 0;
   const finalNum = Math.round(Number(finalBase) || 0);
-  const bd = def?.inputs ? computeOfferBreakdown(def.inputs, finalNum, def?.statutory) : null;
+
+  // Server-computed live breakdown at the adjusted base (debounced while typing).
+  const debouncedBase = useDebouncedValue(finalNum, 350);
+  const { data: offerCalc } = useQuery({
+    queryKey: ['offer-breakdown', employeeId, debouncedBase],
+    queryFn: () => api.get(`/onboarding/employees/${employeeId}/offer-breakdown?base=${debouncedBase}`).then(r => r.data),
+    enabled: !!def?.configured && debouncedBase > 0,
+    placeholderData: (prev) => prev,
+  });
+  const bd = offerCalc?.breakdown ?? null;
   // Manpower & Budget Control: offered monthly CTC cannot exceed the sanctioned band.
   const bandMax = def?.band_max ?? null;
   const overBand = bandMax != null && bd != null && bd.ctc > bandMax;
@@ -522,14 +497,14 @@ function EmployeeOfferEditor({ employeeId }: { employeeId: string }) {
 
               {bd && (
                 <div className="bg-muted/40 rounded-lg p-4 text-sm space-y-1.5">
-                  <OfferRow label="Basic" value={bd.basic} />
-                  <OfferRow label="HRA" value={bd.hra} />
-                  <OfferRow label="Other Allowance" value={bd.other} />
-                  <OfferRow label="Gross Earnings" value={bd.grossEarnings} strong />
-                  <OfferRow label="Net In-Hand (approx.)" value={bd.net} />
+                  {(bd.earnings ?? []).map((l: any) => (
+                    <OfferRow key={l.name} label={l.name} value={l.amount} />
+                  ))}
+                  <OfferRow label="Gross Earnings" value={bd.gross_earnings} strong />
+                  <OfferRow label="Net In-Hand (approx.)" value={bd.net_pay} />
                   <div className="flex items-center justify-between pt-2 mt-1 border-t border-border">
                     <span className="font-semibold text-primary">Annual CTC (offer)</span>
-                    <span className="font-bold text-primary">{formatINR(bd.annualCtc)}</span>
+                    <span className="font-bold text-primary">{formatINR(offerCalc?.annual_ctc ?? 0)}</span>
                   </div>
                   {bandMax != null && (
                     <div className={`flex items-center justify-between pt-1.5 text-xs ${overBand ? 'text-red-600 font-medium' : 'text-secondary'}`}>

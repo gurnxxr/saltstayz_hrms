@@ -1,21 +1,40 @@
 import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../types';
-import * as svc from '../services/salaryStructure.service';
+import db from '../config/database';
+import * as service from '../services/salaryStructure.service';
 
 export async function list(_req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    res.json(await svc.listStructures());
-  } catch (err) { next(err); }
+  try { res.json(await service.listStructures()); } catch (err) { next(err); }
 }
 
 export async function get(req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    res.json(await svc.getStructure(Number(req.params.jobTitleId)));
-  } catch (err) { next(err); }
+  try { res.json(await service.getStructure(Number(req.params.id))); } catch (err) { next(err); }
 }
 
-export async function upsert(req: AuthRequest, res: Response, next: NextFunction) {
+export async function create(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.status(201).json(await service.createStructure(req.body, req.user?.userId ?? null)); } catch (err) { next(err); }
+}
+
+export async function update(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await service.updateStructure(Number(req.params.id), req.body, req.user?.userId ?? null)); } catch (err) { next(err); }
+}
+
+export async function remove(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await service.deleteStructure(Number(req.params.id))); } catch (err) { next(err); }
+}
+
+/** Live preview of a draft structure (unsaved lines) at a base. */
+export async function preview(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await service.previewStructure(req.body)); } catch (err) { next(err); }
+}
+
+/** Active catalog components for the structure builder's component picker. */
+export async function componentOptions(_req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    res.json(await svc.upsertStructure(Number(req.params.jobTitleId), req.body));
+    const rows = await db('salary_components')
+      .where('status', 'active')
+      .select('id', 'category', 'name', 'name_in_payslip')
+      .orderBy(['category', 'sort_order']);
+    res.json(rows);
   } catch (err) { next(err); }
 }

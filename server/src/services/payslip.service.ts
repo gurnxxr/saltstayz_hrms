@@ -1,11 +1,9 @@
 import db from '../config/database';
 import { AppError, NotFoundError, ValidationError } from '../utils/errors';
+import { payDateFor, monthName, type PayslipBreakdown } from './payslip.calc';
 import {
-  computePayslip, payDateFor, monthName,
-  type PayslipBreakdown, type SalaryInputs,
-} from './payslip.calc';
-import { getStructureRow, structureToInputs } from './salaryStructure.service';
-import { getStatutoryRates } from './statutory.service';
+  getAssignment, getStructureByJobTitle, getStructureRow, computeForStructure,
+} from './salaryStructure.service';
 import { getPaySchedule } from './paySchedule.service';
 import { notifyEmployee } from './notification.service';
 
@@ -38,66 +36,7 @@ async function employeeOrThrow(employeeId: number) {
   return emp;
 }
 
-// ─── Salary setup (inputs) ───
-
-export async function getSalarySetup(employeeId: number) {
-  return db('salary_setup').where('employee_id', employeeId).first();
-}
-
-export async function listSalarySetups() {
-  return db('employees as e')
-    .leftJoin('salary_setup as s', 's.employee_id', 'e.id')
-    .leftJoin('job_titles as j', 'j.id', 'e.job_title_id')
-    .where('e.is_active', true)
-    .select(
-      'e.id as employee_id', 'e.employee_code', 'e.first_name', 'e.last_name',
-      'e.dept_name', 'e.branch_name', 'j.title as designation_name',
-      's.gross', 's.city', 's.pli', 's.meal', 's.accommodation',
-      's.accommodation_allowance', 's.lwf_employee', 's.lwf_employer',
-    )
-    .orderBy('e.first_name');
-}
-
-export async function upsertSalarySetup(employeeId: number, data: any) {
-  await employeeOrThrow(employeeId);
-
-  const allowed = [
-    'gross', 'city', 'pli', 'meal', 'accommodation',
-    'accommodation_allowance', 'lwf_employee', 'lwf_employer', 'effective_from',
-  ];
-  const payload: any = {};
-  for (const key of allowed) {
-    if (data[key] !== undefined && data[key] !== '') payload[key] = data[key];
-  }
-  if (payload.gross === undefined) {
-    const existing = await db('salary_setup').where('employee_id', employeeId).first();
-    if (!existing) throw new ValidationError('Gross salary is required');
-  }
-
-  const existing = await db('salary_setup').where('employee_id', employeeId).first();
-  if (existing) {
-    await db('salary_setup').where('employee_id', employeeId)
-      .update({ ...payload, updated_at: db.fn.now() });
-  } else {
-    await db('salary_setup').insert({ employee_id: employeeId, ...payload });
-  }
-  return getSalarySetup(employeeId);
-}
-
 // ─── Computation ───
-
-function inputsFromSetup(setup: any): SalaryInputs {
-  return {
-    gross: num(setup.gross),
-    city: setup.city,
-    pli: num(setup.pli),
-    meal: num(setup.meal),
-    accommodation: num(setup.accommodation),
-    accommodation_allowance: num(setup.accommodation_allowance),
-    lwf_employee: setup.lwf_employee === null || setup.lwf_employee === undefined ? null : num(setup.lwf_employee),
-    lwf_employer: setup.lwf_employer === null || setup.lwf_employer === undefined ? null : num(setup.lwf_employer),
-  };
-}
 
 export interface ComputedPayslip {
   employee: {
@@ -121,26 +60,26 @@ export interface ComputedPayslip {
  * payslip generation and the offboarding Full & Final settlement.
  */
 export async function getMonthlyBreakdown(employeeId: number): Promise<PayslipBreakdown | null> {
-  const emp = await db('employees').where('id', employeeId).select('job_title_id').first();
-  const setup = await getSalarySetup(employeeId);
-  const designationStructure = emp?.job_title_id ? await getStructureRow(emp.job_title_id) : null;
-
-  if (!setup && !designationStructure) return null;
-
-  // Per-employee salary setup overrides amounts; the designation structure provides
-  // the configured composition (and is the full source for new hires with no setup).
-  let inputs: SalaryInputs;
-  if (setup) {
-    inputs = inputsFromSetup(setup);
-    if (designationStructure) inputs.pct = structureToInputs(designationStructure).pct;
+  // Explicit assignment wins; employees without one fall back to their
+  // designation's structure at its default base (new hires keep working).
+  const assignment = await getAssignment(employeeId);
+  let structure: any = null;
+  let base = 0;
+  if (assignment) {
+    structure = await getStructureRow(assignment.structure_id);
+    base = num(assignment.base);
   } else {
-    inputs = structureToInputs(designationStructure);
+    const emp = await db('employees').where('id', employeeId).select('job_title_id').first();
+    if (emp?.job_title_id) structure = await getStructureByJobTitle(emp.job_title_id);
+    base = structure ? num(structure.default_base) : 0;
+  }
+  if (!structure || base <= 0) return null;
+
+  if (structure.payment_basis === 'hourly') {
+    throw new AppError('This employee is on an hourly-rated structure — hourly payroll arrives with the payable-days engine (Phase 3).', 422);
   }
 
-  // Statutory rates (EPF/ESI/LWF) come from the editable Statutory Components
-  // settings, resolved for the employee's city/state — never hardcoded.
-  const rates = await getStatutoryRates(inputs.city);
-  return computePayslip(inputs, rates);
+  return computeForStructure(structure, base);
 }
 
 export async function computeForEmployee(
@@ -279,9 +218,10 @@ export async function listRuns() {
 }
 
 /**
- * Generates payslips for every active employee with a salary setup for the given
- * period. Creates/refreshes a draft payroll run. Employees without a salary setup
- * are skipped and reported back. Blocked once the run is locked.
+ * Generates payslips for every active employee whose salary is configured
+ * (a structure assignment, or a designation structure fallback) for the given
+ * period. Creates/refreshes a draft payroll run. Employees whose salary can't
+ * be resolved are skipped and reported back. Blocked once the run is locked.
  */
 export async function runPayroll(month: number, year: number, userId?: number | null) {
   assertValidPeriod(month, year);
@@ -297,22 +237,28 @@ export async function runPayroll(month: number, year: number, userId?: number | 
     run = await db('payroll_runs').where('id', id).first();
   }
 
-  const setups = await db('salary_setup as s')
-    .join('employees as e', 'e.id', 's.employee_id')
-    .where('e.is_active', true)
-    .pluck('s.employee_id');
-
-  const skipped = await db('employees as e')
-    .leftJoin('salary_setup as s', 's.employee_id', 'e.id')
-    .where('e.is_active', true)
-    .whereNull('s.id')
-    .select('e.employee_code', 'e.first_name', 'e.last_name');
+  const employees = await db('employees')
+    .where('is_active', true)
+    .select('id', 'employee_code', 'first_name', 'last_name')
+    .orderBy('first_name');
 
   let generated = 0;
   let totalNet = 0;
   let totalCtc = 0;
-  for (const employeeId of setups) {
-    const computed = await computeForEmployee(employeeId, month, year);
+  const skipped: Array<{ employee_code: string; name: string; reason: string }> = [];
+  for (const emp of employees) {
+    let breakdown: PayslipBreakdown | null = null;
+    let reason = 'No salary structure assigned';
+    try {
+      breakdown = await getMonthlyBreakdown(emp.id);
+    } catch (err: any) {
+      reason = err?.message || reason;
+    }
+    if (!breakdown) {
+      skipped.push({ employee_code: emp.employee_code, name: `${emp.first_name} ${emp.last_name}`, reason });
+      continue;
+    }
+    const computed = await computeForEmployee(emp.id, month, year);
     await writePayslipRecord(computed, run.id, userId);
     generated += 1;
     totalNet += computed.breakdown.net_pay;
@@ -332,10 +278,7 @@ export async function runPayroll(month: number, year: number, userId?: number | 
     month,
     year,
     generated,
-    skipped: skipped.map((s: any) => ({
-      employee_code: s.employee_code,
-      name: `${s.first_name} ${s.last_name}`,
-    })),
+    skipped,
     total_net: totalNet,
     total_ctc: totalCtc,
   };

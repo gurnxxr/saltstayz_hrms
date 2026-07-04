@@ -63,10 +63,14 @@ router.put('/users/:id', authorize('admin.users', 'update'), userCtrl.updateUser
 router.put('/users/:id/reset-password', authorize('admin.users', 'update'), userCtrl.resetPassword);
 router.delete('/users/:id', authorize('admin.users', 'delete'), userCtrl.deleteUser);
 
-// ─── Salary Structure per designation (admin only) ───
+// ─── Salary Structures v2 (component-based templates, admin only) ───
 router.get('/salary-structures', authorize('admin', 'read'), salaryStructureCtrl.list);
-router.get('/salary-structures/:jobTitleId', authorize('admin', 'read'), salaryStructureCtrl.get);
-router.put('/salary-structures/:jobTitleId', authorize('admin', 'update'), salaryStructureCtrl.upsert);
+router.get('/salary-structures/components', authorize('admin', 'read'), salaryStructureCtrl.componentOptions);
+router.post('/salary-structures/preview', authorize('admin', 'read'), salaryStructureCtrl.preview);
+router.get('/salary-structures/:id', authorize('admin', 'read'), salaryStructureCtrl.get);
+router.post('/salary-structures', authorize('admin', 'create'), salaryStructureCtrl.create);
+router.put('/salary-structures/:id', authorize('admin', 'update'), salaryStructureCtrl.update);
+router.delete('/salary-structures/:id', authorize('admin', 'delete'), salaryStructureCtrl.remove);
 
 // ─── Database backups (admin only) ───
 router.get('/backups', authorize('admin', 'read'), backupCtrl.list);

@@ -128,7 +128,7 @@ export default function PayrollRunsPage() {
               </div>
               {lastRun.skipped?.length > 0 && (
                 <p className="text-xs text-amber-600 mt-2">
-                  Skipped {lastRun.skipped.length} employee(s) without salary setup:{' '}
+                  Skipped {lastRun.skipped.length} employee(s) without a salary structure assignment:{' '}
                   {lastRun.skipped.slice(0, 5).map((s: any) => s.employee_code).join(', ')}
                   {lastRun.skipped.length > 5 ? '…' : ''}
                 </p>

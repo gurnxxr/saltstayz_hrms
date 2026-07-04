@@ -36,6 +36,7 @@ router.delete('/items/:itemId/document', authorize('onboarding', 'update'), ctrl
 // Offer letter issued after onboarding completes
 router.get('/offer-ready', authorize('onboarding', 'read'), ctrl.listOfferReady);
 router.get('/employees/:employeeId/offer-defaults', authorize('onboarding', 'read'), ctrl.getOfferDefaults);
+router.get('/employees/:employeeId/offer-breakdown', authorize('onboarding', 'read'), ctrl.getOfferBreakdown);
 router.post('/employees/:employeeId/offer-letter/preview', authorize('onboarding', 'create'), ctrl.previewEmployeeOfferLetter);
 router.post('/employees/:employeeId/offer-letter', authorize('onboarding', 'create'), ctrl.generateEmployeeOfferLetter);
 

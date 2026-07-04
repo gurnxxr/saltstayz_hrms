@@ -2,7 +2,7 @@ import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../types';
 import * as onboardingService from '../services/onboarding.service';
 import { generateOfferLetterPdf } from '../services/offerLetterPdf.service';
-import { getStructureRow, breakdownForStructure } from '../services/salaryStructure.service';
+import { getStructureByJobTitle, computeForStructure } from '../services/salaryStructure.service';
 
 export async function listChecklists(req: AuthRequest, res: Response, next: NextFunction) {
   try {
@@ -95,8 +95,8 @@ export async function downloadOfferLetterPdf(req: AuthRequest, res: Response, ne
     // base-salary adjustment); fall back to the live structure for legacy letters.
     let salaryBreakdown = tpl.breakdown;
     if (!salaryBreakdown && letter.job_title_id) {
-      const struct = await getStructureRow(letter.job_title_id);
-      if (struct) salaryBreakdown = await breakdownForStructure(struct);
+      const struct = await getStructureByJobTitle(letter.job_title_id);
+      if (struct) salaryBreakdown = await computeForStructure(struct, Number(struct.default_base) || 0);
     }
 
     const pdfBuffer = await generateOfferLetterPdf({
@@ -170,6 +170,14 @@ export async function listOfferReady(req: AuthRequest, res: Response, next: Next
 export async function getOfferDefaults(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     res.json(await onboardingService.getOfferDefaults(Number(req.params.employeeId)));
+  } catch (err) { next(err); }
+}
+
+/** Live server-computed offer breakdown at an adjusted base (editor preview). */
+export async function getOfferBreakdown(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const base = req.query.base != null ? Number(req.query.base) : undefined;
+    res.json(await onboardingService.getEmployeeOfferBreakdown(Number(req.params.employeeId), base));
   } catch (err) { next(err); }
 }
 

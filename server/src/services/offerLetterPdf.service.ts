@@ -1,5 +1,5 @@
 import PDFDocument from 'pdfkit';
-import type { PayslipBreakdown } from './payslip.calc';
+import { legacyBreakdownToLines, type PayslipBreakdown } from './payslip.calc';
 
 interface OfferLetterData {
   candidateName: string;
@@ -87,17 +87,16 @@ export function generateOfferLetterPdf(data: OfferLetterData): Promise<Buffer> {
     // ─── Compensation Structure (from the designation's salary structure) ───
     doc.y = boxY + boxHeight + 18;
     if (data.salaryBreakdown) {
-      const b = data.salaryBreakdown;
+      const b = legacyBreakdownToLines(data.salaryBreakdown);
       const inr = (n: number) => 'INR ' + Math.round(n).toLocaleString('en-IN');
       doc.fontSize(10).font('Helvetica-Bold').fillColor(darkColor).text('Compensation Structure (Monthly)', 60);
       doc.moveDown(0.4);
       const rows: [string, number, boolean?][] = [
-        ['Basic', b.basic], ['HRA', b.hra], ['Other Allowance', b.other_allowance],
-        ['PLI (Variable Pay)', b.pli],
-        ['Gross Earnings (A + B)', b.gross_earnings, true],
+        ...b.earnings.map((l): [string, number] => [l.name, l.amount]),
+        ['Gross Earnings', b.gross_earnings, true],
         ['Total Deductions', b.total_deduction],
         ['Net In-Hand (approx.)', b.net_pay, true],
-        ['Employer Contributions + Benefits', b.retirals + b.benefits],
+        ['Employer Contributions + Benefits', b.employer_pf + b.employer_esi + b.employer_lwf + b.employer_costs_total],
         ['Cost to Company (CTC)', b.ctc, true],
       ];
       let y = doc.y;

@@ -1,6 +1,7 @@
 import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../types';
 import * as payslip from '../services/payslip.service';
+import * as structures from '../services/salaryStructure.service';
 import { generatePayslipPdf } from '../services/payslipPdf.service';
 import { ValidationError } from '../utils/errors';
 import type { ComputedPayslip } from '../services/payslip.service';
@@ -42,7 +43,7 @@ async function sendPdf(res: Response, computed: ComputedPayslip & { id?: number 
 
 export async function getMySetup(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    res.json(await payslip.getSalarySetup(requireEmployeeId(req)) ?? null);
+    res.json(await structures.getAssignment(requireEmployeeId(req)) ?? null);
   } catch (err) { next(err); }
 }
 
@@ -89,23 +90,29 @@ export async function downloadMyHistoryPdf(req: AuthRequest, res: Response, next
   } catch (err) { next(err); }
 }
 
-// ─── HR / Finance / Admin ───
+// ─── HR / Finance / Admin: structure assignments ───
 
-export async function listSalarySetups(req: AuthRequest, res: Response, next: NextFunction) {
+export async function listAssignments(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    res.json(await payslip.listSalarySetups());
+    res.json(await structures.listAssignments());
   } catch (err) { next(err); }
 }
 
-export async function getSalarySetup(req: AuthRequest, res: Response, next: NextFunction) {
+export async function getAssignment(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    res.json(await payslip.getSalarySetup(Number(req.params.employeeId)) ?? null);
+    res.json(await structures.getAssignment(Number(req.params.employeeId)) ?? null);
   } catch (err) { next(err); }
 }
 
-export async function upsertSalarySetup(req: AuthRequest, res: Response, next: NextFunction) {
+export async function upsertAssignment(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    res.json(await payslip.upsertSalarySetup(Number(req.params.employeeId), req.body));
+    res.json(await structures.upsertAssignment(Number(req.params.employeeId), req.body, req.user?.userId ?? null));
+  } catch (err) { next(err); }
+}
+
+export async function removeAssignment(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json(await structures.removeAssignment(Number(req.params.employeeId)));
   } catch (err) { next(err); }
 }
 

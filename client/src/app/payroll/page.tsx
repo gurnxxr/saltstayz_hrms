@@ -146,20 +146,15 @@ export default function PayrollPage() {
               </div>
             </div>
 
-            {/* Earnings + Deductions */}
+            {/* Earnings + Deductions — component lines from the salary structure */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-px bg-border">
-              <Section title="Earnings" rows={[
-                ['Basic', b.basic],
-                ['HRA', b.hra],
-                ['Other Allowance', b.other_allowance],
-                ['PLI (Variable Pay)', b.pli],
-              ]} total={['Gross Earnings', b.gross_earnings]} />
+              <Section title="Earnings" rows={(b.earnings ?? []).map((l: any) => [l.name, l.amount] as [string, number])}
+                total={['Gross Earnings', b.gross_earnings]} />
               <Section title="Deductions" rows={[
-                ['Employee PF', b.employee_pf],
-                ['ESI', b.esi],
-                ['LWF', b.lwf],
-                ['Meal', b.meal],
-                ['Accommodation', b.accommodation],
+                ['Employee PF', b.employee_pf] as [string, number],
+                ['ESI', b.esi] as [string, number],
+                ['LWF', b.lwf] as [string, number],
+                ...(b.other_deductions ?? []).map((l: any) => [l.name, l.amount] as [string, number]),
               ]} total={['Total Deduction', b.total_deduction]} />
             </div>
 
@@ -178,17 +173,20 @@ export default function PayrollPage() {
             <div className="px-6 py-5 border-t border-border">
               <p className="text-sm font-semibold text-foreground mb-3">Cost to Company (CTC)</p>
               <div className="space-y-1.5 text-sm">
-                <CtcLine label="A + B  Gross Earnings" value={b.gross_earnings} bold />
-                <CtcLine label="C. Retirals (Employer Contributions)" value={b.retirals} bold />
+                <CtcLine label="Gross Earnings" value={b.gross_earnings} bold />
+                <CtcLine label="Employer Statutory Contributions" value={b.employer_pf + b.employer_esi + b.employer_lwf} bold />
                 <CtcLine label="Employer PF" value={b.employer_pf} indent />
-                <CtcLine label="Gratuity" value={b.gratuity} indent />
-                <CtcLine label="Employer LWF" value={b.employer_lwf} indent />
-                <CtcLine label="D. Benefits" value={b.benefits} bold />
                 <CtcLine label="Employer ESI / Medical Benefit" value={b.employer_esi} indent />
-                <CtcLine label="Accommodation Allowance" value={b.accommodation_allowance} indent />
+                <CtcLine label="Employer LWF" value={b.employer_lwf} indent />
+                {(b.employer_costs ?? []).length > 0 && (
+                  <CtcLine label="Employer Benefits" value={b.employer_costs_total} bold />
+                )}
+                {(b.employer_costs ?? []).map((l: any) => (
+                  <CtcLine key={l.name} label={l.name} value={l.amount} indent />
+                ))}
               </div>
               <div className="mt-3 pt-3 border-t border-border flex items-center justify-between">
-                <p className="text-sm font-bold text-primary">Total CTC (A + B + C + D)</p>
+                <p className="text-sm font-bold text-primary">Total CTC</p>
                 <p className="text-lg font-bold text-primary">{formatINR(b.ctc)}</p>
               </div>
             </div>

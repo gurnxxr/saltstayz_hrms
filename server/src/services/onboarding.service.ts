@@ -3,9 +3,7 @@ import path from 'path';
 import db from '../config/database';
 import { NotFoundError, ValidationError } from '../utils/errors';
 import { notifyEmployee, notifyRole } from './notification.service';
-import { getStructureRow, breakdownForStructure, getCtcRange, structureToInputs } from './salaryStructure.service';
-import { computePayslip } from './payslip.calc';
-import { getStatutoryRates } from './statutory.service';
+import { getStructureByJobTitle, computeForStructure, getCtcRange } from './salaryStructure.service';
 import { generateOfferLetterPdf } from './offerLetterPdf.service';
 import { createEmployeeFromCandidate } from './recruitment.service';
 import { getBandForEmployee } from './manpower.service';
@@ -314,8 +312,8 @@ export async function downloadCandidateOfferPdf(candidateId: number) {
   const c = await getOfferCandidate(candidateId);
   if (!c.offer_data) throw new ValidationError('Generate the offer letter first.');
 
-  const struct = await getStructureRow(c.job_title_id);
-  const salaryBreakdown = struct ? await breakdownForStructure(struct) : undefined;
+  const struct = await getStructureByJobTitle(c.job_title_id);
+  const salaryBreakdown = struct ? await computeForStructure(struct, Number(struct.default_base) || 0) : undefined;
 
   const joiningDate = c.offer_data.joining_date
     ? new Date(c.offer_data.joining_date).toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' })
@@ -506,13 +504,20 @@ export async function listOfferReadyEmployees() {
 
 /** Recompute the full breakdown for a designation at an (optionally adjusted) monthly gross. */
 async function offerBreakdownFor(jobTitleId: number, baseGross?: number) {
-  const struct = await getStructureRow(jobTitleId);
+  const struct = await getStructureByJobTitle(jobTitleId);
   if (!struct) return null;
-  const structGross = Math.round(Number(struct.gross) || 0);
+  const structGross = Math.round(Number(struct.default_base) || 0);
   const gross = baseGross != null && baseGross > 0 ? Math.round(baseGross) : structGross;
-  const rates = await getStatutoryRates(struct.city);
-  const breakdown = computePayslip({ ...structureToInputs(struct), gross }, rates);
+  const breakdown = await computeForStructure(struct, gross);
   return { structGross, gross, breakdown, annual_ctc: Math.round(breakdown.ctc) * 12 };
+}
+
+/** Live offer preview for the editor: breakdown for an employee's designation at a base. */
+export async function getEmployeeOfferBreakdown(employeeId: number, baseGross?: number) {
+  const emp = await db('employees').where('id', employeeId).select('job_title_id').first();
+  if (!emp) throw new NotFoundError('Employee');
+  if (!emp.job_title_id) return null;
+  return offerBreakdownFor(emp.job_title_id, baseGross);
 }
 
 /** Editor prefill: designation, joining date, structure base + calc inputs for live recompute. */
@@ -523,7 +528,7 @@ export async function getOfferDefaults(employeeId: number) {
     .select('e.id', 'e.first_name', 'e.last_name', 'e.employee_code', 'e.job_title_id', 'e.date_of_joining', 'jt.title as designation')
     .first();
   if (!emp) throw new NotFoundError('Employee');
-  const struct = await getStructureRow(emp.job_title_id);
+  const struct = emp.job_title_id ? await getStructureByJobTitle(emp.job_title_id) : null;
   const range = await getCtcRange(emp.job_title_id);
   const issued = await db('offer_letters').where('employee_id', employeeId).first();
   const band = await getBandForEmployee(employeeId);
@@ -534,11 +539,8 @@ export async function getOfferDefaults(employeeId: number) {
     designation: emp.designation || 'Position',
     joining_date: emp.date_of_joining || null,
     configured: !!struct,
-    base_gross: struct ? Math.round(Number(struct.gross) || 0) : 0,
+    base_gross: struct ? Math.round(Number(struct.default_base) || 0) : 0,
     ctc_label: range.label,
-    inputs: struct ? structureToInputs(struct) : null,
-    // Resolved statutory rates so the client's live recompute matches the server.
-    statutory: struct ? await getStatutoryRates(struct.city) : null,
     already_issued: !!issued,
     // Sanctioned monthly-CTC band cap (null when no band is configured for this role/property).
     band_max: band.configured ? band.band_max : null,

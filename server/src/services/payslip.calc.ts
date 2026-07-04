@@ -1,47 +1,26 @@
 /**
  * Payslip computation engine (pure — no DB access).
  *
- * All amounts are monthly and rounded to the nearest rupee (ESI rounds UP, per
- * statute). The salary COMPOSITION (Basic/HRA split, gratuity) comes from the
- * designation structure; all STATUTORY rates (EPF, ESI, LWF) are injected via
- * `StatutoryRates`, resolved from the editable Statutory Components settings —
- * never hardcoded here.
+ * Phase 2: component-based. A salary structure is a list of catalog-component
+ * lines; each line's value rule is one of:
+ *   flat          — a fixed monthly amount
+ *   pct_of_base   — % of the employee's assigned base (monthly gross)
+ *   pct_of_basic  — % of the computed Basic line
+ *   remainder     — base minus every other FIXED earning (keeps earnings == base)
  *
- *   A. Fixed Salary (= Gross)
- *      Basic            = pct.basic% of Gross
- *      HRA              = pct.hra% of Basic
- *      Other Allowance  = Gross - Basic - HRA   (the remainder)
- *   B. Variable Pay
- *      PLI              = manual
- *   E. Deductions
- *      Employee PF      = epf.employeeRatePct% of (Basic + Other Allowance), if enabled
- *      ESI              = esi.employeeRatePct% of Gross, if enabled and Gross ≤ wage ceiling
- *      LWF              = employeePct% of Gross capped at employeeMaxAmount, if enabled
- *      Meal             = manual
- *      Accommodation    = manual
- *   Net In Hand        = A + B - E
- *   C. Retirals (employer)
- *      Employer PF      = epf.employerRatePct% of (Basic + Other Allowance)
- *      Gratuity         = pct.gratuity% of Basic
- *      Employer LWF     = employee LWF × employerMultiplier
- *   D. Benefits
- *      Employer ESI     = esi.employerRatePct% of Gross (same eligibility)
- *      Accommodation Allowance = tentative cost (manual)
- *   CTC                = A + B + C + D
+ * The component's catalog config decides behaviour:
+ *   category      — earning | deduction | benefit (employer cost) | reimbursement
+ *   earningType   — fixed (part of gross) | variable (paid on top, e.g. PLI)
+ *   considerEpf   — 'always' | 'if_below_15000' | 'no'  → PF wage base
+ *   considerEsi   — boolean                              → ESI wage base
+ *
+ * STATUTORY deductions (EPF, ESI, LWF) are computed by the engine from the
+ * injected `StatutoryRates` (Payroll → Statutory Components) — never hardcoded.
+ * All amounts are monthly, rounded to the nearest rupee (ESI rounds UP per statute).
  */
 
 const round = (n: number) => Math.round(n);
 const ceil = (n: number) => Math.ceil(n);
-
-// ─── Composition percentages (per designation structure) ───
-
-export interface SalaryPercentages {
-  basic: number;    // % of Gross
-  hra: number;      // % of Basic
-  gratuity: number; // % of Basic (employer retiral)
-}
-
-export const DEFAULT_COMPOSITION: SalaryPercentages = { basic: 50, hra: 50, gratuity: 4.81 };
 
 // ─── Statutory rates (resolved from statutory_settings — see statutory.service) ───
 
@@ -51,109 +30,169 @@ export interface StatutoryRates {
   lwf: { enabled: boolean; employeePct: number; employeeMaxAmount: number; employerMultiplier: number };
 }
 
-export interface SalaryInputs {
-  gross: number;
-  city?: string | null;
-  pli?: number;
-  meal?: number;
-  accommodation?: number;
-  accommodation_allowance?: number;
-  lwf_employee?: number | null;  // explicit per-employee/structure override
-  lwf_employer?: number | null;
-  pct?: Partial<SalaryPercentages>;
+// ─── Structure lines (resolved from salary_structure_components + catalog) ───
+
+export type LineCalcType = 'flat' | 'pct_of_base' | 'pct_of_basic' | 'remainder';
+
+export interface StructureLineInput {
+  component_id: number;
+  name: string; // name_in_payslip
+  category: 'earning' | 'deduction' | 'benefit' | 'reimbursement';
+  calculation_type: LineCalcType;
+  value: number;
+  earning_type?: 'fixed' | 'variable';
+  consider_epf?: 'no' | 'always' | 'if_below_15000';
+  consider_esi?: boolean;
+}
+
+export interface PayslipLine {
+  component_id: number | null;
+  name: string;
+  amount: number;
 }
 
 export interface PayslipBreakdown {
-  // A. Fixed salary
-  basic: number;
-  hra: number;
-  other_allowance: number;
-  fixed_salary: number; // A
-  // B. Variable
-  pli: number; // B
-  gross_earnings: number; // A + B
-  // E. Deductions
+  // Component lines
+  earnings: PayslipLine[];         // fixed + variable earnings
+  other_deductions: PayslipLine[]; // component deductions (meal, accommodation, …)
+  employer_costs: PayslipLine[];   // benefit lines (gratuity provision, accom. allowance, …)
+  reimbursements: PayslipLine[];   // paid with salary, outside gross
+  // Anchors + totals
+  basic: number;          // the Basic line (statutory & F&F anchor)
+  fixed_salary: number;   // Σ fixed earnings (== base for monthly structures)
+  variable_pay: number;   // Σ variable earnings
+  gross_earnings: number; // fixed + variable
+  // Statutory employee deductions
   employee_pf: number;
   esi: number;
   lwf: number;
-  meal: number;
-  accommodation: number;
-  total_deduction: number; // E
-  // Net
-  net_pay: number; // A + B - E
-  // C. Retirals
+  total_deduction: number; // statutory + other_deductions
+  net_pay: number;         // gross − deductions + reimbursements
+  // Employer side
   employer_pf: number;
-  gratuity: number;
-  employer_lwf: number;
-  retirals: number; // C
-  // D. Benefits
   employer_esi: number;
-  accommodation_allowance: number;
-  benefits: number; // D
-  // Total
-  ctc: number; // A + B + C + D
+  employer_lwf: number;
+  employer_costs_total: number; // Σ employer_costs lines
+  ctc: number;                  // gross + employer statutory + employer costs + reimbursements
 }
 
-export function computePayslip(input: SalaryInputs, statutory: StatutoryRates): PayslipBreakdown {
-  const p: SalaryPercentages = { ...DEFAULT_COMPOSITION, ...(input.pct || {}) };
-  const gross = round(input.gross || 0);
-  const pli = round(input.pli || 0);
-  const meal = round(input.meal || 0);
-  const accommodation = round(input.accommodation || 0);
-  const accommodationAllowance = round(input.accommodation_allowance || 0);
+/**
+ * Computes a monthly payslip from resolved structure lines at the assigned base.
+ */
+export function computeFromStructure(
+  lines: StructureLineInput[],
+  base: number,
+  statutory: StatutoryRates,
+): PayslipBreakdown {
+  const b = round(base || 0);
 
-  // A. Fixed Salary
-  const basic = round(gross * (p.basic / 100));
-  const hra = round(basic * (p.hra / 100));
-  const other_allowance = gross - basic - hra; // remainder keeps A == gross exactly
-  const fixed_salary = gross;
+  // ── Pass 1: flat + pct_of_base amounts; find Basic ──
+  const amounts = new Map<StructureLineInput, number>();
+  for (const line of lines) {
+    if (line.calculation_type === 'flat') amounts.set(line, round(line.value));
+    else if (line.calculation_type === 'pct_of_base') amounts.set(line, round((line.value / 100) * b));
+  }
+  const basicLine = lines.find((l) => l.category === 'earning' && l.calculation_type === 'pct_of_base' && /basic/i.test(l.name))
+    ?? lines.find((l) => l.category === 'earning' && l.calculation_type === 'pct_of_base');
+  const basic = basicLine ? (amounts.get(basicLine) ?? 0) : 0;
 
-  // B. Variable Pay
-  const gross_earnings = fixed_salary + pli;
+  // ── Pass 2: pct_of_basic ──
+  for (const line of lines) {
+    if (line.calculation_type === 'pct_of_basic') amounts.set(line, round((line.value / 100) * basic));
+  }
 
-  // LWF — % of gross capped at the state max (explicit override wins)
-  const lwfCfg = statutory.lwf;
-  const lwfCalc = lwfCfg.enabled
-    ? Math.min(round((lwfCfg.employeePct / 100) * gross), round(lwfCfg.employeeMaxAmount))
-    : 0;
-  const lwf = round(input.lwf_employee ?? lwfCalc);
-  const employer_lwf = round(input.lwf_employer ?? (lwfCfg.enabled ? lwfCalc * lwfCfg.employerMultiplier : 0));
+  // ── Pass 3: remainder (earnings only) — base minus every other FIXED earning ──
+  const isFixedEarning = (l: StructureLineInput) => l.category === 'earning' && (l.earning_type ?? 'fixed') === 'fixed';
+  for (const line of lines) {
+    if (line.calculation_type !== 'remainder') continue;
+    const others = lines
+      .filter((l) => l !== line && isFixedEarning(l) && l.calculation_type !== 'remainder')
+      .reduce((sum, l) => sum + (amounts.get(l) ?? 0), 0);
+    amounts.set(line, Math.max(0, b - others));
+  }
 
-  // EPF — on PF wages (Basic + Other Allowance)
-  const pfBase = basic + other_allowance;
+  const toLine = (l: StructureLineInput): PayslipLine => ({
+    component_id: l.component_id, name: l.name, amount: amounts.get(l) ?? 0,
+  });
+
+  const earningLines = lines.filter((l) => l.category === 'earning');
+  const earnings = earningLines.map(toLine);
+  const other_deductions = lines.filter((l) => l.category === 'deduction').map(toLine);
+  const employer_costs = lines.filter((l) => l.category === 'benefit').map(toLine);
+  const reimbursements = lines.filter((l) => l.category === 'reimbursement').map(toLine);
+
+  const fixed_salary = earningLines.filter(isFixedEarning).reduce((s, l) => s + (amounts.get(l) ?? 0), 0);
+  const variable_pay = earningLines.filter((l) => !isFixedEarning(l)).reduce((s, l) => s + (amounts.get(l) ?? 0), 0);
+  const gross_earnings = fixed_salary + variable_pay;
+
+  // ── Statutory bases from component applicability flags ──
+  const pfBase = earningLines.reduce((sum, l) => {
+    const flag = l.consider_epf ?? 'no';
+    const include = flag === 'always' || (flag === 'if_below_15000' && fixed_salary <= 15000);
+    return include ? sum + (amounts.get(l) ?? 0) : sum;
+  }, 0);
+  const esiBase = earningLines.reduce((sum, l) => (l.consider_esi ? sum + (amounts.get(l) ?? 0) : sum), 0);
+
+  // EPF
   const employee_pf = statutory.epf.enabled ? round((statutory.epf.employeeRatePct / 100) * pfBase) : 0;
   const employer_pf = statutory.epf.enabled ? round((statutory.epf.employerRatePct / 100) * pfBase) : 0;
 
-  // ESI — only while gross is within the wage ceiling; contributions round UP per statute
+  // ESI — only while wages are within the ceiling; contributions round UP per statute
   const esiEligible = statutory.esi.enabled
-    && (statutory.esi.wageCeiling <= 0 || gross <= statutory.esi.wageCeiling);
-  const esi = esiEligible ? ceil((statutory.esi.employeeRatePct / 100) * gross) : 0;
-  const employer_esi = esiEligible ? ceil((statutory.esi.employerRatePct / 100) * gross) : 0;
+    && (statutory.esi.wageCeiling <= 0 || esiBase <= statutory.esi.wageCeiling);
+  const esi = esiEligible ? ceil((statutory.esi.employeeRatePct / 100) * esiBase) : 0;
+  const employer_esi = esiEligible ? ceil((statutory.esi.employerRatePct / 100) * esiBase) : 0;
 
-  // E. Deductions
-  const total_deduction = employee_pf + esi + lwf + meal + accommodation;
+  // LWF — % of fixed gross capped at the state max
+  const lwfCfg = statutory.lwf;
+  const lwf = lwfCfg.enabled
+    ? Math.min(round((lwfCfg.employeePct / 100) * fixed_salary), round(lwfCfg.employeeMaxAmount))
+    : 0;
+  const employer_lwf = lwfCfg.enabled ? round(lwf * lwfCfg.employerMultiplier) : 0;
 
-  // Net In Hand (A + B - E)
-  const net_pay = fixed_salary + pli - total_deduction;
+  const otherDeductionTotal = other_deductions.reduce((s, l) => s + l.amount, 0);
+  const reimbursementTotal = reimbursements.reduce((s, l) => s + l.amount, 0);
+  const employer_costs_total = employer_costs.reduce((s, l) => s + l.amount, 0);
 
-  // C. Retirals (employer contributions)
-  const gratuity = round((p.gratuity / 100) * basic);
-  const retirals = employer_pf + gratuity + employer_lwf;
-
-  // D. Benefits
-  const benefits = employer_esi + accommodationAllowance;
-
-  // CTC (A + B + C + D)
-  const ctc = fixed_salary + pli + retirals + benefits;
+  const total_deduction = employee_pf + esi + lwf + otherDeductionTotal;
+  const net_pay = gross_earnings - total_deduction + reimbursementTotal;
+  const ctc = gross_earnings + employer_pf + employer_esi + employer_lwf + employer_costs_total + reimbursementTotal;
 
   return {
-    basic, hra, other_allowance, fixed_salary,
-    pli, gross_earnings,
-    employee_pf, esi, lwf, meal, accommodation, total_deduction,
-    net_pay,
-    employer_pf, gratuity, employer_lwf, retirals,
-    employer_esi, accommodation_allowance: accommodationAllowance, benefits,
-    ctc,
+    earnings, other_deductions, employer_costs, reimbursements,
+    basic, fixed_salary, variable_pay, gross_earnings,
+    employee_pf, esi, lwf, total_deduction, net_pay,
+    employer_pf, employer_esi, employer_lwf, employer_costs_total, ctc,
+  };
+}
+
+/**
+ * Adapts a legacy (pre-Phase-2) breakdown snapshot to the lines shape so old
+ * stored payslips keep rendering (PDF re-downloads).
+ */
+export function legacyBreakdownToLines(old: any): PayslipBreakdown {
+  if (old && Array.isArray(old.earnings)) return old as PayslipBreakdown; // already v2
+  const n = (v: any) => Number(v) || 0;
+  const line = (name: string, amount: number): PayslipLine => ({ component_id: null, name, amount });
+  const earnings: PayslipLine[] = [
+    line('Basic', n(old?.basic)), line('HRA', n(old?.hra)), line('Other Allowance', n(old?.other_allowance)),
+  ];
+  if (n(old?.pli) > 0) earnings.push(line('PLI (Variable Pay)', n(old?.pli)));
+  const other_deductions: PayslipLine[] = [];
+  if (n(old?.meal) > 0) other_deductions.push(line('Meal', n(old?.meal)));
+  if (n(old?.accommodation) > 0) other_deductions.push(line('Accommodation', n(old?.accommodation)));
+  const employer_costs: PayslipLine[] = [];
+  if (n(old?.gratuity) > 0) employer_costs.push(line('Gratuity', n(old?.gratuity)));
+  if (n(old?.accommodation_allowance) > 0) employer_costs.push(line('Accommodation Allowance', n(old?.accommodation_allowance)));
+  return {
+    earnings, other_deductions, employer_costs, reimbursements: [],
+    basic: n(old?.basic), fixed_salary: n(old?.fixed_salary), variable_pay: n(old?.pli),
+    gross_earnings: n(old?.gross_earnings),
+    employee_pf: n(old?.employee_pf), esi: n(old?.esi), lwf: n(old?.lwf),
+    total_deduction: n(old?.total_deduction), net_pay: n(old?.net_pay),
+    employer_pf: n(old?.employer_pf), employer_esi: n(old?.employer_esi), employer_lwf: n(old?.employer_lwf),
+    employer_costs_total: n(old?.gratuity) + n(old?.accommodation_allowance),
+    ctc: n(old?.ctc),
   };
 }
 

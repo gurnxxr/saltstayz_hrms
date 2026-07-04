@@ -1,5 +1,5 @@
 import PDFDocument from 'pdfkit';
-import type { PayslipBreakdown } from './payslip.calc';
+import { legacyBreakdownToLines, type PayslipBreakdown } from './payslip.calc';
 
 export interface PayslipPdfData {
   employeeName: string;
@@ -9,7 +9,7 @@ export interface PayslipPdfData {
   branch: string;
   monthLabel: string;   // e.g. "June 2026"
   payDate: string;      // formatted
-  breakdown: PayslipBreakdown;
+  breakdown: PayslipBreakdown; // v2 lines shape, or a legacy snapshot (adapted below)
 }
 
 const BRAND = '#2563eb';
@@ -29,7 +29,8 @@ export function generatePayslipPdf(data: PayslipPdfData): Promise<Buffer> {
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
-    const b = data.breakdown;
+    // Old stored snapshots (pre component-based structures) are adapted to lines.
+    const b = legacyBreakdownToLines(data.breakdown);
     const pageLeft = 50;
     const pageRight = doc.page.width - 50;
     const contentW = pageRight - pageLeft;
@@ -98,28 +99,22 @@ export function generatePayslipPdf(data: PayslipPdfData): Promise<Buffer> {
       return yy + 22;
     };
 
-    // Earnings
+    // Earnings — every component line from the employee's salary structure
     tableHeader('EARNINGS', leftX, y);
     let ly = rows(
-      [
-        ['Basic', b.basic],
-        ['HRA', b.hra],
-        ['Other Allowance', b.other_allowance],
-        ['PLI (Variable Pay)', b.pli],
-      ],
+      b.earnings.map((l): [string, number] => [l.name, l.amount]),
       leftX, y + 22,
     );
     ly = totalRow('Gross Earnings', b.gross_earnings, leftX, ly);
 
-    // Deductions
+    // Deductions — statutory first, then structure deduction lines
     tableHeader('DEDUCTIONS', rightX, y);
     let ry = rows(
       [
         ['Employee PF', b.employee_pf],
         ['ESI', b.esi],
         ['LWF', b.lwf],
-        ['Meal', b.meal],
-        ['Accommodation', b.accommodation],
+        ...b.other_deductions.map((l): [string, number] => [l.name, l.amount]),
       ],
       rightX, y + 22,
     );
@@ -152,19 +147,20 @@ export function generatePayslipPdf(data: PayslipPdfData): Promise<Buffer> {
       y += 17;
     };
 
-    ctcRow('A + B  Gross Earnings', b.gross_earnings, false, true);
-    ctcRow('C. Retirals (Employer Contributions)', b.retirals, false, true);
+    ctcRow('Gross Earnings', b.gross_earnings, false, true);
+    ctcRow('Employer Statutory Contributions', b.employer_pf + b.employer_esi + b.employer_lwf, false, true);
     ctcRow('Employer PF', b.employer_pf, true);
-    ctcRow('Gratuity', b.gratuity, true);
-    ctcRow('Employer LWF', b.employer_lwf, true);
-    ctcRow('D. Benefits', b.benefits, false, true);
     ctcRow('Employer ESI / Medical Benefit', b.employer_esi, true);
-    ctcRow('Accommodation Allowance', b.accommodation_allowance, true);
+    ctcRow('Employer LWF', b.employer_lwf, true);
+    if (b.employer_costs.length > 0) {
+      ctcRow('Employer Benefits', b.employer_costs_total, false, true);
+      for (const l of b.employer_costs) ctcRow(l.name, l.amount, true);
+    }
 
     y += 4;
     doc.roundedRect(pageLeft, y, contentW, 30, 6).fill('#eef2ff');
     doc.fontSize(11).font('Helvetica-Bold').fillColor(BRAND)
-      .text('Total CTC (A + B + C + D)', pageLeft + 16, y + 9);
+      .text('Total CTC', pageLeft + 16, y + 9);
     doc.fontSize(12).font('Helvetica-Bold').fillColor(BRAND)
       .text(inr(b.ctc), pageRight - 160, y + 8, { width: 144, align: 'right' });
 
