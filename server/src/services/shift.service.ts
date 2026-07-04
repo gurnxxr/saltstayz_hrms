@@ -3,25 +3,89 @@ import { NotFoundError, ValidationError } from '../utils/errors';
 
 // ─── Shift Types (organization-wide) ───
 
+export const ROSTER_COLORS = ['Blue', 'Cyan', 'Fuchsia', 'Green', 'Lime', 'Orange', 'Pink', 'Red', 'Violet', 'Yellow'] as const;
+const DETERMINE_OPTS = ['alternating', 'log_type'];
+const WORKING_HOURS_OPTS = ['first_last', 'every_valid'];
+const SHIFT_TYPE_BOOL_COLS = [
+  'is_active', 'enable_auto_attendance', 'mark_auto_attendance_on_holidays',
+  'auto_update_last_sync', 'enable_late_entry_marking', 'enable_early_exit_marking', 'allow_overtime',
+];
+
+const toBool = (v: any) => v === true || v === 1 || v === '1' || v === 'true';
+
+// SQLite stores booleans as 0/1 — hand the client real booleans for form hydration.
+function mapShiftType(row: any) {
+  if (!row) return row;
+  const out: any = { ...row };
+  for (const c of SHIFT_TYPE_BOOL_COLS) {
+    if (c in out && out[c] !== null && out[c] !== undefined) out[c] = !!out[c];
+  }
+  return out;
+}
+
+// Pull only the config columns present in `data`, coercing/validating each. Used by
+// both create (spread over the row) and update (partial set), so keys absent from the
+// payload keep their existing/default value.
+function collectShiftTypeConfig(data: any): Record<string, any> {
+  const out: Record<string, any> = {};
+  const setBool = (k: string) => { if (k in data) out[k] = toBool(data[k]); };
+  const setInt = (k: string) => { if (k in data) { const n = Math.trunc(Number(data[k])); out[k] = Number.isFinite(n) && n >= 0 ? n : 0; } };
+  const setNum = (k: string) => { if (k in data) { const n = Number(data[k]); out[k] = Number.isFinite(n) && n >= 0 ? n : 0; } };
+
+  setBool('enable_auto_attendance');
+  setBool('mark_auto_attendance_on_holidays');
+  setBool('auto_update_last_sync');
+  setBool('enable_late_entry_marking');
+  setBool('enable_early_exit_marking');
+  setBool('allow_overtime');
+
+  setInt('begin_checkin_before_mins');
+  setInt('allow_checkout_after_mins');
+  setInt('late_entry_grace_period');
+  setInt('early_exit_grace_period');
+
+  setNum('half_day_threshold');
+  setNum('absent_threshold');
+
+  if ('roster_color' in data) out.roster_color = (ROSTER_COLORS as readonly string[]).includes(data.roster_color) ? data.roster_color : 'Blue';
+  if ('determine_checkin_checkout' in data) out.determine_checkin_checkout = DETERMINE_OPTS.includes(data.determine_checkin_checkout) ? data.determine_checkin_checkout : 'alternating';
+  if ('working_hours_calculation' in data) out.working_hours_calculation = WORKING_HOURS_OPTS.includes(data.working_hours_calculation) ? data.working_hours_calculation : 'first_last';
+  if ('holiday_region_id' in data) out.holiday_region_id = data.holiday_region_id ? Number(data.holiday_region_id) : null;
+  if ('overtime_type' in data) out.overtime_type = data.overtime_type ? String(data.overtime_type).trim() : null;
+  if ('process_attendance_after' in data) out.process_attendance_after = data.process_attendance_after || null;
+  if ('last_sync_of_checkin' in data) out.last_sync_of_checkin = data.last_sync_of_checkin || null;
+
+  return out;
+}
+
 export async function listShiftTypes() {
-  return db('shift_types').select('*').orderBy('start_time');
+  const rows = await db('shift_types').select('*').orderBy('start_time');
+  return rows.map(mapShiftType);
 }
 
 export async function getShiftType(id: number) {
   const row = await db('shift_types').where('id', id).first();
   if (!row) throw new NotFoundError('Shift type');
-  return row;
+  return mapShiftType(row);
 }
 
-export async function createShiftType(data: {
-  name: string;
-  start_time: string;
-  end_time: string;
-}) {
+// Holiday lists are modelled as regions (each region groups a property's holidays).
+export async function listHolidayLists() {
+  return db('regions').select('id', 'name').orderBy('name');
+}
+
+export async function createShiftType(data: any) {
   const name = data.name?.trim();
   if (!name) throw new ValidationError('Shift name is required');
+  if (!data.start_time) throw new ValidationError('Start time is required');
+  if (!data.end_time) throw new ValidationError('End time is required');
   const dup = await db('shift_types').whereRaw('lower(name) = lower(?)', [name]).first();
   if (dup) throw new ValidationError('A shift type with this name already exists');
+
+  const config = collectShiftTypeConfig(data);
+  if (config.allow_overtime && !config.overtime_type) {
+    throw new ValidationError('Overtime Type is required when overtime is allowed');
+  }
 
   // property_id is a vestigial NOT NULL column — set it to any existing property.
   const anyProperty = await db('properties').select('id').first();
@@ -30,18 +94,172 @@ export async function createShiftType(data: {
     start_time: data.start_time,
     end_time: data.end_time,
     property_id: anyProperty?.id ?? 1,
+    ...config,
   });
   return getShiftType(id);
 }
 
-export async function updateShiftType(id: number, data: Partial<{
-  name: string;
-  start_time: string;
-  end_time: string;
-  is_active: boolean;
-}>) {
-  await db('shift_types').where('id', id).update({ ...data, updated_at: db.fn.now() });
+export async function updateShiftType(id: number, data: any) {
+  const existing = await db('shift_types').where('id', id).first();
+  if (!existing) throw new NotFoundError('Shift type');
+
+  const set: Record<string, any> = {};
+  if ('name' in data) {
+    const name = String(data.name || '').trim();
+    if (!name) throw new ValidationError('Shift name is required');
+    const dup = await db('shift_types').whereRaw('lower(name) = lower(?)', [name]).whereNot('id', id).first();
+    if (dup) throw new ValidationError('A shift type with this name already exists');
+    set.name = name;
+  }
+  if ('start_time' in data) set.start_time = data.start_time;
+  if ('end_time' in data) set.end_time = data.end_time;
+  if ('is_active' in data) set.is_active = toBool(data.is_active);
+  Object.assign(set, collectShiftTypeConfig(data));
+
+  const allowOt = 'allow_overtime' in set ? set.allow_overtime : !!existing.allow_overtime;
+  const otType = 'overtime_type' in set ? set.overtime_type : existing.overtime_type;
+  if (allowOt && !otType) throw new ValidationError('Overtime Type is required when overtime is allowed');
+
+  await db('shift_types').where('id', id).update({ ...set, updated_at: db.fn.now() });
   return getShiftType(id);
+}
+
+export async function deleteShiftType(id: number) {
+  const row = await db('shift_types').where('id', id).first();
+  if (!row) throw new NotFoundError('Shift type');
+  const assigned = await db('employee_shift_assignments').where('shift_type_id', id).count('* as c').first();
+  const rostered = await db('shift_rosters').where('shift_type_id', id).count('* as c').first();
+  if (Number((assigned as any)?.c || 0) + Number((rostered as any)?.c || 0) > 0) {
+    throw new ValidationError('Cannot delete: this shift type is assigned to employees or used in the roster');
+  }
+  const scheduled = await db('shift_schedules').where('shift_type_id', id).count('* as c').first();
+  if (Number((scheduled as any)?.c || 0) > 0) {
+    throw new ValidationError('Cannot delete: this shift type is used by a shift schedule');
+  }
+  await db('shift_types').where('id', id).del();
+  return { id };
+}
+
+// ─── Shift Schedules (recurring pattern: shift type × weekdays × frequency) ───
+
+// Validate + normalise the child weekday list: integers 0–6, de-duplicated, at least one.
+function normalizeDays(days: any): number[] {
+  if (!Array.isArray(days)) throw new ValidationError('Add at least one weekday under Repeat On Days');
+  const set = new Set<number>();
+  for (const d of days) {
+    const n = Math.trunc(Number(d));
+    if (!Number.isFinite(n) || n < 0 || n > 6) throw new ValidationError('Invalid weekday');
+    set.add(n);
+  }
+  if (set.size === 0) throw new ValidationError('Add at least one weekday under Repeat On Days');
+  return [...set].sort((a, b) => a - b);
+}
+
+async function validateScheduleInput(data: any): Promise<{ name: string; shift_type_id: number; frequency_weeks: number; days: number[] }> {
+  const name = String(data.name || '').trim();
+  if (!name) throw new ValidationError('Name is required');
+  const shift_type_id = Number(data.shift_type_id);
+  if (!shift_type_id) throw new ValidationError('Shift Type is required');
+  const shift = await db('shift_types').where('id', shift_type_id).first();
+  if (!shift) throw new NotFoundError('Shift type');
+  const frequency_weeks = Math.trunc(Number(data.frequency_weeks));
+  if (![1, 2, 3, 4].includes(frequency_weeks)) throw new ValidationError('Frequency must be Every 1–4 Weeks');
+  const days = normalizeDays(data.days);
+  return { name, shift_type_id, frequency_weeks, days };
+}
+
+export async function listShiftSchedules(shiftTypeId?: number) {
+  const query = db('shift_schedules as ss')
+    .leftJoin('shift_types as st', 'st.id', 'ss.shift_type_id')
+    .select('ss.id', 'ss.name', 'ss.shift_type_id', 'ss.frequency_weeks', 'st.name as shift_name')
+    .orderBy('ss.name');
+  if (shiftTypeId) query.where('ss.shift_type_id', shiftTypeId);
+  const schedules = await query;
+  for (const s of schedules) {
+    const days = await db('shift_schedule_days').where('shift_schedule_id', s.id).orderBy('day_of_week');
+    s.days = days.map((d: any) => d.day_of_week);
+  }
+  return schedules;
+}
+
+export async function getShiftSchedule(id: number) {
+  const row = await db('shift_schedules as ss')
+    .leftJoin('shift_types as st', 'st.id', 'ss.shift_type_id')
+    .where('ss.id', id)
+    .select('ss.id', 'ss.name', 'ss.shift_type_id', 'ss.frequency_weeks', 'st.name as shift_name')
+    .first();
+  if (!row) throw new NotFoundError('Shift schedule');
+  const days = await db('shift_schedule_days').where('shift_schedule_id', id).orderBy('day_of_week');
+  row.days = days.map((d: any) => d.day_of_week);
+  return row;
+}
+
+export async function createShiftSchedule(data: any) {
+  const { name, shift_type_id, frequency_weeks, days } = await validateScheduleInput(data);
+  const dup = await db('shift_schedules').whereRaw('lower(name) = lower(?)', [name]).first();
+  if (dup) throw new ValidationError('A shift schedule with this name already exists');
+
+  const id = await db.transaction(async (trx) => {
+    const [newId] = await trx('shift_schedules').insert({ name, shift_type_id, frequency_weeks });
+    await trx('shift_schedule_days').insert(days.map((d) => ({ shift_schedule_id: newId, day_of_week: d })));
+    return newId;
+  });
+  return getShiftSchedule(id);
+}
+
+export async function updateShiftSchedule(id: number, data: any) {
+  const existing = await db('shift_schedules').where('id', id).first();
+  if (!existing) throw new NotFoundError('Shift schedule');
+  const { name, shift_type_id, frequency_weeks, days } = await validateScheduleInput(data);
+  const dup = await db('shift_schedules').whereRaw('lower(name) = lower(?)', [name]).whereNot('id', id).first();
+  if (dup) throw new ValidationError('A shift schedule with this name already exists');
+
+  await db.transaction(async (trx) => {
+    await trx('shift_schedules').where('id', id).update({ name, shift_type_id, frequency_weeks, updated_at: db.fn.now() });
+    await trx('shift_schedule_days').where('shift_schedule_id', id).del();
+    await trx('shift_schedule_days').insert(days.map((d) => ({ shift_schedule_id: id, day_of_week: d })));
+  });
+  return getShiftSchedule(id);
+}
+
+export async function deleteShiftSchedule(id: number) {
+  const row = await db('shift_schedules').where('id', id).first();
+  if (!row) throw new NotFoundError('Shift schedule');
+  await db('shift_schedules').where('id', id).del(); // days cascade
+  return { id };
+}
+
+// ─── Shift Locations (master list) ───
+
+export async function listShiftLocations() {
+  return db('shift_locations').select('id', 'name').orderBy('name');
+}
+
+export async function createShiftLocation(data: { name: string }) {
+  const name = data.name?.trim();
+  if (!name) throw new ValidationError('Location name is required');
+  const dup = await db('shift_locations').whereRaw('lower(name) = lower(?)', [name]).first();
+  if (dup) throw new ValidationError('A shift location with this name already exists');
+  const [id] = await db('shift_locations').insert({ name });
+  return db('shift_locations').where('id', id).first();
+}
+
+export async function updateShiftLocation(id: number, data: { name: string }) {
+  const row = await db('shift_locations').where('id', id).first();
+  if (!row) throw new NotFoundError('Shift location');
+  const name = String(data.name || '').trim();
+  if (!name) throw new ValidationError('Location name is required');
+  const dup = await db('shift_locations').whereRaw('lower(name) = lower(?)', [name]).whereNot('id', id).first();
+  if (dup) throw new ValidationError('A shift location with this name already exists');
+  await db('shift_locations').where('id', id).update({ name, updated_at: db.fn.now() });
+  return db('shift_locations').where('id', id).first();
+}
+
+export async function deleteShiftLocation(id: number) {
+  const row = await db('shift_locations').where('id', id).first();
+  if (!row) throw new NotFoundError('Shift location');
+  await db('shift_locations').where('id', id).del();
+  return { id };
 }
 
 // ─── Shift Roster ───

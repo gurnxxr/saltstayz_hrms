@@ -71,6 +71,17 @@ export const NAVIGATION: NavItem[] = [
     module: 'manpower',
   },
   {
+    label: 'Shift Setup',
+    href: '/shift-setup/type',
+    icon: 'Clock',
+    roles: ['admin', 'chro', 'hr'],
+    children: [
+      { label: 'Shift Type', href: '/shift-setup/type', icon: 'Tag', roles: ['admin', 'chro', 'hr'] },
+      { label: 'Shift Location', href: '/shift-setup/location', icon: 'MapPin', roles: ['admin', 'chro', 'hr'] },
+      { label: 'Shift Schedule', href: '/shift-setup/schedule', icon: 'CalendarClock', roles: ['admin', 'chro', 'hr'] },
+    ],
+  },
+  {
     label: 'Setup & Configuration',
     href: '/setup/pay-schedule',
     icon: 'SlidersHorizontal',

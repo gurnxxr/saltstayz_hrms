@@ -11,12 +11,14 @@ import {
   LayoutDashboard, Users, CalendarCheck, Clock,
   UserPlus, UserMinus, UserCircle, Briefcase, BarChart3, FileText, Wallet, Settings, LogOut, Landmark,
   ShieldCheck, Building2, ChevronLeft, ChevronRight, ChevronDown, SlidersHorizontal, CalendarClock, Coins,
+  Tag, MapPin,
 } from 'lucide-react';
 
 const iconMap: Record<string, React.ElementType> = {
   LayoutDashboard, Users, UserCircle, CalendarCheck, Clock,
   UserPlus, UserMinus, Briefcase, BarChart3, FileText, Wallet, Settings, Landmark,
   ShieldCheck, Building2, SlidersHorizontal, CalendarClock, Coins,
+  Tag, MapPin,
 };
 
 export default function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
