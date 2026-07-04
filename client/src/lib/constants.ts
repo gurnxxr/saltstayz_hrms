@@ -36,18 +36,17 @@ export const NAVIGATION: NavItem[] = [
     module: 'recruitment',
   },
   {
-    label: 'Onboarding',
+    label: 'Employee Lifecycle',
     href: '/onboarding',
-    icon: 'UserPlus',
+    icon: 'UserCog',
     roles: ['admin', 'chro', 'hr', 'hr_manager'],
-    module: 'onboarding',
-  },
-  {
-    label: 'Offboarding',
-    href: '/offboarding',
-    icon: 'UserMinus',
-    roles: ['admin', 'chro', 'hr', 'hr_manager'],
-    module: 'onboarding',
+    children: [
+      { label: 'Onboarding', href: '/onboarding', icon: 'UserPlus', roles: ['admin', 'chro', 'hr', 'hr_manager'], module: 'onboarding' },
+      { label: 'Offboarding', href: '/offboarding', icon: 'UserMinus', roles: ['admin', 'chro', 'hr', 'hr_manager'], module: 'onboarding' },
+      { label: 'Employee Promotion', href: '/employee-lifecycle/promotion', icon: 'TrendingUp', roles: ['admin', 'chro', 'hr', 'hr_manager'] },
+      { label: 'Employee Transfer', href: '/employee-lifecycle/transfer', icon: 'ArrowRightLeft', roles: ['admin', 'chro', 'hr', 'hr_manager'] },
+      { label: 'Exit Interview', href: '/employee-lifecycle/exit-interview', icon: 'ClipboardList', roles: ['admin', 'chro', 'hr', 'hr_manager'] },
+    ],
   },
   {
     label: 'Financial Details',
