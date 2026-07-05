@@ -41,6 +41,54 @@ export async function getLeaveTypes() {
   return db('leave_types').where('is_active', true).orderBy('name');
 }
 
+/** All leave types incl. inactive — for the Control Panel. */
+export async function getAllLeaveTypes() {
+  return db('leave_types').orderBy('name');
+}
+
+export async function createLeaveType(data: {
+  name: string; default_days: number; is_paid?: boolean; is_encashable?: boolean;
+}) {
+  const name = String(data.name || '').trim();
+  if (!name) throw new ValidationError('Leave type name is required');
+  const dup = await db('leave_types').whereRaw('lower(name) = lower(?)', [name]).first();
+  if (dup) throw new ValidationError('A leave type with this name already exists');
+  const defaultDays = Number(data.default_days);
+  if (!Number.isFinite(defaultDays) || defaultDays < 0 || defaultDays > 366) {
+    throw new ValidationError('Default days must be between 0 and 366');
+  }
+  const [id] = await db('leave_types').insert({
+    name, default_days: defaultDays,
+    is_paid: data.is_paid === undefined ? true : !!data.is_paid,
+    is_encashable: !!data.is_encashable,
+    is_active: true,
+  });
+  return db('leave_types').where('id', id).first();
+}
+
+export async function updateLeaveType(id: number, data: any) {
+  const existing = await db('leave_types').where('id', id).first();
+  if (!existing) throw new NotFoundError('Leave type');
+  const patch: any = {};
+  if ('name' in data) {
+    const name = String(data.name || '').trim();
+    if (!name) throw new ValidationError('Leave type name is required');
+    const dup = await db('leave_types').whereRaw('lower(name) = lower(?)', [name]).whereNot('id', id).first();
+    if (dup) throw new ValidationError('A leave type with this name already exists');
+    patch.name = name;
+  }
+  if ('default_days' in data) {
+    const d = Number(data.default_days);
+    if (!Number.isFinite(d) || d < 0 || d > 366) throw new ValidationError('Default days must be between 0 and 366');
+    patch.default_days = d;
+  }
+  if ('is_paid' in data) patch.is_paid = !!data.is_paid;
+  if ('is_encashable' in data) patch.is_encashable = !!data.is_encashable;
+  if ('is_active' in data) patch.is_active = !!data.is_active;
+  await db('leave_types').where('id', id).update({ ...patch, updated_at: db.fn.now() });
+  return db('leave_types').where('id', id).first();
+}
+
 // ─── Leave Periods ───
 
 export async function getLeavePeriods() {
@@ -51,6 +99,140 @@ export async function getCurrentPeriod() {
   const period = await db('leave_periods').where('is_current', true).first();
   if (!period) throw new NotFoundError('Current leave period');
   return period;
+}
+
+export async function createLeavePeriod(data: { name: string; start_date: string; end_date: string }) {
+  const name = String(data.name || '').trim();
+  if (!name) throw new ValidationError('Period name is required');
+  const dup = await db('leave_periods').whereRaw('lower(name) = lower(?)', [name]).first();
+  if (dup) throw new ValidationError('A leave period with this name already exists');
+  if (!data.start_date || !data.end_date || data.end_date <= data.start_date) {
+    throw new ValidationError('End date must be after the start date');
+  }
+  const [id] = await db('leave_periods').insert({
+    name, start_date: data.start_date, end_date: data.end_date, is_current: false,
+  });
+  return db('leave_periods').where('id', id).first();
+}
+
+/** Makes one period current (exactly one at a time). */
+export async function setCurrentPeriod(id: number) {
+  const period = await db('leave_periods').where('id', id).first();
+  if (!period) throw new NotFoundError('Leave period');
+  await db.transaction(async (trx) => {
+    await trx('leave_periods').update({ is_current: false });
+    await trx('leave_periods').where('id', id).update({ is_current: true, updated_at: trx.fn.now() });
+  });
+  return db('leave_periods').where('id', id).first();
+}
+
+// ─── Entitlements (allocation) ───
+
+/**
+ * Allocation grid: every active employee with their entitlements for a period.
+ */
+export async function getEntitlements(filters: { period_id: number; search?: string; branch?: string }) {
+  const employeesQuery = db('employees as e')
+    .leftJoin('job_titles as jt', 'jt.id', 'e.job_title_id')
+    .where('e.is_active', true)
+    .select('e.id', 'e.employee_code', 'e.first_name', 'e.last_name', 'e.branch_name', 'jt.title as designation')
+    .orderBy('e.first_name');
+  if (filters.branch) employeesQuery.where('e.branch_name', filters.branch);
+  if (filters.search && filters.search.trim()) {
+    const term = `%${filters.search.trim()}%`;
+    employeesQuery.where(function (this: any) {
+      this.where('e.first_name', 'like', term)
+        .orWhere('e.last_name', 'like', term)
+        .orWhere('e.employee_code', 'like', term)
+        .orWhereRaw("(e.first_name || ' ' || e.last_name) like ?", [term]);
+    });
+  }
+  const employees = await employeesQuery;
+
+  const entitlements = await db('leave_entitlements')
+    .where('leave_period_id', filters.period_id)
+    .select('employee_id', 'leave_type_id', 'total_days', 'used_days');
+  const byEmployee = new Map<number, any[]>();
+  for (const ent of entitlements) {
+    const list = byEmployee.get(ent.employee_id) ?? [];
+    list.push({ leave_type_id: ent.leave_type_id, total_days: Number(ent.total_days), used_days: Number(ent.used_days) });
+    byEmployee.set(ent.employee_id, list);
+  }
+
+  return employees.map((e: any) => ({ ...e, entitlements: byEmployee.get(e.id) ?? [] }));
+}
+
+/** Sets one employee's allocation for a leave type in a period. */
+export async function upsertEntitlement(data: {
+  employee_id: number; leave_type_id: number; leave_period_id: number; total_days: number;
+}) {
+  const employee = await db('employees').where('id', Number(data.employee_id)).first();
+  if (!employee) throw new NotFoundError('Employee');
+  const leaveType = await db('leave_types').where('id', Number(data.leave_type_id)).first();
+  if (!leaveType) throw new NotFoundError('Leave type');
+  const period = await db('leave_periods').where('id', Number(data.leave_period_id)).first();
+  if (!period) throw new NotFoundError('Leave period');
+  const totalDays = Number(data.total_days);
+  if (!Number.isFinite(totalDays) || totalDays < 0 || totalDays > 366) {
+    throw new ValidationError('Allocated days must be between 0 and 366');
+  }
+
+  const key = { employee_id: employee.id, leave_type_id: leaveType.id, leave_period_id: period.id };
+  const existing = await db('leave_entitlements').where(key).first();
+  if (existing) {
+    if (totalDays < Number(existing.used_days)) {
+      throw new ValidationError(`Cannot allocate ${totalDays} — ${existing.used_days} day(s) already used`);
+    }
+    await db('leave_entitlements').where('id', existing.id).update({ total_days: totalDays, updated_at: db.fn.now() });
+  } else {
+    await db('leave_entitlements').insert({ ...key, total_days: totalDays, used_days: 0 });
+  }
+  return db('leave_entitlements').where(key).first();
+}
+
+/**
+ * Control Panel bulk allocation: sets total_days for one leave type across many
+ * employees in a period. Existing rows keep their used_days.
+ */
+export async function bulkAllocate(data: {
+  leave_period_id: number; leave_type_id: number; days: number; employee_ids: number[];
+}) {
+  const leaveType = await db('leave_types').where('id', Number(data.leave_type_id)).first();
+  if (!leaveType) throw new NotFoundError('Leave type');
+  const period = await db('leave_periods').where('id', Number(data.leave_period_id)).first();
+  if (!period) throw new NotFoundError('Leave period');
+  const days = Number(data.days);
+  if (!Number.isFinite(days) || days < 0 || days > 366) throw new ValidationError('Days must be between 0 and 366');
+  if (!Array.isArray(data.employee_ids) || data.employee_ids.length === 0) {
+    throw new ValidationError('Select at least one employee');
+  }
+
+  let created = 0;
+  let updated = 0;
+  const skipped: string[] = [];
+  await db.transaction(async (trx) => {
+    for (const rawId of data.employee_ids) {
+      const employeeId = Number(rawId);
+      const existing = await trx('leave_entitlements')
+        .where({ employee_id: employeeId, leave_type_id: leaveType.id, leave_period_id: period.id })
+        .first();
+      if (existing) {
+        if (days < Number(existing.used_days)) {
+          skipped.push(`employee ${employeeId}: ${existing.used_days} day(s) already used`);
+          continue;
+        }
+        await trx('leave_entitlements').where('id', existing.id).update({ total_days: days, updated_at: trx.fn.now() });
+        updated += 1;
+      } else {
+        await trx('leave_entitlements').insert({
+          employee_id: employeeId, leave_type_id: leaveType.id, leave_period_id: period.id,
+          total_days: days, used_days: 0,
+        });
+        created += 1;
+      }
+    }
+  });
+  return { created, updated, skipped };
 }
 
 // ─── Leave Balances ───

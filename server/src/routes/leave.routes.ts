@@ -26,11 +26,35 @@ router.put('/:id/cancel', authorize('leave', 'update'), ctrl.cancelLeave);
 // Managers approve their reports via /approvals (already scoped) instead.
 router.get('/all', authorize('leave', 'read'), authorizeRoles('admin', 'chro', 'hr', 'property_manager'), ctrl.getAllLeaves);
 
-// Approvals — Admin/CHRO/HR only (managed centrally from Admin → Leave Approvals)
+// Approvals — Admin/CHRO/HR only (managed centrally from Leaves → Application)
 const APPROVAL_ROLES = authorizeRoles('admin', 'chro', 'hr');
 router.get('/approvals', authorize('leave', 'read'), APPROVAL_ROLES, ctrl.getPendingApprovals);
 router.put('/:id/approve', authorize('leave', 'update'), APPROVAL_ROLES, ctrl.approveLeave);
 router.put('/:id/reject', authorize('leave', 'update'), APPROVAL_ROLES, ctrl.rejectLeave);
+
+// ─── Leaves module (admin layer): Application / Encashment / Control Panel / Allocation ───
+const LEAVE_ADMIN = authorizeRoles('admin', 'chro', 'hr');
+
+// Apply on behalf of an employee (reuses the standard apply validations)
+router.post('/apply-for/:employeeId', authorize('leave', 'create'), LEAVE_ADMIN, ctrl.applyLeaveFor);
+
+// Control Panel: leave types (deactivate instead of delete) + periods
+router.get('/types/all', authorize('leave', 'read'), LEAVE_ADMIN, ctrl.getAllLeaveTypes);
+router.post('/types', authorize('leave', 'create'), LEAVE_ADMIN, ctrl.createLeaveType);
+router.put('/types/:id', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.updateLeaveType);
+router.post('/periods', authorize('leave', 'create'), LEAVE_ADMIN, ctrl.createLeavePeriod);
+router.put('/periods/:id/current', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.setCurrentPeriod);
+
+// Allocation: entitlements grid + single/bulk upsert
+router.get('/entitlements', authorize('leave', 'read'), LEAVE_ADMIN, ctrl.getEntitlements);
+router.put('/entitlements', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.upsertEntitlement);
+router.post('/entitlements/bulk', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.bulkAllocate);
+
+// Encashment: record-only (Finance pays outside payroll)
+router.get('/encashments', authorize('leave', 'read'), LEAVE_ADMIN, ctrl.listEncashments);
+router.post('/encashments', authorize('leave', 'create'), LEAVE_ADMIN, ctrl.createEncashment);
+router.put('/encashments/:id/approve', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.approveEncashment);
+router.put('/encashments/:id/reject', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.rejectEncashment);
 
 // Holiday & region management (admin only) — configured from Leave & Attendance
 const ADMIN_ONLY = authorizeRoles('admin');

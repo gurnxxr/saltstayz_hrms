@@ -1,6 +1,7 @@
 import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../types';
 import * as leaveService from '../services/leave.service';
+import * as encashmentService from '../services/leaveEncashment.service';
 
 export async function getLeaveTypes(req: AuthRequest, res: Response, next: NextFunction) {
   try { res.json(await leaveService.getLeaveTypes()); } catch (err) { next(err); }
@@ -61,6 +62,78 @@ export async function rejectLeave(req: AuthRequest, res: Response, next: NextFun
   try {
     res.json(await leaveService.rejectLeave(
       Number(req.params.id), req.user!.employeeId!, req.user!.roleName, req.body.rejection_reason
+    ));
+  } catch (err) { next(err); }
+}
+
+// ─── Leaves module (admin): apply on behalf ───
+
+export async function applyLeaveFor(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.status(201).json(await leaveService.applyLeave(Number(req.params.employeeId), req.body));
+  } catch (err) { next(err); }
+}
+
+// ─── Leaves module (admin): types & periods (Control Panel) ───
+
+export async function getAllLeaveTypes(_req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await leaveService.getAllLeaveTypes()); } catch (err) { next(err); }
+}
+
+export async function createLeaveType(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.status(201).json(await leaveService.createLeaveType(req.body)); } catch (err) { next(err); }
+}
+
+export async function updateLeaveType(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await leaveService.updateLeaveType(Number(req.params.id), req.body)); } catch (err) { next(err); }
+}
+
+export async function createLeavePeriod(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.status(201).json(await leaveService.createLeavePeriod(req.body)); } catch (err) { next(err); }
+}
+
+export async function setCurrentPeriod(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await leaveService.setCurrentPeriod(Number(req.params.id))); } catch (err) { next(err); }
+}
+
+// ─── Leaves module (admin): entitlements (Allocation) ───
+
+export async function getEntitlements(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json(await leaveService.getEntitlements({
+      period_id: Number(req.query.period_id),
+      search: req.query.search as string,
+      branch: req.query.branch as string,
+    }));
+  } catch (err) { next(err); }
+}
+
+export async function upsertEntitlement(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await leaveService.upsertEntitlement(req.body)); } catch (err) { next(err); }
+}
+
+export async function bulkAllocate(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await leaveService.bulkAllocate(req.body)); } catch (err) { next(err); }
+}
+
+// ─── Leaves module (admin): encashments ───
+
+export async function listEncashments(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await encashmentService.listEncashments({ status: req.query.status as string })); } catch (err) { next(err); }
+}
+
+export async function createEncashment(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.status(201).json(await encashmentService.createEncashment(req.body, req.user?.userId ?? null)); } catch (err) { next(err); }
+}
+
+export async function approveEncashment(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await encashmentService.approveEncashment(Number(req.params.id), req.user?.userId ?? null)); } catch (err) { next(err); }
+}
+
+export async function rejectEncashment(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json(await encashmentService.rejectEncashment(
+      Number(req.params.id), req.user?.userId ?? null, req.body?.rejection_reason,
     ));
   } catch (err) { next(err); }
 }
