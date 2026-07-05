@@ -6,6 +6,46 @@ import { getEmployeeRegion } from './leave.service';
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
+/**
+ * Auto attendance (Shift Type thresholds): re-derives the status of attendance
+ * records from their working hours for employees whose assigned shift type has
+ * auto attendance enabled — hours below the absent threshold mark Absent, below
+ * the half-day threshold mark Half Day, otherwise Present. A zero threshold
+ * disables that rule (per the Shift Type spec); on_leave records and dates
+ * before the shift's "Process Attendance After" are never touched. Runs daily
+ * for yesterday, plus on demand from Admin → Attendance for any date.
+ */
+export async function autoMarkAttendance(date?: string) {
+  const target = date || new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+  const rows = await db('attendance_records as ar')
+    .join('employee_shift_assignments as esa', 'esa.employee_id', 'ar.employee_id')
+    .join('shift_types as st', 'st.id', 'esa.shift_type_id')
+    .where('ar.date', target)
+    .where('st.enable_auto_attendance', true)
+    .whereNotNull('ar.working_hours')
+    .whereNot('ar.status', 'on_leave')
+    .where(function (this: any) {
+      this.whereNull('st.process_attendance_after').orWhere('st.process_attendance_after', '<=', target);
+    })
+    .select('ar.id', 'ar.status', 'ar.working_hours', 'st.half_day_threshold', 'st.absent_threshold');
+
+  let updated = 0;
+  for (const r of rows) {
+    const hours = Number(r.working_hours) || 0;
+    const absentT = Number(r.absent_threshold) || 0;
+    const halfT = Number(r.half_day_threshold) || 0;
+    let status = 'present';
+    if (absentT > 0 && hours < absentT) status = 'absent';
+    else if (halfT > 0 && hours < halfT) status = 'half_day';
+    if (status !== r.status) {
+      await db('attendance_records').where('id', r.id).update({ status, updated_at: db.fn.now() });
+      updated += 1;
+    }
+  }
+  return { date: target, scanned: rows.length, updated };
+}
+
 export async function getMyCalendar(employeeId: number, month: string) {
   // month format: "2026-06"
   const startDate = `${month}-01`;

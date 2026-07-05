@@ -40,6 +40,43 @@ export interface PayableDays extends AttendanceContext {
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
+/** Hours between two HH:MM times, overnight-safe (22:00 → 06:00 = 8h). */
+function shiftDurationHours(start?: string | null, end?: string | null): number {
+  if (!start || !end) return 0;
+  const toMin = (t: string) => {
+    const [h, m] = String(t).split(':').map(Number);
+    return (h || 0) * 60 + (m || 0);
+  };
+  let diff = toMin(end) - toMin(start);
+  if (diff <= 0) diff += 24 * 60;
+  return diff / 60;
+}
+
+/**
+ * Overtime hours for the month: Σ max(0, worked − shift length) per attendance
+ * day — but only when the employee's assigned shift type allows overtime.
+ */
+export async function getOvertimeHours(employeeId: number, month: number, year: number): Promise<number> {
+  const shift = await db('employee_shift_assignments as a')
+    .join('shift_types as st', 'st.id', 'a.shift_type_id')
+    .where('a.employee_id', employeeId)
+    .select('st.allow_overtime', 'st.start_time', 'st.end_time')
+    .first();
+  if (!shift || !shift.allow_overtime) return 0;
+  const duration = shiftDurationHours(shift.start_time, shift.end_time);
+  if (duration <= 0) return 0;
+
+  const start = `${year}-${pad(month)}-01`;
+  const end = `${year}-${pad(month)}-31`;
+  const rows = await db('attendance_records')
+    .where('employee_id', employeeId)
+    .whereBetween('date', [start, end])
+    .whereNotNull('working_hours')
+    .select('working_hours');
+  const total = rows.reduce((sum: number, r: any) => sum + Math.max(0, (Number(r.working_hours) || 0) - duration), 0);
+  return Math.round(total * 100) / 100;
+}
+
 /** Sum of attendance working_hours in the month (hourly-rated pay basis). */
 export async function getMonthlyHours(employeeId: number, month: number, year: number): Promise<number> {
   const start = `${year}-${pad(month)}-01`;

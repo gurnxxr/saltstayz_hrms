@@ -16,6 +16,7 @@ export interface PaySchedule {
   pay_date_day: number;
   unmarked_day_policy: string; // present | absent — what an unmarked working day means
   holidays_paid: boolean;      // regional holidays count as paid working days
+  overtime_multiplier: number; // OT rate = hourly rate × this (shift must allow OT)
 }
 
 const DEFAULTS: PaySchedule = {
@@ -26,6 +27,7 @@ const DEFAULTS: PaySchedule = {
   pay_date_day: 1,
   unmarked_day_policy: 'present',
   holidays_paid: true,
+  overtime_multiplier: 2,
 };
 
 function parseRow(row: any) {
@@ -46,6 +48,7 @@ function parseRow(row: any) {
     pay_date_day: Number(row.pay_date_day),
     unmarked_day_policy: row.unmarked_day_policy === 'absent' ? 'absent' : 'present',
     holidays_paid: row.holidays_paid === undefined || row.holidays_paid === null ? true : !!row.holidays_paid,
+    overtime_multiplier: Number(row.overtime_multiplier) || 2,
     updated_by: row.updated_by,
     updated_at: row.updated_at,
   };
@@ -92,6 +95,15 @@ export async function updatePaySchedule(input: any, userId?: number) {
   const unmarkedPolicy = input.unmarked_day_policy === 'absent' ? 'absent' : 'present';
   const holidaysPaid = input.holidays_paid === undefined ? true : !!input.holidays_paid;
 
+  // ── Overtime multiplier (Phase 4) ──
+  let otMultiplier = DEFAULTS.overtime_multiplier;
+  if (input.overtime_multiplier != null) {
+    otMultiplier = Number(input.overtime_multiplier);
+    if (!Number.isFinite(otMultiplier) || otMultiplier < 1 || otMultiplier > 5) {
+      throw new ValidationError('Overtime multiplier must be between 1 and 5.');
+    }
+  }
+
   const patch = {
     work_week: JSON.stringify(days.sort((a, b) => a - b)),
     salary_calculation_method: method,
@@ -100,6 +112,7 @@ export async function updatePaySchedule(input: any, userId?: number) {
     pay_date_day: payDay,
     unmarked_day_policy: unmarkedPolicy,
     holidays_paid: holidaysPaid ? 1 : 0,
+    overtime_multiplier: otMultiplier,
     updated_by: userId || null,
     updated_at: db.fn.now(),
   };

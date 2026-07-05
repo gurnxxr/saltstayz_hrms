@@ -8,7 +8,7 @@ import {
   getAssignment, getStructureByJobTitle, getStructureRow, computeForStructure,
 } from './salaryStructure.service';
 import { getPaySchedule } from './paySchedule.service';
-import { computePayableDays, getMonthlyHours } from './payableDays.service';
+import { computePayableDays, getMonthlyHours, getOvertimeHours } from './payableDays.service';
 import { notifyEmployee } from './notification.service';
 
 function num(v: any): number {
@@ -111,6 +111,37 @@ export async function getMonthlyBreakdown(
       counts: days.counts as any,
     };
     if (hourly) attendance.hours = await getMonthlyHours(employeeId, month!, year!);
+
+    // Manual TDS (entered by Finance on the assignment) — a plain deduction line.
+    const tds = assignment ? num(assignment.tds_amount) : 0;
+    if (tds > 0) {
+      extraLines.push({
+        component_id: null, name: 'TDS', category: 'deduction',
+        calculation_type: 'flat', value: tds,
+        consider_epf: 'no', consider_esi: false, pro_rata: false,
+      });
+    }
+
+    // Overtime — hours beyond shift length on an overtime-enabled shift type.
+    // Monthly-rated hourly rate = base / (working days × 8h standard day);
+    // hourly-rated employees already earn their base per hour, so overtime
+    // pays only the premium on top ((multiplier − 1) × rate).
+    const otHours = await getOvertimeHours(employeeId, month!, year!);
+    if (otHours > 0) {
+      const schedule = await getPaySchedule();
+      const multiplier = Math.max(1, num((schedule as any).overtime_multiplier) || 2);
+      const hourlyRate = hourly
+        ? base * (multiplier - 1)
+        : (attendance.working_days > 0 ? (base / (attendance.working_days * 8)) * multiplier : 0);
+      const amount = Math.round(otHours * hourlyRate);
+      if (amount > 0) {
+        extraLines.push({
+          component_id: null, name: `Overtime (${otHours}h)`, category: 'earning',
+          calculation_type: 'flat', value: amount, earning_type: 'variable',
+          consider_epf: 'no', consider_esi: false, pro_rata: false,
+        });
+      }
+    }
 
     // Review-step corrections: LOP override and/or a manual adjustment line.
     const adjustment = await getAdjustment(employeeId, month!, year!);

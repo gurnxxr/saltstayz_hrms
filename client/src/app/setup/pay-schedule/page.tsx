@@ -37,6 +37,7 @@ export default function PaySchedulePage() {
   const [payDay, setPayDay] = useState(1);
   const [unmarkedPolicy, setUnmarkedPolicy] = useState<'present' | 'absent'>('present');
   const [holidaysPaid, setHolidaysPaid] = useState(true);
+  const [otMultiplier, setOtMultiplier] = useState('2');
   const [dirty, setDirty] = useState(false);
 
   // Hydrate the form once settings load.
@@ -48,6 +49,7 @@ export default function PaySchedulePage() {
     setPayDay(Number(data.pay_date_day) || 1);
     setUnmarkedPolicy(data.unmarked_day_policy === 'absent' ? 'absent' : 'present');
     setHolidaysPaid(data.holidays_paid !== false);
+    setOtMultiplier(String(data.overtime_multiplier ?? 2));
     setDirty(false);
   }, [data]);
 
@@ -67,6 +69,7 @@ export default function PaySchedulePage() {
         pay_date_day: payDay,
         unmarked_day_policy: unmarkedPolicy,
         holidays_paid: holidaysPaid,
+        overtime_multiplier: Number(otMultiplier) || 2,
       }),
     onSuccess: () => {
       toast.success('Pay schedule saved');
@@ -213,6 +216,16 @@ export default function PaySchedulePage() {
                     <span className="block text-xs text-secondary mt-0.5">Regional holidays count as automatically-paid days (standard hospitality practice). Unchecked, they are excluded like weekly offs.</span>
                   </span>
                 </label>
+                <div>
+                  <p className="text-sm font-medium text-foreground mb-1.5">Overtime rate multiplier</p>
+                  <div className="flex items-center gap-2">
+                    <input type="number" step="0.5" min={1} max={5} value={otMultiplier}
+                      onChange={(e) => { setOtMultiplier(e.target.value); setDirty(true); }}
+                      className="w-24 px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+                    <span className="text-sm text-secondary">× hourly rate</span>
+                  </div>
+                  <p className="text-xs text-secondary mt-1">Applied to hours beyond shift length, only when the employee&apos;s shift type allows overtime. 2× is the Factories Act standard.</p>
+                </div>
               </div>
             </section>
 

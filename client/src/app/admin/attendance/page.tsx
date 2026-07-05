@@ -7,7 +7,7 @@ import api from '@/lib/api';
 import AppShell from '@/components/layout/AppShell';
 import {
   Upload, FileSpreadsheet, ChevronDown, ChevronRight,
-  Users, CheckCircle, XCircle, Clock, ArrowLeft, History,
+  Users, CheckCircle, XCircle, Clock, ArrowLeft, History, Wand2,
 } from 'lucide-react';
 import Breadcrumb from '@/components/ui/Breadcrumb';
 
@@ -78,6 +78,18 @@ export default function AdminAttendancePage() {
     if (fileRef.current) fileRef.current.value = '';
   }
 
+  // Apply Shift Type auto-attendance thresholds (half-day/absent hours) to the
+  // selected date's records. Also runs automatically every day for yesterday.
+  const autoMarkMutation = useMutation({
+    mutationFn: () => api.post('/attendance/admin/auto-mark', { date: selectedDate }).then(r => r.data),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['attendance-property-summary'] });
+      qc.invalidateQueries({ queryKey: ['attendance-property-employees'] });
+      toast.success(`Auto-attendance for ${data.date}: ${data.updated} of ${data.scanned} record(s) re-marked`);
+    },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Auto-mark failed'),
+  });
+
   const properties = summary?.properties || [];
 
   const grandTotal = properties.reduce((a: any, p: any) => ({
@@ -109,7 +121,16 @@ export default function AdminAttendancePage() {
                 </p>
               </div>
             </div>
-            <div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => autoMarkMutation.mutate()}
+                disabled={autoMarkMutation.isPending}
+                title="Re-derive statuses from working hours using each shift type's auto-attendance thresholds"
+                className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted disabled:opacity-50 transition-colors"
+              >
+                <Wand2 size={15} />
+                {autoMarkMutation.isPending ? 'Marking…' : 'Auto-mark'}
+              </button>
               <input ref={fileRef} type="file" accept=".csv" onChange={handleFileUpload} className="hidden" />
               <button
                 onClick={() => fileRef.current?.click()}

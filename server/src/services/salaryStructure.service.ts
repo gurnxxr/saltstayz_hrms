@@ -4,7 +4,7 @@ import {
   computeFromStructure, type StructureLineInput, type PayslipBreakdown, type LineCalcType,
   type AttendanceContext,
 } from './payslip.calc';
-import { getStatutoryRates } from './statutory.service';
+import { getStatutoryRates, getStatutoryBonus } from './statutory.service';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Salary Structures v2: a structure is a named template of salary_components
@@ -44,6 +44,28 @@ export async function resolveStructureLines(structureId: number): Promise<Struct
   return rows.map(toLineInput);
 }
 
+/**
+ * Statutory bonus line (Payment of Bonus Act) — injected on every computation
+ * when enabled in Statutory Components with monthly frequency. Percentage of
+ * Basic, so it prorates with attendance automatically. Yearly frequency means
+ * an off-cycle payout and adds no monthly line.
+ */
+async function statutoryBonusLine(): Promise<StructureLineInput | null> {
+  const bonus = await getStatutoryBonus();
+  if (!bonus.enabled || bonus.frequency !== 'monthly' || bonus.monthlyPercent <= 0) return null;
+  return {
+    component_id: null,
+    name: 'Statutory Bonus',
+    category: 'earning',
+    calculation_type: 'pct_of_basic',
+    value: bonus.monthlyPercent,
+    earning_type: 'variable',
+    consider_epf: 'no',
+    consider_esi: false,
+    pro_rata: false,
+  };
+}
+
 /** Computes the breakdown for a saved structure at a given base. */
 export async function computeForStructure(
   structure: any,
@@ -53,7 +75,9 @@ export async function computeForStructure(
 ): Promise<PayslipBreakdown> {
   const lines = await resolveStructureLines(structure.id);
   const rates = await getStatutoryRates(structure.city);
-  return computeFromStructure([...lines, ...(extraLines ?? [])], base, rates, attendance);
+  const bonusLine = await statutoryBonusLine();
+  const all = [...lines, ...(bonusLine ? [bonusLine] : []), ...(extraLines ?? [])];
+  return computeFromStructure(all, base, rates, attendance);
 }
 
 export async function getStructureRow(id: number) {
@@ -248,7 +272,8 @@ export async function previewStructure(data: { lines: any[]; base: number; city?
     }));
   }
   const rates = await getStatutoryRates(data.city || 'Haryana');
-  return computeFromStructure(lines, num(data.base), rates);
+  const bonusLine = await statutoryBonusLine();
+  return computeFromStructure([...lines, ...(bonusLine ? [bonusLine] : [])], num(data.base), rates);
 }
 
 // ─── CTC range (offers, vacancies, JD PDFs) ───
@@ -303,14 +328,15 @@ export async function listAssignments() {
     .select(
       'e.id as employee_id', 'e.employee_code', 'e.first_name', 'e.last_name',
       'e.dept_name', 'e.branch_name', 'e.job_title_id', 'jt.title as designation',
-      'a.structure_id', 'a.base', 'a.effective_from', 's.name as structure_name', 's.payment_basis',
+      'a.structure_id', 'a.base', 'a.effective_from', 'a.tds_amount',
+      's.name as structure_name', 's.payment_basis',
     )
     .orderBy('e.first_name');
 }
 
 export async function upsertAssignment(
   employeeId: number,
-  data: { structure_id: number; base: number; effective_from?: string },
+  data: { structure_id: number; base: number; effective_from?: string; tds_amount?: number },
   userId?: number | null,
 ) {
   const emp = await db('employees').where('id', employeeId).first();
@@ -319,10 +345,13 @@ export async function upsertAssignment(
   if (!structure) throw new NotFoundError('Salary structure');
   const base = num(data.base);
   if (base <= 0) throw new ValidationError('Base amount is required');
+  const tds = num(data.tds_amount);
+  if (tds < 0) throw new ValidationError('TDS cannot be negative');
 
   const patch = {
     structure_id: structure.id, base,
     effective_from: data.effective_from || null,
+    tds_amount: tds,
     assigned_by: userId ?? null, updated_at: db.fn.now(),
   };
   const existing = await db('salary_structure_assignments').where('employee_id', employeeId).first();

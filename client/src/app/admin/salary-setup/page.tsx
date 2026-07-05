@@ -15,7 +15,7 @@ import { Search, Loader2, Save, Download, AlertCircle } from 'lucide-react';
 
 const inputCls = 'px-2 py-1.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50';
 
-interface RowDraft { structure_id: string; base: string }
+interface RowDraft { structure_id: string; base: string; tds: string }
 
 export default function SalaryAssignmentsPage() {
   const queryClient = useQueryClient();
@@ -39,6 +39,7 @@ export default function SalaryAssignmentsPage() {
     drafts[r.employee_id] ?? {
       structure_id: r.structure_id != null ? String(r.structure_id) : '',
       base: r.base != null ? String(Math.round(Number(r.base))) : '',
+      tds: r.tds_amount ? String(Math.round(Number(r.tds_amount))) : '',
     };
 
   const setDraft = (employeeId: number, patch: Partial<RowDraft>, row: any) =>
@@ -49,7 +50,8 @@ export default function SalaryAssignmentsPage() {
     if (!d) return false;
     const origStructure = r.structure_id != null ? String(r.structure_id) : '';
     const origBase = r.base != null ? String(Math.round(Number(r.base))) : '';
-    return d.structure_id !== origStructure || d.base !== origBase;
+    const origTds = r.tds_amount ? String(Math.round(Number(r.tds_amount))) : '';
+    return d.structure_id !== origStructure || d.base !== origBase || d.tds !== origTds;
   };
 
   const saveMutation = useMutation({
@@ -57,6 +59,7 @@ export default function SalaryAssignmentsPage() {
       api.put(`/payroll/assignments/${employeeId}`, {
         structure_id: Number(draft.structure_id),
         base: Number(draft.base),
+        tds_amount: Number(draft.tds) || 0,
       }),
     onSuccess: (_res, { employeeId }) => {
       queryClient.invalidateQueries({ queryKey: ['salary-assignments'] });
@@ -129,6 +132,7 @@ export default function SalaryAssignmentsPage() {
                     <th className="px-4 py-3 font-medium">Designation</th>
                     <th className="px-4 py-3 font-medium w-64">Structure</th>
                     <th className="px-4 py-3 font-medium w-36">Base ₹/mo</th>
+                    <th className="px-4 py-3 font-medium w-28">TDS ₹/mo</th>
                     <th className="px-4 py-3 font-medium text-right">Actions</th>
                   </tr>
                 </thead>
@@ -157,6 +161,11 @@ export default function SalaryAssignmentsPage() {
                           <input type="number" className={`${inputCls} w-full`} value={d.base}
                             placeholder={structure ? String(Math.round(structure.default_base)) : ''}
                             onChange={(e) => setDraft(r.employee_id, { base: e.target.value }, r)} />
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <input type="number" min={0} className={`${inputCls} w-full`} value={d.tds}
+                            placeholder="0" title="Manual monthly TDS — deducted as a TDS line on the payslip"
+                            onChange={(e) => setDraft(r.employee_id, { tds: e.target.value }, r)} />
                         </td>
                         <td className="px-4 py-2.5">
                           <div className="flex items-center justify-end gap-1">

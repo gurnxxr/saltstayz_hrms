@@ -64,6 +64,13 @@ export async function getUploadLogs(req: AuthRequest, res: Response, next: NextF
   } catch (err) { next(err); }
 }
 
+/** Apply Shift Type auto-attendance thresholds to a date (default: yesterday). */
+export async function autoMark(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json(await attendanceService.autoMarkAttendance(req.body?.date ? String(req.body.date) : undefined));
+  } catch (err) { next(err); }
+}
+
 export async function getPropertySummary(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     const date = (req.query.date as string) || new Date().toISOString().slice(0, 10);

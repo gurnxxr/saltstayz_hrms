@@ -112,6 +112,17 @@ export async function getStatutoryRates(cityOrState?: string | null): Promise<St
   };
 }
 
+/** Statutory bonus setting for the payslip engine (Payment of Bonus Act line). */
+export async function getStatutoryBonus(): Promise<{ enabled: boolean; frequency: string; monthlyPercent: number }> {
+  const row = await db(TABLE).where('component', 'bonus').whereNull('state').first();
+  const cfg = parseConfig(row, BONUS_DEFAULT);
+  return {
+    enabled: !!(row && row.enabled),
+    frequency: cfg.frequency === 'yearly' ? 'yearly' : 'monthly',
+    monthlyPercent: Number(cfg.monthlyPercent) || 0,
+  };
+}
+
 export async function getAllStatutory() {
   const rows = await db(TABLE).select('*');
   const org = (c: string) => rows.find((r: any) => r.component === c && r.state == null);
