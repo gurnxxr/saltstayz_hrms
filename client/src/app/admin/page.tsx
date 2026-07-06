@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { Building2, Clock, ClipboardList, ShieldCheck, ScrollText, DatabaseBackup, Play, CalendarCheck, Wallet, SlidersHorizontal, AlertTriangle, Users, Landmark } from 'lucide-react';
+import { Building2, Clock, ClipboardList, ShieldCheck, ScrollText, DatabaseBackup, Play, Wallet, SlidersHorizontal, AlertTriangle, Users, Landmark } from 'lucide-react';
 
 const adminModules = [
   { label: 'Employee Details', href: '/employees', icon: Users, description: 'Full employee directory — profiles, contacts & org details', roles: ['admin', 'chro', 'hr', 'hr_manager', 'property_manager'] },
@@ -13,7 +13,6 @@ const adminModules = [
   { label: 'Property Configuration', href: '/admin/property-config', icon: SlidersHorizontal, description: 'Per-property workers, salaries, spend, budget & status', roles: ['admin'] },
   { label: 'Budget Control', href: '/admin/budget-control', icon: Wallet, description: 'Set sanctioned budget & headcount per property', roles: ['admin'] },
   { label: 'Module Access', href: '/admin/access', icon: ShieldCheck, description: 'Grant or revoke module access per employee', roles: ['admin'] },
-  { label: 'Leave Approvals', href: '/admin/leave-approvals', icon: CalendarCheck, description: 'Review and approve pending leave requests', roles: ['admin', 'chro', 'hr'] },
   { label: 'Payroll Runs', href: '/admin/payroll-runs', icon: Play, description: 'Run and lock monthly payroll', roles: ['admin'] },
   { label: 'Audit Log', href: '/admin/audit-log', icon: ScrollText, description: 'Who changed what, when — full activity trail', roles: ['admin'] },
   { label: 'Database Backups', href: '/admin/backups', icon: DatabaseBackup, description: 'Create and review database snapshots', roles: ['admin'] },
