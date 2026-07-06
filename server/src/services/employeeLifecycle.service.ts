@@ -1,6 +1,6 @@
 import db from '../config/database';
 import { NotFoundError, ValidationError } from '../utils/errors';
-import { getStructureByJobTitle, getAssignment, upsertAssignment } from './salaryStructure.service';
+import { getAssignment, upsertAssignment, seedEmployeeStructureFromTemplate } from './salaryStructure.service';
 import { ASSET_CATEGORIES, markAssetsReturned } from './asset.service';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -96,19 +96,20 @@ export async function createPromotion(
     return newId;
   });
 
-  // Salary revision (outside the trx: upsertAssignment manages its own writes).
+  // Salary revision: keep the employee's own component structure, change only the
+  // base (TDS preserved). If they have no config yet, seed one from the new
+  // designation's template at the new base.
   if (newBase > 0) {
-    const targetStructure = await getStructureByJobTitle(toJobTitle.id);
-    const structureId = targetStructure?.id ?? assignment?.structure_id;
-    if (!structureId) {
-      throw new ValidationError('Promotion recorded, but no salary structure exists for the new designation and the employee has no assignment — assign one in Admin → Salary Assignments');
+    if (assignment?.structure_id) {
+      await upsertAssignment(emp.id, {
+        structure_id: assignment.structure_id,
+        base: newBase,
+        effective_from: data.promotion_date,
+        tds_amount: num(assignment.tds_amount), // preserve TDS
+      }, userId ?? null);
+    } else {
+      await seedEmployeeStructureFromTemplate(emp.id, { base: newBase }, userId ?? null);
     }
-    await upsertAssignment(emp.id, {
-      structure_id: structureId,
-      base: newBase,
-      effective_from: data.promotion_date,
-      tds_amount: assignment ? num(assignment.tds_amount) : 0, // preserve TDS
-    }, userId ?? null);
   }
 
   const rows = await listPromotions();

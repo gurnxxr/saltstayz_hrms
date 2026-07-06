@@ -1,10 +1,11 @@
 import type { Knex } from 'knex';
-import { ensureStructureComponents, standardLines } from '../structureComponents';
+import { ensureStructureComponents, standardLines, cloneStructureForEmployee } from '../structureComponents';
 
 /**
- * Seeds a component-based salary structure (v2) for every designation and assigns
- * every active employee to their designation's structure. Idempotent: existing
- * structures/assignments are left untouched so manual edits survive re-seeds.
+ * Seeds a component-based salary TEMPLATE for every designation, then gives every
+ * active employee their own PRIVATE structure cloned from that template (so each
+ * employee's salary is independently editable — mirrors migration 058). Idempotent:
+ * existing structures/assignments are left untouched so manual edits survive re-seeds.
  */
 export async function seed(knex: Knex): Promise<void> {
   const ids = await ensureStructureComponents(knex);
@@ -36,24 +37,28 @@ export async function seed(knex: Knex): Promise<void> {
     await knex('salary_structure_components').insert(lines.map((l) => ({ ...l, structure_id: structureId })));
   }
 
-  // ── Assign every active employee to their designation's structure ──
-  const structures = await knex('salary_structures').whereNotNull('job_title_id')
+  // ── Give every active employee a PRIVATE structure cloned from their designation template ──
+  const templates = await knex('salary_structures').whereNotNull('job_title_id').whereNull('employee_id')
     .select('id', 'job_title_id', 'default_base');
-  const byJobTitle = new Map<number, any>(structures.map((s: any) => [s.job_title_id, s]));
+  const byJobTitle = new Map<number, any>(templates.map((s: any) => [s.job_title_id, s]));
   const assigned = new Set(await knex('salary_structure_assignments').pluck('employee_id'));
 
   const employees = await knex('employees')
     .where('is_active', true).whereNotNull('job_title_id')
-    .select('id', 'job_title_id');
+    .select('id', 'first_name', 'last_name', 'employee_code', 'job_title_id');
   for (const emp of employees) {
     if (assigned.has(emp.id)) continue;
-    const structure = byJobTitle.get(emp.job_title_id);
-    if (!structure) continue;
+    const template = byJobTitle.get(emp.job_title_id);
+    if (!template) continue;
     // ₹18,000–₹36,000 band, stepped deterministically by employee id
     const base = 18000 + (emp.id % 10) * 2000;
+    const name = `${emp.first_name ?? ''} ${emp.last_name ?? ''} · ${emp.employee_code ?? emp.id}`.trim();
+    const structureId = await cloneStructureForEmployee(knex, {
+      srcStructureId: template.id, employeeId: emp.id, name, base,
+    });
     await knex('salary_structure_assignments').insert({
       employee_id: emp.id,
-      structure_id: structure.id,
+      structure_id: structureId,
       base,
       effective_from: '2026-04-01',
     });

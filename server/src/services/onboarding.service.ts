@@ -3,7 +3,7 @@ import path from 'path';
 import db from '../config/database';
 import { NotFoundError, ValidationError } from '../utils/errors';
 import { notifyEmployee, notifyRole } from './notification.service';
-import { getStructureByJobTitle, computeForStructure, getCtcRange } from './salaryStructure.service';
+import { getStructureByJobTitle, computeForStructure, getCtcRange, seedEmployeeStructureFromTemplate } from './salaryStructure.service';
 import { generateOfferLetterPdf } from './offerLetterPdf.service';
 import { createEmployeeFromCandidate } from './recruitment.service';
 import { getBandForEmployee } from './manpower.service';
@@ -374,6 +374,13 @@ export async function acceptCandidateOffer(candidateId: number, userId: number) 
     return empId;
   });
 
+  // Give the new hire their own private salary structure, cloned from the
+  // designation template, so payroll works immediately and is independently
+  // editable. Outside the trx (seedEmployeeStructureFromTemplate manages its own).
+  try {
+    await seedEmployeeStructureFromTemplate(employeeId, { base: Number(c.offer_data?.base_gross) || undefined });
+  } catch { /* no template for this designation — HR sets salary from the employee view */ }
+
   await notifyRole('hr', {
     type: 'onboarding_assigned',
     title: 'Offer accepted',
@@ -532,14 +539,20 @@ export async function getOfferDefaults(employeeId: number) {
   const range = await getCtcRange(emp.job_title_id);
   const issued = await db('offer_letters').where('employee_id', employeeId).first();
   const band = await getBandForEmployee(employeeId);
+  // Prefer the employee's own assigned base (their private structure); fall back
+  // to the designation template's default when they aren't configured yet.
+  const assignment = await db('salary_structure_assignments').where('employee_id', employeeId).first();
+  const baseGross = assignment
+    ? Math.round(Number(assignment.base) || 0)
+    : (struct ? Math.round(Number(struct.default_base) || 0) : 0);
   return {
     employee_id: emp.id,
     name: `${emp.first_name} ${emp.last_name}`,
     employee_code: emp.employee_code,
     designation: emp.designation || 'Position',
     joining_date: emp.date_of_joining || null,
-    configured: !!struct,
-    base_gross: struct ? Math.round(Number(struct.default_base) || 0) : 0,
+    configured: !!struct || !!assignment,
+    base_gross: baseGross,
     ctc_label: range.label,
     already_issued: !!issued,
     // Sanctioned monthly-CTC band cap (null when no band is configured for this role/property).

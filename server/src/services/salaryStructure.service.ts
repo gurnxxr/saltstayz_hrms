@@ -85,7 +85,10 @@ export async function getStructureRow(id: number) {
 }
 
 export async function getStructureByJobTitle(jobTitleId: number) {
-  return db('salary_structures').where('job_title_id', jobTitleId).where('is_active', true).first();
+  // Only designation TEMPLATES (employee_id null) — never an employee's private structure.
+  return db('salary_structures')
+    .where('job_title_id', jobTitleId).whereNull('employee_id').where('is_active', true)
+    .first();
 }
 
 // ─── CRUD ───
@@ -103,6 +106,7 @@ async function editorLines(structureId: number) {
 export async function listStructures() {
   const structures = await db('salary_structures as s')
     .leftJoin('job_titles as jt', 'jt.id', 's.job_title_id')
+    .whereNull('s.employee_id') // templates only; employee structures are edited per-employee
     .select('s.*', 'jt.title as designation')
     .orderBy('s.name');
 
@@ -147,6 +151,38 @@ interface StructureInput {
   lines: Array<{ component_id: number; calculation_type: string; value: number }>;
 }
 
+/** Validates a set of component lines (shared by templates + per-employee saves). */
+async function validateLines(raw: any): Promise<StructureInput['lines']> {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new ValidationError('Add at least one component line');
+  }
+  const seen = new Set<number>();
+  let remainderCount = 0;
+  let hasEarning = false;
+  const lines: StructureInput['lines'] = [];
+  for (const row of raw) {
+    const component_id = Number(row.component_id);
+    if (!component_id) throw new ValidationError('Every line needs a component');
+    if (seen.has(component_id)) throw new ValidationError('A component appears twice in the structure');
+    seen.add(component_id);
+    const component = await db('salary_components').where('id', component_id).first();
+    if (!component) throw new NotFoundError('Salary component');
+    const calculation_type = String(row.calculation_type) as LineCalcType;
+    if (!CALC_TYPES.includes(calculation_type)) throw new ValidationError('Invalid calculation type');
+    if (calculation_type === 'remainder') {
+      if (component.category !== 'earning') throw new ValidationError('Remainder is only valid for earnings');
+      remainderCount += 1;
+      if (remainderCount > 1) throw new ValidationError('Only one remainder line is allowed');
+    }
+    if (component.category === 'earning') hasEarning = true;
+    const value = num(row.value);
+    if (calculation_type !== 'remainder' && value < 0) throw new ValidationError('Line values cannot be negative');
+    lines.push({ component_id, calculation_type, value });
+  }
+  if (!hasEarning) throw new ValidationError('A structure needs at least one earning component');
+  return lines;
+}
+
 async function validateStructureInput(data: any, excludeId?: number): Promise<StructureInput> {
   const name = String(data.name || '').trim();
   if (!name) throw new ValidationError('Structure name is required');
@@ -158,7 +194,8 @@ async function validateStructureInput(data: any, excludeId?: number): Promise<St
   if (job_title_id) {
     const jt = await db('job_titles').where('id', job_title_id).first();
     if (!jt) throw new NotFoundError('Designation');
-    const dupJt = db('salary_structures').where('job_title_id', job_title_id);
+    // One TEMPLATE per designation (employee structures never carry job_title_id).
+    const dupJt = db('salary_structures').where('job_title_id', job_title_id).whereNull('employee_id');
     if (excludeId) dupJt.whereNot('id', excludeId);
     if (await dupJt.first()) throw new ValidationError('That designation already has a structure');
   }
@@ -167,33 +204,7 @@ async function validateStructureInput(data: any, excludeId?: number): Promise<St
   const default_base = num(data.default_base);
   if (default_base <= 0) throw new ValidationError('Default base is required');
 
-  if (!Array.isArray(data.lines) || data.lines.length === 0) {
-    throw new ValidationError('Add at least one component line');
-  }
-  const seen = new Set<number>();
-  let remainderCount = 0;
-  let hasEarning = false;
-  const lines: StructureInput['lines'] = [];
-  for (const raw of data.lines) {
-    const component_id = Number(raw.component_id);
-    if (!component_id) throw new ValidationError('Every line needs a component');
-    if (seen.has(component_id)) throw new ValidationError('A component appears twice in the structure');
-    seen.add(component_id);
-    const component = await db('salary_components').where('id', component_id).first();
-    if (!component) throw new NotFoundError('Salary component');
-    const calculation_type = String(raw.calculation_type) as LineCalcType;
-    if (!CALC_TYPES.includes(calculation_type)) throw new ValidationError('Invalid calculation type');
-    if (calculation_type === 'remainder') {
-      if (component.category !== 'earning') throw new ValidationError('Remainder is only valid for earnings');
-      remainderCount += 1;
-      if (remainderCount > 1) throw new ValidationError('Only one remainder line is allowed');
-    }
-    if (component.category === 'earning') hasEarning = true;
-    const value = num(raw.value);
-    if (calculation_type !== 'remainder' && value < 0) throw new ValidationError('Line values cannot be negative');
-    lines.push({ component_id, calculation_type, value });
-  }
-  if (!hasEarning) throw new ValidationError('A structure needs at least one earning component');
+  const lines = await validateLines(data.lines);
 
   return {
     name,
@@ -226,6 +237,9 @@ export async function createStructure(data: any, userId?: number | null) {
 export async function updateStructure(id: number, data: any, userId?: number | null) {
   const existing = await getStructureRow(id);
   if (!existing) throw new NotFoundError('Salary structure');
+  if (existing.employee_id != null) {
+    throw new ValidationError('This is an employee salary structure — edit it from the employee view');
+  }
   const input = await validateStructureInput(data, id);
   await db.transaction(async (trx) => {
     await trx('salary_structures').where('id', id).update({
@@ -363,4 +377,158 @@ export async function upsertAssignment(
 export async function removeAssignment(employeeId: number) {
   await db('salary_structure_assignments').where('employee_id', employeeId).del();
   return { employee_id: employeeId };
+}
+
+// ─── Per-employee salary structures ───
+// Each employee owns a private structure (employee_id set, job_title_id null),
+// its base/TDS held on the assignment. Editing one employee affects only them.
+
+/** Employees with a `configured` flag + current base/TDS — drives the By-Employee list. */
+export async function listEmployeeSalary() {
+  return db('employees as e')
+    .leftJoin('job_titles as jt', 'jt.id', 'e.job_title_id')
+    .leftJoin('salary_structure_assignments as a', 'a.employee_id', 'e.id')
+    .where('e.is_active', true)
+    .select(
+      'e.id as employee_id', 'e.employee_code', 'e.first_name', 'e.last_name',
+      'e.branch_name', 'e.dept_name', 'jt.title as designation',
+      'a.base', 'a.tds_amount',
+      db.raw('CASE WHEN a.id IS NULL THEN 0 ELSE 1 END as configured'),
+    )
+    .orderBy('e.first_name');
+}
+
+/** An employee's full salary config (lines + base + TDS + city) with a live breakdown. */
+export async function getEmployeeStructure(employeeId: number) {
+  const emp = await db('employees as e')
+    .leftJoin('job_titles as jt', 'jt.id', 'e.job_title_id')
+    .where('e.id', employeeId)
+    .select('e.id', 'e.employee_code', 'e.first_name', 'e.last_name', 'e.job_title_id',
+      'e.dept_name', 'e.branch_name', 'jt.title as designation')
+    .first();
+  if (!emp) throw new NotFoundError('Employee');
+
+  const assignment = await db('salary_structure_assignments as a')
+    .join('salary_structures as s', 's.id', 'a.structure_id')
+    .where('a.employee_id', employeeId)
+    .select('a.structure_id', 'a.base', 'a.tds_amount', 'a.effective_from', 's.city', 's.payment_basis')
+    .first();
+
+  if (assignment) {
+    const structureRow = await getStructureRow(assignment.structure_id);
+    return {
+      configured: true,
+      employee: emp,
+      structure_id: assignment.structure_id,
+      lines: await editorLines(assignment.structure_id),
+      base: num(assignment.base),
+      tds_amount: num(assignment.tds_amount),
+      city: assignment.city ?? 'Haryana',
+      payment_basis: assignment.payment_basis ?? 'monthly',
+      effective_from: assignment.effective_from ?? null,
+      breakdown: await computeForStructure(structureRow, num(assignment.base)),
+      template_source: null,
+    };
+  }
+
+  // Not configured yet — offer the designation template's lines as a starting point.
+  const template = emp.job_title_id ? await getStructureByJobTitle(emp.job_title_id) : null;
+  const base = template ? num(template.default_base) : 0;
+  return {
+    configured: false,
+    employee: emp,
+    structure_id: null,
+    lines: template ? await editorLines(template.id) : [],
+    base,
+    tds_amount: 0,
+    city: template?.city ?? 'Haryana',
+    payment_basis: template?.payment_basis ?? 'monthly',
+    effective_from: null,
+    breakdown: template ? await computeForStructure(template, base) : null,
+    template_source: template ? { id: template.id, name: template.name } : null,
+  };
+}
+
+interface EmployeeStructureInput {
+  lines: any[];
+  base: number;
+  tds_amount?: number;
+  city?: string;
+  payment_basis?: string;
+  effective_from?: string | null;
+}
+
+/** Saves an employee's private structure (creating it if needed) + their assignment, atomically. */
+export async function saveEmployeeStructure(
+  employeeId: number,
+  data: EmployeeStructureInput,
+  userId?: number | null,
+) {
+  const emp = await db('employees').where('id', employeeId).first();
+  if (!emp) throw new NotFoundError('Employee');
+  const base = num(data.base);
+  if (base <= 0) throw new ValidationError('Base amount is required');
+  const tds = num(data.tds_amount);
+  if (tds < 0) throw new ValidationError('TDS cannot be negative');
+  const lines = await validateLines(data.lines);
+  const city = data.city ? String(data.city) : 'Haryana';
+  const payment_basis = data.payment_basis === 'hourly' ? 'hourly' : 'monthly';
+
+  await db.transaction(async (trx) => {
+    let structure = await trx('salary_structures').where('employee_id', employeeId).first();
+    if (!structure) {
+      const name = `${emp.first_name ?? ''} ${emp.last_name ?? ''} · ${emp.employee_code ?? employeeId}`.trim();
+      const [newId] = await trx('salary_structures').insert({
+        name, description: null, job_title_id: null, employee_id: employeeId,
+        payment_basis, default_base: base, city, is_active: 1, updated_by: userId ?? null,
+      });
+      structure = { id: newId };
+    } else {
+      await trx('salary_structures').where('id', structure.id).update({
+        payment_basis, default_base: base, city, is_active: 1,
+        updated_by: userId ?? null, updated_at: trx.fn.now(),
+      });
+    }
+    await trx('salary_structure_components').where('structure_id', structure.id).del();
+    await trx('salary_structure_components').insert(
+      lines.map((l, i) => ({ ...l, structure_id: structure.id, sort_order: i })),
+    );
+
+    const patch = {
+      structure_id: structure.id, base, tds_amount: tds,
+      effective_from: data.effective_from || null,
+      assigned_by: userId ?? null, updated_at: trx.fn.now(),
+    };
+    const existing = await trx('salary_structure_assignments').where('employee_id', employeeId).first();
+    if (existing) await trx('salary_structure_assignments').where('employee_id', employeeId).update(patch);
+    else await trx('salary_structure_assignments').insert({ employee_id: employeeId, ...patch });
+  });
+
+  return getEmployeeStructure(employeeId);
+}
+
+/** Clones the employee's designation template (or a generic template) into their private structure. */
+export async function seedEmployeeStructureFromTemplate(
+  employeeId: number,
+  opts: { base?: number; tds_amount?: number } = {},
+  userId?: number | null,
+) {
+  const emp = await db('employees').where('id', employeeId).first();
+  if (!emp) throw new NotFoundError('Employee');
+  let template = emp.job_title_id ? await getStructureByJobTitle(emp.job_title_id) : null;
+  if (!template) {
+    template = await db('salary_structures').whereNull('employee_id').where('is_active', true).orderBy('id').first();
+  }
+  if (!template) throw new ValidationError('No salary template available to seed from');
+
+  const lines = await editorLines(template.id);
+  const base = opts.base && opts.base > 0 ? Number(opts.base) : num(template.default_base);
+  return saveEmployeeStructure(employeeId, {
+    lines: lines.map((l: any) => ({ component_id: l.component_id, calculation_type: l.calculation_type, value: l.value })),
+    base,
+    tds_amount: opts.tds_amount ?? 0,
+    city: template.city,
+    payment_basis: template.payment_basis,
+    effective_from: emp.date_of_joining || null,
+  }, userId);
 }

@@ -73,6 +73,36 @@ export async function ensureStructureComponents(knex: Knex): Promise<Record<stri
   return map;
 }
 
+/**
+ * Clones a source structure's lines into a NEW private structure owned by one
+ * employee (employee_id set, job_title_id null). Shared by migration 058, seed
+ * 10, and the runtime seed-from-template helper so every path produces the same
+ * shape. Requires the `salary_structures.employee_id` column (migration 058).
+ */
+export async function cloneStructureForEmployee(
+  knex: Knex,
+  opts: { srcStructureId: number; employeeId: number; name: string; base: number },
+): Promise<number> {
+  const src = await knex('salary_structures').where('id', opts.srcStructureId).first();
+  const [newId] = await knex('salary_structures').insert({
+    name: opts.name,
+    description: src?.description ?? null,
+    job_title_id: null,
+    employee_id: opts.employeeId,
+    payment_basis: src?.payment_basis ?? 'monthly',
+    default_base: opts.base,
+    city: src?.city ?? 'Haryana',
+    is_active: 1,
+  });
+  const lines = await knex('salary_structure_components')
+    .where('structure_id', opts.srcStructureId)
+    .select('component_id', 'calculation_type', 'value', 'sort_order');
+  if (lines.length) {
+    await knex('salary_structure_components').insert(lines.map((l: any) => ({ ...l, structure_id: newId })));
+  }
+  return newId;
+}
+
 /** The standard SaltStayz line set, translated from the legacy structure numbers. */
 export function standardLines(ids: Record<string, number>, n: StandardNumbers) {
   let sort = 0;

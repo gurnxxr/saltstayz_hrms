@@ -115,10 +115,6 @@ function NewPromotionDialog({ onClose }: { onClose: () => void }) {
     queryKey: ['lifecycle-options'],
     queryFn: () => api.get('/employee-lifecycle/options').then(r => r.data),
   });
-  const { data: structures = [] } = useQuery({
-    queryKey: ['salary-structures'],
-    queryFn: () => api.get('/admin/salary-structures').then(r => r.data).catch(() => []),
-  });
 
   const filteredEmployees = useMemo(() => {
     const q = employeeSearch.toLowerCase();
@@ -128,14 +124,8 @@ function NewPromotionDialog({ onClose }: { onClose: () => void }) {
   }, [employees, employeeSearch]);
 
   const selectedEmployee = employees.find((e: any) => String(e.id) === form.employee_id);
-  const targetStructure = structures.find?.((s: any) => String(s.job_title_id) === form.to_job_title_id);
 
-  const setTarget = (jobTitleId: string) => {
-    setForm(p => ({ ...p, to_job_title_id: jobTitleId }));
-    // Prefill the revised base from the target designation's structure.
-    const s = structures.find?.((x: any) => String(x.job_title_id) === jobTitleId);
-    if (s && reviseSalary) setForm(p => ({ ...p, to_job_title_id: jobTitleId, new_base: String(Math.round(s.default_base)) }));
-  };
+  const setTarget = (jobTitleId: string) => setForm(p => ({ ...p, to_job_title_id: jobTitleId }));
 
   const createMutation = useMutation({
     mutationFn: () => api.post('/employee-lifecycle/promotions', {
@@ -148,7 +138,7 @@ function NewPromotionDialog({ onClose }: { onClose: () => void }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['lifecycle-promotions'] });
       queryClient.invalidateQueries({ queryKey: ['lifecycle-employees'] });
-      queryClient.invalidateQueries({ queryKey: ['salary-assignments'] });
+      queryClient.invalidateQueries({ queryKey: ['employee-salary'] });
       toast.success('Promotion applied');
       onClose();
     },
@@ -200,19 +190,15 @@ function NewPromotionDialog({ onClose }: { onClose: () => void }) {
           </div>
           <label className="flex items-start gap-2.5 cursor-pointer">
             <input type="checkbox" className="accent-primary w-4 h-4 mt-0.5" checked={reviseSalary}
-              onChange={(e) => {
-                setReviseSalary(e.target.checked);
-                if (e.target.checked && targetStructure) setForm(p => ({ ...p, new_base: String(Math.round(targetStructure.default_base)) }));
-              }} />
+              onChange={(e) => setReviseSalary(e.target.checked)} />
             <span className="text-sm text-foreground">Revise salary
-              <span className="block text-xs text-secondary">Updates the salary assignment — switches to the new designation&apos;s structure when one exists. TDS is preserved.</span>
+              <span className="block text-xs text-secondary">Updates the employee&apos;s base salary. Their salary components and TDS are kept unchanged.</span>
             </span>
           </label>
           {reviseSalary && (
             <div>
               <label className="block text-sm font-medium text-foreground mb-1">New monthly base ₹<span className="text-red-600"> *</span></label>
               <input type="number" min={1} className={inputCls} value={form.new_base}
-                placeholder={targetStructure ? String(Math.round(targetStructure.default_base)) : ''}
                 onChange={(e) => setForm(p => ({ ...p, new_base: e.target.value }))} />
             </div>
           )}
