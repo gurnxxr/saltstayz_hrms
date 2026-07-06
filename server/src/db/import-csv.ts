@@ -1,4 +1,5 @@
 import db from '../config/database';
+import { linkUserProfiles } from './linkUserProfiles';
 
 const CSV_DATA = [
   { code: '3', name: 'Anvesha Gupta', father: 'Rajeev Gupta', dob: '30-03-1999', designation: 'Assistant Manager', aadhaar: '343880923276', doj: '28-11-2022' },
@@ -102,6 +103,11 @@ async function run() {
     }
 
     console.log(`\nImport complete: ${inserted} inserted, ${updated} updated (${CSV_DATA.length} total rows)`);
+
+    // Re-import can orphan the users.employee_id links (CSV rows carry no email);
+    // restore them so the demo logins keep their profiles.
+    const relinked = await linkUserProfiles(db);
+    if (relinked) console.log(`Re-linked ${relinked} login account(s) to their employee profile.`);
   } catch (err) {
     console.error('Import failed:', err);
     process.exit(1);
