@@ -84,23 +84,10 @@ export const NAVIGATION: NavItem[] = [
     label: 'Admin',
     href: '/admin',
     icon: 'Settings',
-    roles: ['admin', 'chro', 'hr'],
+    // Employee Details & Financial Details are now cards inside the Admin
+    // dashboard, so the tab opens to whoever can use at least one of its cards.
+    roles: ['admin', 'chro', 'hr', 'hr_manager', 'property_manager', 'finance'],
     module: 'admin',
-  },
-  // Grouped directly under Admin as flat links (each keeps its own roles/module).
-  {
-    label: 'Employee Details',
-    href: '/employees',
-    icon: 'Users',
-    roles: ['admin', 'chro', 'hr', 'hr_manager', 'property_manager'],
-    module: 'employees',
-  },
-  {
-    label: 'Financial Details',
-    href: '/finance',
-    icon: 'Landmark',
-    roles: ['admin', 'chro', 'hr', 'finance'],
-    module: 'finance',
   },
 ];
 
