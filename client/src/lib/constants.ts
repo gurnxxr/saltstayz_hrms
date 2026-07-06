@@ -64,6 +64,7 @@ export const NAVIGATION: NavItem[] = [
     roles: ['admin', 'chro', 'hr', 'finance', 'employee'],
     children: [
       { label: 'Salary Slips', href: '/payroll', icon: 'FileText', roles: ['admin', 'chro', 'hr', 'finance', 'employee'], module: 'payroll' },
+      { label: 'Salary Structures', href: '/admin/salary-structure', icon: 'IndianRupee', roles: ['admin'] },
       { label: 'Pay Schedule', href: '/setup/pay-schedule', icon: 'CalendarClock', roles: ['admin', 'finance'] },
       { label: 'Statutory Components', href: '/setup/statutory-components', icon: 'Landmark', roles: ['admin', 'finance'] },
       { label: 'Salary Components', href: '/setup/salary-components', icon: 'Coins', roles: ['admin', 'finance'] },
