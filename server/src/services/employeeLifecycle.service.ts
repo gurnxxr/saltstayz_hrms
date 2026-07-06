@@ -1,6 +1,7 @@
 import db from '../config/database';
 import { NotFoundError, ValidationError } from '../utils/errors';
 import { getStructureByJobTitle, getAssignment, upsertAssignment } from './salaryStructure.service';
+import { ASSET_CATEGORIES, markAssetsReturned } from './asset.service';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Employee Lifecycle: Promotion / Transfer / Exit Interview.
@@ -25,7 +26,7 @@ export async function getOptions() {
     db('departments').select('id', 'name').orderBy('name'),
     db('job_titles').select('id', 'title').orderBy('title'),
   ]);
-  return { properties, departments, job_titles: jobTitles };
+  return { properties, departments, job_titles: jobTitles, asset_categories: ASSET_CATEGORIES };
 }
 
 export async function listEmployees() {
@@ -195,6 +196,8 @@ export async function listExitInterviews(filters: { status?: string } = {}) {
       'x.*',
       'e.employee_code', 'e.first_name', 'e.last_name', 'e.branch_name',
       'iu.email as interviewer_email',
+      db.raw(`(select count(*) from asset_assignments aa
+               where aa.employee_id = x.employee_id and aa.status = 'assigned') as outstanding_assets`),
     )
     .orderBy('x.interview_date', 'desc');
   if (filters.status) query.where('x.status', filters.status);
@@ -223,7 +226,10 @@ export async function scheduleExitInterview(
 
 export async function completeExitInterview(
   id: number,
-  data: { reason_for_leaving?: string; overall_rating?: number; would_recommend?: boolean; feedback?: string; suggestions?: string },
+  data: {
+    reason_for_leaving?: string; overall_rating?: number; would_recommend?: boolean;
+    feedback?: string; suggestions?: string; returned_asset_ids?: number[];
+  },
   userId?: number | null,
 ) {
   const interview = await db('exit_interviews').where('id', id).first();
@@ -245,6 +251,18 @@ export async function completeExitInterview(
     interviewer_id: userId ?? interview.interviewer_id,
     updated_at: db.fn.now(),
   });
+
+  // Collect back the company assets the interviewer ticked off, tying each
+  // return to this exit event. Guarded to this employee's still-held items.
+  if (Array.isArray(data.returned_asset_ids) && data.returned_asset_ids.length) {
+    await markAssetsReturned(
+      data.returned_asset_ids,
+      interview.employee_id,
+      { exit_interview_id: id, returned_date: interview.interview_date },
+      userId ?? null,
+    );
+  }
+
   const rows = await listExitInterviews();
   return rows.find((r: any) => r.id === id);
 }

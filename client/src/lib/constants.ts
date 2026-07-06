@@ -61,6 +61,7 @@ export const NAVIGATION: NavItem[] = [
       { label: 'Employee Promotion', href: '/employee-lifecycle/promotion', icon: 'TrendingUp', roles: ['admin', 'chro', 'hr', 'hr_manager'] },
       { label: 'Employee Transfer', href: '/employee-lifecycle/transfer', icon: 'ArrowRightLeft', roles: ['admin', 'chro', 'hr', 'hr_manager'] },
       { label: 'Exit Interview', href: '/employee-lifecycle/exit-interview', icon: 'ClipboardList', roles: ['admin', 'chro', 'hr', 'hr_manager'] },
+      { label: 'Company Assets', href: '/employee-lifecycle/assets', icon: 'Package', roles: ['admin', 'chro', 'hr', 'hr_manager'] },
     ],
   },
   {

@@ -7,7 +7,7 @@ import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import Breadcrumb from '@/components/ui/Breadcrumb';
 import LoadError from '@/components/ui/LoadError';
-import { Plus, ClipboardList, X, Loader2, Star, CheckCircle2 } from 'lucide-react';
+import { Plus, ClipboardList, X, Loader2, Star, CheckCircle2, Package, AlertTriangle } from 'lucide-react';
 
 const inputCls = 'w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50';
 const todayStr = () => new Date().toISOString().slice(0, 10);
@@ -68,6 +68,7 @@ export default function ExitInterviewPage() {
                     <th className="px-4 py-3 font-medium">Date</th>
                     <th className="px-4 py-3 font-medium">Status</th>
                     <th className="px-4 py-3 font-medium">Reason</th>
+                    <th className="px-4 py-3 font-medium">Assets</th>
                     <th className="px-4 py-3 font-medium">Rating</th>
                     <th className="px-4 py-3 font-medium">Interviewer</th>
                     <th className="px-4 py-3 font-medium text-right"></th>
@@ -87,6 +88,17 @@ export default function ExitInterviewPage() {
                         </span>
                       </td>
                       <td className="px-4 py-2.5 text-secondary">{r.reason_for_leaving || '—'}</td>
+                      <td className="px-4 py-2.5">
+                        {r.outstanding_assets > 0 ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
+                            <Package size={12} /> {r.outstanding_assets} pending
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-xs text-secondary">
+                            <CheckCircle2 size={12} className="text-green-600" /> Clear
+                          </span>
+                        )}
+                      </td>
                       <td className="px-4 py-2.5">
                         {r.overall_rating ? (
                           <span className="inline-flex items-center gap-1 text-foreground">
@@ -209,6 +221,20 @@ function CompleteDialog({ interview, onClose }: { interview: any; onClose: () =>
     feedback: '',
     suggestions: '',
   });
+  const [collected, setCollected] = useState<Set<number>>(new Set());
+
+  // Company assets the employee still holds — an exit collection checklist.
+  const { data: outstanding = [] } = useQuery({
+    queryKey: ['exit-outstanding', interview.employee_id],
+    queryFn: () => api.get(`/employee-lifecycle/assets/outstanding/${interview.employee_id}`).then(r => r.data),
+  });
+
+  const toggle = (id: number) => setCollected((s) => {
+    const next = new Set(s);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
+  const uncollected = outstanding.length - collected.size;
 
   const completeMutation = useMutation({
     mutationFn: () => api.put(`/employee-lifecycle/exit-interviews/${interview.id}/complete`, {
@@ -217,9 +243,11 @@ function CompleteDialog({ interview, onClose }: { interview: any; onClose: () =>
       would_recommend: form.would_recommend,
       feedback: form.feedback,
       suggestions: form.suggestions,
+      returned_asset_ids: [...collected],
     }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['exit-interviews'] });
+      queryClient.invalidateQueries({ queryKey: ['asset-assignments'] });
       toast.success('Exit interview completed');
       onClose();
     },
@@ -274,6 +302,39 @@ function CompleteDialog({ interview, onClose }: { interview: any; onClose: () =>
             <textarea rows={2} className={`${inputCls} resize-none`} value={form.suggestions}
               onChange={(e) => setForm(p => ({ ...p, suggestions: e.target.value }))}
               placeholder="What could improve" />
+          </div>
+
+          {/* Company assets collection checklist */}
+          <div className="border-t border-border pt-4">
+            <div className="flex items-center gap-2 mb-2">
+              <Package size={15} className="text-primary" />
+              <span className="text-sm font-medium text-foreground">Company Assets to Collect</span>
+            </div>
+            {outstanding.length === 0 ? (
+              <p className="text-xs text-secondary flex items-center gap-1.5">
+                <CheckCircle2 size={13} className="text-green-600" /> No company assets outstanding for this employee.
+              </p>
+            ) : (
+              <>
+                <div className="space-y-1.5 max-h-44 overflow-y-auto">
+                  {outstanding.map((a: any) => (
+                    <label key={a.id} className="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg border border-border hover:bg-muted/30 cursor-pointer">
+                      <input type="checkbox" className="accent-primary w-4 h-4" checked={collected.has(a.id)} onChange={() => toggle(a.id)} />
+                      <span className="text-sm text-foreground flex-1">
+                        {a.asset_name}{a.identifier ? <span className="text-secondary"> · {a.identifier}</span> : ''}
+                      </span>
+                      <span className="text-xs text-secondary">{a.asset_category}</span>
+                    </label>
+                  ))}
+                </div>
+                {uncollected > 0 && (
+                  <p className="mt-2 text-xs text-amber-700 flex items-start gap-1.5">
+                    <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+                    {uncollected} item{uncollected > 1 ? 's' : ''} still uncollected — you can record {uncollected > 1 ? 'them' : 'it'} later from Company Assets.
+                  </p>
+                )}
+              </>
+            )}
           </div>
         </div>
         <div className="flex justify-end gap-2 px-5 py-4 border-t border-border">
