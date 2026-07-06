@@ -6,7 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
-import { Search, ArrowLeft, User } from 'lucide-react';
+import { Search, ArrowLeft, User, Archive } from 'lucide-react';
 
 const STAGES = ['screening', 'interview', 'shortlisted', 'offered', 'rejected'] as const;
 const STAGE_COLORS: Record<string, string> = {
@@ -90,16 +90,25 @@ export default function CandidatesPage() {
               <option key={v.id} value={v.id}>{v.job_title} - {v.property_name}</option>
             ))}
           </select>
-          <label className="flex items-center gap-2 px-3 py-2 text-sm text-secondary cursor-pointer select-none">
+          <label className={`flex items-center gap-2 px-3 py-2 text-sm text-secondary select-none ${stageFilter === 'rejected' ? 'cursor-default opacity-70' : 'cursor-pointer'}`}>
             <input
               type="checkbox"
-              checked={includeArchived}
+              // Rejected candidates live in the archive, so archived are forced on for that filter.
+              checked={includeArchived || stageFilter === 'rejected'}
+              disabled={stageFilter === 'rejected'}
               onChange={(e) => setIncludeArchived(e.target.checked)}
               className="rounded border-border"
             />
             Include archived
           </label>
         </div>
+
+        {stageFilter === 'rejected' && (
+          <p className="flex items-center gap-1.5 text-xs text-secondary -mt-3">
+            <Archive size={13} className="shrink-0" />
+            Rejected applicants are archived — they&apos;re included here automatically.
+          </p>
+        )}
 
         {/* Candidates Table */}
         <div className="bg-card rounded-xl border border-border overflow-hidden">

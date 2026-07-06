@@ -6,9 +6,18 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
-import LoadError from '@/components/ui/LoadError';
 import { useUnsavedChangesWarning } from '@/hooks/useUnsavedChangesWarning';
 import { ArrowLeft, IndianRupee, AlertCircle } from 'lucide-react';
+
+// Inline per-field failure for a reference-data dropdown, with a targeted retry.
+function FieldError({ onRetry }: { onRetry: () => void }) {
+  return (
+    <p className="mt-1.5 flex items-center gap-1.5 text-xs text-red-600">
+      <AlertCircle size={13} className="shrink-0" /> Couldn&apos;t load options.
+      <button type="button" onClick={onRetry} className="underline font-medium hover:text-red-700">Retry</button>
+    </p>
+  );
+}
 
 export default function NewVacancyPage() {
   const router = useRouter();
@@ -47,10 +56,6 @@ export default function NewVacancyPage() {
     queryKey: ['managers'],
     queryFn: () => api.get('/employees/managers').then(r => r.data),
   });
-
-  // If the form's reference data fails, say so — don't leave silently-empty dropdowns.
-  const refError = pErr || dErr || jErr || mErr;
-  const retryRef = () => { rP(); rD(); rJ(); rM(); };
 
   const selectedTitle = jobTitles.find((j: any) => String(j.id) === form.job_title_id);
   const hasUnconfigured = jobTitles.some((j: any) => !j.configured);
@@ -114,12 +119,6 @@ export default function NewVacancyPage() {
           <p className="text-secondary mt-1">Open a new position for recruitment</p>
         </div>
 
-        {refError && (
-          <div className="bg-card rounded-xl border border-border">
-            <LoadError compact message="Couldn't load form options (properties, departments, roles, or managers)." onRetry={retryRef} />
-          </div>
-        )}
-
         <form onSubmit={handleSubmit} className="bg-card rounded-xl border border-border p-6 space-y-5">
           <div>
             <label className="block text-sm font-medium text-foreground mb-1.5">Property *</label>
@@ -134,6 +133,7 @@ export default function NewVacancyPage() {
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </select>
+            {pErr && <FieldError onRetry={rP} />}
           </div>
 
           <div>
@@ -149,6 +149,7 @@ export default function NewVacancyPage() {
                 <option key={d.id} value={d.id}>{d.name}</option>
               ))}
             </select>
+            {dErr && <FieldError onRetry={rD} />}
           </div>
 
           <div>
@@ -166,6 +167,7 @@ export default function NewVacancyPage() {
                 </option>
               ))}
             </select>
+            {jErr && <FieldError onRetry={rJ} />}
 
             {selectedTitle?.configured && (
               <div className="mt-2 flex items-center gap-2 rounded-lg bg-primary/5 border border-primary/20 px-3 py-2">
@@ -199,6 +201,7 @@ export default function NewVacancyPage() {
                 <option key={m.id} value={m.id}>{m.first_name} {m.last_name} ({m.employee_code})</option>
               ))}
             </select>
+            {mErr && <FieldError onRetry={rM} />}
             <p className="mt-1.5 text-xs text-secondary">The hired applicant will report to this manager.</p>
           </div>
 

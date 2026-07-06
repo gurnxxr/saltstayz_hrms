@@ -9,7 +9,8 @@ import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { allowedNextStages } from '@/lib/constants';
 import Breadcrumb from '@/components/ui/Breadcrumb';
-import { Plus, User, Eye, Archive, Users, FileText, Download, Loader2, Pencil } from 'lucide-react';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { Plus, User, Eye, Archive, Users, FileText, Download, Loader2, Pencil, ArrowRight } from 'lucide-react';
 
 const EMPLOYMENT_TYPES = ['Full-time', 'Part-time', 'Contract', 'Internship'];
 const emptyJd = {
@@ -42,6 +43,7 @@ export default function VacancyDetailPage({ params }: { params: Promise<{ id: st
   const [statusEdit, setStatusEdit] = useState(false);
   const [newStatus, setNewStatus] = useState('');
   const [showArchived, setShowArchived] = useState(false);
+  const [stageConfirm, setStageConfirm] = useState<{ candidate: any; stage: string } | null>(null);
   const [showJd, setShowJd] = useState(false);
   const [jd, setJd] = useState(emptyJd);
 
@@ -69,6 +71,7 @@ export default function VacancyDetailPage({ params }: { params: Promise<{ id: st
     queryClient.invalidateQueries({ queryKey: ['candidates-by-stage'] });
     queryClient.invalidateQueries({ queryKey: ['onboarding-stats'] });
     queryClient.invalidateQueries({ queryKey: ['onboarding-checklists'] });
+    queryClient.invalidateQueries({ queryKey: ['offer-candidates'] });
   };
 
   const addCandidateMutation = useMutation({
@@ -99,8 +102,12 @@ export default function VacancyDetailPage({ params }: { params: Promise<{ id: st
       api.put(`/recruitment/candidates/${candidateId}/stage`, { stage }),
     onSuccess: (_d, { stage }) => {
       invalidateAll();
-      if (stage === 'offered') toast.success('Candidate offered — moved to Onboarding');
-      else if (stage === 'rejected') toast.success('Candidate rejected and archived');
+      setStageConfirm(null);
+      if (stage === 'offered') {
+        toast.success('Candidate offered — moved to Onboarding', {
+          action: { label: 'Go to Onboarding', onClick: () => router.push('/onboarding') },
+        });
+      } else if (stage === 'rejected') toast.success('Candidate rejected and archived');
       else toast.success('Stage updated');
     },
     onError: (err: any) => toast.error(err.response?.data?.error || 'Failed to update stage'),
@@ -146,8 +153,9 @@ export default function VacancyDetailPage({ params }: { params: Promise<{ id: st
 
   function handleStageChange(c: any, stage: string) {
     if (stage === c.stage) return;
-    if (stage === 'offered' && !confirm(`Mark ${c.name} as Offered?\n\nThis moves them to Onboarding for offer-letter generation. The employee record is created only when the offer is accepted.`)) return;
-    if (stage === 'rejected' && !confirm(`Reject and archive ${c.name}? Their application will be moved to the archive.`)) return;
+    // Offered / Rejected are consequential and terminal — confirm via dialog
+    // (consistent with the delete flow). Intermediate moves apply immediately.
+    if (stage === 'offered' || stage === 'rejected') { setStageConfirm({ candidate: c, stage }); return; }
     stageMoveMutation.mutate({ candidateId: c.id, stage });
   }
 
@@ -445,7 +453,13 @@ export default function VacancyDetailPage({ params }: { params: Promise<{ id: st
                             </select>
                           )}
                           {c.stage === 'offered' && !c.archived && (
-                            <span className="text-xs text-green-700">In onboarding</span>
+                            <button
+                              onClick={() => router.push('/onboarding')}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-green-700 hover:bg-green-50 rounded-lg transition-colors"
+                              title="Open Onboarding to generate the offer letter"
+                            >
+                              In onboarding <ArrowRight size={12} />
+                            </button>
                           )}
                           <button
                             onClick={() => router.push(`/recruitment/candidates/${c.id}`)}
@@ -463,6 +477,19 @@ export default function VacancyDetailPage({ params }: { params: Promise<{ id: st
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={!!stageConfirm}
+        title={stageConfirm?.stage === 'offered' ? 'Mark as Offered?' : 'Reject applicant?'}
+        message={stageConfirm ? (stageConfirm.stage === 'offered'
+          ? <>Move <span className="font-medium text-foreground">{stageConfirm.candidate.name}</span> to Onboarding for offer-letter generation. The employee record is created only when the offer is accepted.</>
+          : <>Reject and archive <span className="font-medium text-foreground">{stageConfirm.candidate.name}</span>? Their application moves to the archive.</>) : undefined}
+        confirmLabel={stageConfirm?.stage === 'offered' ? 'Mark Offered' : 'Reject & Archive'}
+        danger={stageConfirm?.stage === 'rejected'}
+        loading={stageMoveMutation.isPending}
+        onConfirm={() => stageConfirm && stageMoveMutation.mutate({ candidateId: stageConfirm.candidate.id, stage: stageConfirm.stage })}
+        onCancel={() => setStageConfirm(null)}
+      />
     </AppShell>
   );
 }

@@ -9,7 +9,8 @@ import api from '@/lib/api';
 import { allowedNextStages } from '@/lib/constants';
 import { formatDateTime } from '@/lib/utils';
 import Breadcrumb from '@/components/ui/Breadcrumb';
-import { User, Clock, ChevronRight } from 'lucide-react';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { User, Clock, ChevronRight, ArrowRight } from 'lucide-react';
 
 const STAGES = ['screening', 'interview', 'shortlisted', 'offered', 'rejected'] as const;
 const STAGE_COLORS: Record<string, string> = {
@@ -26,6 +27,7 @@ export default function CandidateDetailPage({ params }: { params: Promise<{ id: 
   const queryClient = useQueryClient();
   const [moveNotes, setMoveNotes] = useState('');
   const [selectedStage, setSelectedStage] = useState('');
+  const [stageConfirm, setStageConfirm] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState({ name: '', email: '', phone: '', notes: '' });
 
@@ -48,11 +50,16 @@ export default function CandidateDetailPage({ params }: { params: Promise<{ id: 
       queryClient.invalidateQueries({ queryKey: ['candidates-by-stage'] });
       queryClient.invalidateQueries({ queryKey: ['onboarding-stats'] });
       queryClient.invalidateQueries({ queryKey: ['onboarding-checklists'] });
-      if (vars.stage === 'offered') toast.success('Candidate offered — moved to Onboarding');
-      else if (vars.stage === 'rejected') toast.success('Candidate rejected and archived');
+      queryClient.invalidateQueries({ queryKey: ['offer-candidates'] });
+      if (vars.stage === 'offered') {
+        toast.success('Candidate offered — moved to Onboarding', {
+          action: { label: 'Go to Onboarding', onClick: () => router.push('/onboarding') },
+        });
+      } else if (vars.stage === 'rejected') toast.success('Candidate rejected and archived');
       else toast.success('Stage updated');
       setSelectedStage('');
       setMoveNotes('');
+      setStageConfirm(null);
     },
     onError: () => toast.error('Failed to update stage'),
   });
@@ -225,6 +232,19 @@ export default function CandidateDetailPage({ params }: { params: Promise<{ id: 
           </div>
         </div>
 
+        {/* Offered → onboarding handoff */}
+        {candidate.stage === 'offered' && !candidate.archived && (
+          <div className="bg-green-50 border border-green-200 rounded-xl p-4 flex items-center justify-between gap-3 flex-wrap">
+            <p className="text-sm text-green-800">This candidate is in Onboarding for offer-letter generation.</p>
+            <button
+              onClick={() => router.push('/onboarding')}
+              className="inline-flex items-center gap-1.5 px-3 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 transition-colors"
+            >
+              Go to Onboarding <ArrowRight size={15} />
+            </button>
+          </div>
+        )}
+
         {/* Move Stage — offered & rejected are terminal */}
         {candidate.stage !== 'offered' && candidate.stage !== 'rejected' && (
           <div className="bg-card rounded-xl border border-border p-6">
@@ -261,8 +281,7 @@ export default function CandidateDetailPage({ params }: { params: Promise<{ id: 
                 )}
                 <button
                   onClick={() => {
-                    if (selectedStage === 'offered' && !confirm(`Mark ${candidate.name} as Offered? This creates an employee and starts onboarding.`)) return;
-                    if (selectedStage === 'rejected' && !confirm(`Reject and archive ${candidate.name}?`)) return;
+                    if (selectedStage === 'offered' || selectedStage === 'rejected') { setStageConfirm(selectedStage); return; }
                     stageMoveMutation.mutate({ stage: selectedStage, notes: moveNotes });
                   }}
                   disabled={stageMoveMutation.isPending}
@@ -308,6 +327,19 @@ export default function CandidateDetailPage({ params }: { params: Promise<{ id: 
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={!!stageConfirm}
+        title={stageConfirm === 'offered' ? 'Mark as Offered?' : 'Reject applicant?'}
+        message={stageConfirm === 'offered'
+          ? <>Move <span className="font-medium text-foreground">{candidate.name}</span> to Onboarding for offer-letter generation. The employee record is created only when the offer is accepted.</>
+          : <>Reject and archive <span className="font-medium text-foreground">{candidate.name}</span>? Their application moves to the archive.</>}
+        confirmLabel={stageConfirm === 'offered' ? 'Mark Offered' : 'Reject & Archive'}
+        danger={stageConfirm === 'rejected'}
+        loading={stageMoveMutation.isPending}
+        onConfirm={() => stageConfirm && stageMoveMutation.mutate({ stage: stageConfirm, notes: moveNotes })}
+        onCancel={() => setStageConfirm(null)}
+      />
     </AppShell>
   );
 }
