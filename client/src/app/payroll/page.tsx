@@ -6,10 +6,11 @@ import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import Breadcrumb from '@/components/ui/Breadcrumb';
 import api from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { formatINR } from '@/lib/utils';
 import LoadError from '@/components/ui/LoadError';
 import {
-  FileText, Download, Loader2, Wallet, Calendar, IndianRupee, AlertTriangle,
+  FileText, Download, Loader2, Wallet, Calendar, IndianRupee, AlertTriangle, Users, CheckCircle2,
 } from 'lucide-react';
 
 const MONTHS = [
@@ -20,11 +21,21 @@ const MONTHS = [
 
 export default function PayrollPage() {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
   const now = new Date();
+
+  // Personal payslip is only meaningful for accounts linked to an employee.
+  // Payroll staff (who may have no employee profile) get bulk generation instead.
+  const hasProfile = !!user?.employeeId;
+  const isPayrollStaff = ['admin', 'chro', 'hr', 'finance'].includes(user?.roleName || '');
 
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [year, setYear] = useState(now.getFullYear());
   const [result, setResult] = useState<any>(null);
+
+  const [bulkMonth, setBulkMonth] = useState(now.getMonth() + 1);
+  const [bulkYear, setBulkYear] = useState(now.getFullYear());
+  const [bulkResult, setBulkResult] = useState<any>(null);
 
   const years = Array.from({ length: 5 }, (_, i) => now.getFullYear() - i);
   const isFutureMonth = (m: number, y: number) =>
@@ -34,6 +45,13 @@ export default function PayrollPage() {
   const { data: history = [], isLoading: historyLoading, isError: historyError, refetch: refetchHistory } = useQuery({
     queryKey: ['my-payslip-history'],
     queryFn: () => api.get('/payroll/me/history').then(r => r.data),
+    enabled: hasProfile, // avoid the "no employee profile" 400 for staff accounts
+  });
+
+  const bulkMutation = useMutation({
+    mutationFn: () => api.post('/payroll/runs', { month: bulkMonth, year: bulkYear }).then(r => r.data),
+    onSuccess: (data) => { setBulkResult(data); toast.success(`${data.generated} payslip(s) generated`); },
+    onError: (err: any) => { setBulkResult(null); toast.error(err.response?.data?.error || 'Bulk generation failed'); },
   });
 
   const generateMutation = useMutation({
@@ -72,8 +90,74 @@ export default function PayrollPage() {
         {/* Header */}
         <div>
           <h1 className="text-2xl font-bold text-foreground">Salary Slips</h1>
-          <p className="text-secondary mt-1">Generate and download your monthly payslip</p>
+          <p className="text-secondary mt-1">Generate and download salary slips</p>
         </div>
+
+        {/* Bulk generate — payroll staff */}
+        {isPayrollStaff && (
+          <div className="bg-card rounded-xl border border-border p-6">
+            <h2 className="text-sm font-semibold text-foreground flex items-center gap-2 mb-1">
+              <Users size={16} className="text-primary" /> Bulk Generate Salary Slips
+            </h2>
+            <p className="text-xs text-secondary mb-4">
+              Generate payslips for every active employee for a month. Review and lock the run in{' '}
+              <a href="/admin/payroll-runs" className="underline hover:text-foreground">Payroll Runs</a>.
+            </p>
+            <div className="flex flex-wrap items-end gap-3">
+              <div>
+                <label className="block text-xs font-medium text-secondary mb-1">Month</label>
+                <select value={bulkMonth} onChange={(e) => { setBulkMonth(Number(e.target.value)); setBulkResult(null); }}
+                  className="px-3 py-2.5 border border-border rounded-lg bg-background text-sm min-w-[140px] focus:outline-none focus:ring-2 focus:ring-primary/50">
+                  {MONTHS.map((m, i) => <option key={m} value={i + 1} disabled={isFutureMonth(i + 1, bulkYear)}>{m}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-secondary mb-1">Year</label>
+                <select value={bulkYear} onChange={(e) => { setBulkYear(Number(e.target.value)); setBulkResult(null); }}
+                  className="px-3 py-2.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50">
+                  {years.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </div>
+              <button onClick={() => bulkMutation.mutate()} disabled={bulkMutation.isPending || isFutureMonth(bulkMonth, bulkYear)}
+                className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors">
+                {bulkMutation.isPending ? <Loader2 size={15} className="animate-spin" /> : <Users size={15} />}
+                Generate All
+              </button>
+            </div>
+            {isFutureMonth(bulkMonth, bulkYear) && (
+              <p className="text-xs text-amber-600 mt-3 flex items-center gap-1"><AlertTriangle size={13} /> You can&apos;t run payroll for a future month.</p>
+            )}
+            {bulkResult && (
+              <div className="mt-4 p-4 bg-muted/40 rounded-lg">
+                <p className="text-sm font-medium text-foreground flex items-center gap-2">
+                  <CheckCircle2 size={15} className="text-green-600" />
+                  {bulkResult.generated} payslip(s) generated for {MONTHS[bulkResult.month - 1]} {bulkResult.year}
+                </p>
+                <div className="flex flex-wrap gap-x-6 gap-y-1 mt-2 text-xs text-secondary">
+                  <span>Total Net: <span className="font-medium text-foreground">{formatINR(bulkResult.total_net)}</span></span>
+                  <span>Total CTC: <span className="font-medium text-foreground">{formatINR(bulkResult.total_ctc)}</span></span>
+                </div>
+                {bulkResult.skipped?.length > 0 && (
+                  <p className="text-xs text-amber-600 mt-2">
+                    Skipped {bulkResult.skipped.length} employee(s) without a salary structure:{' '}
+                    {bulkResult.skipped.slice(0, 5).map((s: any) => s.employee_code).join(', ')}{bulkResult.skipped.length > 5 ? '…' : ''}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Staff account with no linked employee — no personal payslip */}
+        {!hasProfile && isPayrollStaff && (
+          <div className="bg-card rounded-xl border border-border p-8 text-center">
+            <FileText size={32} className="mx-auto text-secondary/30 mb-2" />
+            <p className="text-sm font-medium text-foreground">No personal payslip on this account</p>
+            <p className="text-sm text-secondary mt-1">Your login isn&apos;t linked to an employee profile. Use Bulk Generate above to run payroll for everyone.</p>
+          </div>
+        )}
+
+        {hasProfile && (<>
 
         {/* Generator */}
         <div className="bg-card rounded-xl border border-border p-6">
@@ -254,6 +338,7 @@ export default function PayrollPage() {
             </table>
           )}
         </div>
+        </>)}
       </div>
     </AppShell>
   );
