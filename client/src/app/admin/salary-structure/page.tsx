@@ -143,7 +143,7 @@ export default function SalaryStructurePage() {
         <div>
           <Breadcrumb className="mb-2" items={[{ label: 'Admin', href: '/admin' }, { label: 'Salary Structures' }]} />
           <h1 className="text-2xl font-bold text-foreground">Salary Structures</h1>
-          <p className="text-secondary mt-1">Component-based templates — one per employee category. Creating a new category is creating a new structure here, no code involved. Employees are assigned a structure + base in Admin → Salary Assignments.</p>
+          <p className="text-secondary mt-1">Component-based templates — one per employee category. Creating a new category is creating a new structure here, no code involved. Each structure carries a default base salary that applies to employees in that category.</p>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-[300px_1fr] gap-5 items-start">
