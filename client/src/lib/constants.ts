@@ -18,13 +18,6 @@ export const NAVIGATION: NavItem[] = [
     ],
   },
   {
-    label: 'Employee Details',
-    href: '/employees',
-    icon: 'Users',
-    roles: ['admin', 'chro', 'hr', 'hr_manager', 'property_manager'],
-    module: 'employees',
-  },
-  {
     label: 'Leave & Attendance',
     href: '/attendance',
     icon: 'CalendarCheck',
@@ -65,13 +58,6 @@ export const NAVIGATION: NavItem[] = [
     ],
   },
   {
-    label: 'Financial Details',
-    href: '/finance',
-    icon: 'Landmark',
-    roles: ['admin', 'chro', 'hr', 'finance'],
-    module: 'finance',
-  },
-  {
     label: 'Payroll',
     href: '/payroll',
     icon: 'Wallet',
@@ -100,6 +86,21 @@ export const NAVIGATION: NavItem[] = [
     icon: 'Settings',
     roles: ['admin', 'chro', 'hr'],
     module: 'admin',
+  },
+  // Grouped directly under Admin as flat links (each keeps its own roles/module).
+  {
+    label: 'Employee Details',
+    href: '/employees',
+    icon: 'Users',
+    roles: ['admin', 'chro', 'hr', 'hr_manager', 'property_manager'],
+    module: 'employees',
+  },
+  {
+    label: 'Financial Details',
+    href: '/finance',
+    icon: 'Landmark',
+    roles: ['admin', 'chro', 'hr', 'finance'],
+    module: 'finance',
   },
 ];
 
