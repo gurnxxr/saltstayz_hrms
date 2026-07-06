@@ -11,8 +11,11 @@ export const NAVIGATION: NavItem[] = [
     label: 'Analytics',
     href: '/analytics',
     icon: 'BarChart3',
-    roles: ['admin', 'chro', 'hr', 'hr_manager', 'employee'],
-    module: 'analytics',
+    roles: ['admin', 'chro', 'hr', 'hr_manager', 'employee', 'cluster_hr', 'property_manager'],
+    children: [
+      { label: 'HR Analytics', href: '/analytics', icon: 'PieChart', roles: ['admin', 'chro', 'hr', 'hr_manager', 'employee'], module: 'analytics' },
+      { label: 'Manpower & Budget', href: '/manpower', icon: 'ShieldCheck', roles: ['admin', 'chro', 'cluster_hr', 'property_manager'], module: 'manpower' },
+    ],
   },
   {
     label: 'Employee Details',
@@ -78,13 +81,6 @@ export const NAVIGATION: NavItem[] = [
       { label: 'Statutory Components', href: '/setup/statutory-components', icon: 'Landmark', roles: ['admin', 'finance'] },
       { label: 'Salary Components', href: '/setup/salary-components', icon: 'Coins', roles: ['admin', 'finance'] },
     ],
-  },
-  {
-    label: 'Manpower & Budget',
-    href: '/manpower',
-    icon: 'ShieldCheck',
-    roles: ['admin', 'chro', 'cluster_hr', 'property_manager'],
-    module: 'manpower',
   },
   {
     label: 'Shift Setup',
