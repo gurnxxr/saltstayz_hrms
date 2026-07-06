@@ -18,6 +18,7 @@ import manpowerRoutes from './manpower.routes';
 import payScheduleRoutes from './paySchedule.routes';
 import statutoryRoutes from './statutory.routes';
 import salaryComponentRoutes from './salaryComponent.routes';
+import employeeLifecycleRoutes from './employeeLifecycle.routes';
 
 const router = Router();
 
@@ -40,5 +41,6 @@ router.use('/manpower', manpowerRoutes);
 router.use('/pay-schedule', payScheduleRoutes);
 router.use('/statutory', statutoryRoutes);
 router.use('/salary-components', salaryComponentRoutes);
+router.use('/employee-lifecycle', employeeLifecycleRoutes);
 
 export default router;
