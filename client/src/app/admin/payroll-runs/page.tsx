@@ -225,6 +225,8 @@ export default function PayrollRunsPage() {
                 <tbody className="divide-y divide-border">
                   {details.slips.map((s: any) => {
                     const unmarked = s.days?.counts?.unmarked ?? 0;
+                    const missPunch = s.days?.counts?.miss_punch ?? 0;
+                    const shortPunch = s.days?.counts?.short_punch ?? 0;
                     return (
                       <tr key={s.employee_id} className="hover:bg-muted/20">
                         <td className="px-4 py-2">
@@ -243,6 +245,16 @@ export default function PayrollRunsPage() {
                             {unmarked > 0 && (
                               <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700" title="Working days without an attendance record">
                                 {unmarked} unmarked
+                              </span>
+                            )}
+                            {missPunch > 0 && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-orange-100 text-orange-700" title="Days marked once only (missing in or out punch); the first few each month are regularized per the Pay Schedule">
+                                {missPunch} miss punch
+                              </span>
+                            )}
+                            {shortPunch > 0 && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700" title="Days the employee left early beyond the grace window">
+                                {shortPunch} short punch
                               </span>
                             )}
                             {s.adjustment && (
@@ -370,7 +382,7 @@ export default function PayrollRunsPage() {
                 <h3 className="text-base font-semibold text-foreground">Correct — {adjusting.name}</h3>
                 <p className="text-xs text-secondary mt-0.5">
                   Computed: {adjusting.days?.working_days ?? '—'} working · {adjusting.days?.lop_days ?? '—'} LOP · {adjusting.days?.payment_days ?? '—'} paid
-                  {adjusting.days?.counts ? ` (${adjusting.days.counts.absent} absent, ${adjusting.days.counts.half_day} half-day, ${adjusting.days.counts.unpaid_leave} unpaid leave, ${adjusting.days.counts.unmarked} unmarked)` : ''}
+                  {adjusting.days?.counts ? ` (${adjusting.days.counts.absent} absent, ${adjusting.days.counts.half_day} half-day, ${adjusting.days.counts.short_punch ?? 0} short-punch, ${adjusting.days.counts.miss_punch ?? 0} miss-punch, ${adjusting.days.counts.unpaid_leave} unpaid leave, ${adjusting.days.counts.unmarked} unmarked)` : ''}
                 </p>
               </div>
               <button onClick={() => setAdjusting(null)} className="p-1 rounded-lg text-secondary hover:text-foreground hover:bg-muted transition-colors">

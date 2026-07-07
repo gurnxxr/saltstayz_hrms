@@ -15,6 +15,7 @@ import type { AttendanceContext } from './payslip.calc';
 
 export type DayStatus =
   | 'present' | 'half_day' | 'absent'
+  | 'miss_punch' | 'short_punch'
   | 'paid_leave' | 'unpaid_leave'
   | 'unmarked' | 'future';
 
@@ -29,6 +30,7 @@ export interface DayTrace {
 export interface PayableDays extends AttendanceContext {
   counts: {
     present: number; half_day: number; absent: number;
+    miss_punch: number; short_punch: number;
     paid_leave: number; unpaid_leave: number; unmarked: number; future: number;
   };
   weekly_offs: number;
@@ -94,6 +96,11 @@ export async function computePayableDays(employeeId: number, month: number, year
   const workWeek = new Set<number>(schedule.work_week);
   const holidaysPaid = (schedule as any).holidays_paid !== false;
   const unmarkedPolicy = (schedule as any).unmarked_day_policy === 'absent' ? 'absent' : 'present';
+  // Attendance policy (Phase 2)
+  const missAllowance = schedule.miss_punch_allowance;
+  const missLop = schedule.miss_punch_lop;
+  const shortLop = schedule.short_punch_lop;
+  let missPunchSeen = 0; // counted in date order — first N are free
 
   const periodDays = new Date(year, month, 0).getDate();
   const start = `${year}-${pad(month)}-01`;
@@ -135,7 +142,7 @@ export async function computePayableDays(employeeId: number, month: number, year
   };
 
   // ── Day-by-day classification ──
-  const counts = { present: 0, half_day: 0, absent: 0, paid_leave: 0, unpaid_leave: 0, unmarked: 0, future: 0 };
+  const counts = { present: 0, half_day: 0, absent: 0, miss_punch: 0, short_punch: 0, paid_leave: 0, unpaid_leave: 0, unmarked: 0, future: 0 };
   const trace: DayTrace[] = [];
   let workingDays = 0;
   let weeklyOffs = 0;
@@ -171,6 +178,26 @@ export async function computePayableDays(employeeId: number, month: number, year
       dayStatus = 'present';
     } else if (status === 'half_day') {
       dayStatus = 'half_day'; dayLop = 0.5;
+    } else if (status === 'miss_punch') {
+      // An approved leave governs the day even if a stray punch marked it a miss
+      // punch (mirrors the absent branch). Otherwise: the first N miss punches a
+      // month are regularized (paid); beyond the allowance each costs miss_punch_lop.
+      if (leave) {
+        if (leave.paid) dayStatus = 'paid_leave';
+        else { dayStatus = 'unpaid_leave'; dayLop = 1; }
+      } else {
+        dayStatus = 'miss_punch';
+        dayLop = missPunchSeen < missAllowance ? 0 : missLop;
+        missPunchSeen += 1; // only genuine miss punches consume the allowance
+      }
+    } else if (status === 'short_punch') {
+      // An approved leave (e.g. a half-day) governs the day before the early-exit penalty.
+      if (leave) {
+        if (leave.paid) dayStatus = 'paid_leave';
+        else { dayStatus = 'unpaid_leave'; dayLop = 1; }
+      } else {
+        dayStatus = 'short_punch'; dayLop = shortLop;
+      }
     } else if (status === 'on_leave') {
       if (leave && !leave.paid) { dayStatus = 'unpaid_leave'; dayLop = 1; }
       else dayStatus = 'paid_leave';

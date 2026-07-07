@@ -17,6 +17,12 @@ export interface PaySchedule {
   unmarked_day_policy: string; // present | absent — what an unmarked working day means
   holidays_paid: boolean;      // regional holidays count as paid working days
   overtime_multiplier: number; // OT rate = hourly rate × this (shift must allow OT)
+  // Attendance policy (Phase 2) — drives Present / Short Punch / Miss Punch:
+  grace_minutes: number;        // early-exit tolerance before a day is a short punch
+  standard_day_hours: number;   // fallback shift length when no shift is assigned
+  miss_punch_allowance: number; // miss punches/month treated as present
+  miss_punch_lop: number;       // LOP per miss punch beyond the allowance
+  short_punch_lop: number;      // LOP per short punch
 }
 
 const DEFAULTS: PaySchedule = {
@@ -28,6 +34,11 @@ const DEFAULTS: PaySchedule = {
   unmarked_day_policy: 'present',
   holidays_paid: true,
   overtime_multiplier: 2,
+  grace_minutes: 15,
+  standard_day_hours: 8,
+  miss_punch_allowance: 3,
+  miss_punch_lop: 0.5,
+  short_punch_lop: 0.5,
 };
 
 function parseRow(row: any) {
@@ -49,6 +60,11 @@ function parseRow(row: any) {
     unmarked_day_policy: row.unmarked_day_policy === 'absent' ? 'absent' : 'present',
     holidays_paid: row.holidays_paid === undefined || row.holidays_paid === null ? true : !!row.holidays_paid,
     overtime_multiplier: Number(row.overtime_multiplier) || 2,
+    grace_minutes: row.grace_minutes == null ? DEFAULTS.grace_minutes : Number(row.grace_minutes),
+    standard_day_hours: Number(row.standard_day_hours) || DEFAULTS.standard_day_hours,
+    miss_punch_allowance: row.miss_punch_allowance == null ? DEFAULTS.miss_punch_allowance : Number(row.miss_punch_allowance),
+    miss_punch_lop: row.miss_punch_lop == null ? DEFAULTS.miss_punch_lop : Number(row.miss_punch_lop),
+    short_punch_lop: row.short_punch_lop == null ? DEFAULTS.short_punch_lop : Number(row.short_punch_lop),
     updated_by: row.updated_by,
     updated_at: row.updated_at,
   };
@@ -104,6 +120,31 @@ export async function updatePaySchedule(input: any, userId?: number) {
     }
   }
 
+  // ── Attendance policy (Phase 2) ──
+  const intIn = (v: any, name: string, min: number, max: number, dflt: number) => {
+    if (v == null) return dflt;
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < min || n > max) throw new ValidationError(`${name} must be a whole number between ${min} and ${max}.`);
+    return n;
+  };
+  const lopIn = (v: any, name: string, dflt: number) => {
+    if (v == null) return dflt;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 0 || n > 1) throw new ValidationError(`${name} must be between 0 and 1 day.`);
+    return Math.round(n * 10) / 10;
+  };
+  const graceMinutes = intIn(input.grace_minutes, 'Grace minutes', 0, 240, DEFAULTS.grace_minutes);
+  const missAllowance = intIn(input.miss_punch_allowance, 'Miss-punch allowance', 0, 31, DEFAULTS.miss_punch_allowance);
+  const missLop = lopIn(input.miss_punch_lop, 'Miss-punch LOP', DEFAULTS.miss_punch_lop);
+  const shortLop = lopIn(input.short_punch_lop, 'Short-punch LOP', DEFAULTS.short_punch_lop);
+  let standardDayHours = DEFAULTS.standard_day_hours;
+  if (input.standard_day_hours != null) {
+    standardDayHours = Number(input.standard_day_hours);
+    if (!Number.isFinite(standardDayHours) || standardDayHours <= 0 || standardDayHours > 24) {
+      throw new ValidationError('Standard day hours must be between 0 and 24.');
+    }
+  }
+
   const patch = {
     work_week: JSON.stringify(days.sort((a, b) => a - b)),
     salary_calculation_method: method,
@@ -113,6 +154,11 @@ export async function updatePaySchedule(input: any, userId?: number) {
     unmarked_day_policy: unmarkedPolicy,
     holidays_paid: holidaysPaid ? 1 : 0,
     overtime_multiplier: otMultiplier,
+    grace_minutes: graceMinutes,
+    standard_day_hours: standardDayHours,
+    miss_punch_allowance: missAllowance,
+    miss_punch_lop: missLop,
+    short_punch_lop: shortLop,
     updated_by: userId || null,
     updated_at: db.fn.now(),
   };

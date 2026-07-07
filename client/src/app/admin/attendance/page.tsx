@@ -17,7 +17,7 @@ const fmtDateTime = (s?: string) => {
   return isNaN(d.getTime()) ? s : d.toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 };
 
-type StatusFilter = '' | 'present' | 'absent' | 'half_day' | 'on_leave' | 'unmarked';
+type StatusFilter = '' | 'present' | 'absent' | 'half_day' | 'short_punch' | 'miss_punch' | 'on_leave' | 'unmarked';
 
 export default function AdminAttendancePage() {
   const qc = useQueryClient();
@@ -97,8 +97,10 @@ export default function AdminAttendancePage() {
     present: a.present + p.present,
     absent: a.absent + p.absent,
     half_day: a.half_day + p.half_day,
+    short_punch: a.short_punch + (p.short_punch || 0),
+    miss_punch: a.miss_punch + (p.miss_punch || 0),
     on_leave: a.on_leave + p.on_leave,
-  }), { total: 0, present: 0, absent: 0, half_day: 0, on_leave: 0 });
+  }), { total: 0, present: 0, absent: 0, half_day: 0, short_punch: 0, miss_punch: 0, on_leave: 0 });
 
   return (
     <AppShell>
@@ -320,6 +322,16 @@ export default function AdminAttendancePage() {
                         <span className="text-secondary">HD</span>
                       </span>
                       <span className="flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-amber-500" />
+                        <span className="font-medium">{prop.short_punch || 0}</span>
+                        <span className="text-secondary">SP</span>
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-orange-500" />
+                        <span className="font-medium">{prop.miss_punch || 0}</span>
+                        <span className="text-secondary">MP</span>
+                      </span>
+                      <span className="flex items-center gap-1">
                         <span className="w-2 h-2 rounded-full bg-blue-500" />
                         <span className="font-medium">{prop.on_leave}</span>
                         <span className="text-secondary">L</span>
@@ -341,6 +353,8 @@ export default function AdminAttendancePage() {
                           { value: 'present' as StatusFilter, label: 'Present' },
                           { value: 'absent' as StatusFilter, label: 'Absent' },
                           { value: 'half_day' as StatusFilter, label: 'Half Day' },
+                          { value: 'short_punch' as StatusFilter, label: 'Short Punch' },
+                          { value: 'miss_punch' as StatusFilter, label: 'Miss Punch' },
                           { value: 'on_leave' as StatusFilter, label: 'On Leave' },
                           { value: 'unmarked' as StatusFilter, label: 'Unmarked' },
                         ]).map(opt => (
@@ -434,12 +448,16 @@ function StatusBadge({ status }: { status: string | null }) {
     present: 'bg-green-100 text-green-700',
     absent: 'bg-red-100 text-red-700',
     half_day: 'bg-yellow-100 text-yellow-700',
+    short_punch: 'bg-amber-100 text-amber-700',
+    miss_punch: 'bg-orange-100 text-orange-700',
     on_leave: 'bg-blue-100 text-blue-700',
   };
   const labels: Record<string, string> = {
     present: 'Present',
     absent: 'Absent',
     half_day: 'Half Day',
+    short_punch: 'Short Punch',
+    miss_punch: 'Miss Punch',
     on_leave: 'On Leave',
   };
   return (

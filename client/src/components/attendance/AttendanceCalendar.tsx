@@ -68,7 +68,7 @@ export default function AttendanceCalendar() {
     <div className="space-y-6">
       {/* Summary Cards */}
       {summaryData && (
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
           <div className="bg-card rounded-xl border border-border p-4">
             <p className="text-xs font-medium text-secondary">Present</p>
             <p className="text-2xl font-bold text-green-600 mt-1">{summaryData.present || 0}</p>
@@ -80,6 +80,14 @@ export default function AttendanceCalendar() {
           <div className="bg-card rounded-xl border border-border p-4">
             <p className="text-xs font-medium text-secondary">Half Day</p>
             <p className="text-2xl font-bold text-yellow-600 mt-1">{summaryData.half_day || 0}</p>
+          </div>
+          <div className="bg-card rounded-xl border border-border p-4">
+            <p className="text-xs font-medium text-secondary">Short Punch</p>
+            <p className="text-2xl font-bold text-amber-600 mt-1">{summaryData.short_punch || 0}</p>
+          </div>
+          <div className="bg-card rounded-xl border border-border p-4">
+            <p className="text-xs font-medium text-secondary">Miss Punch</p>
+            <p className="text-2xl font-bold text-orange-600 mt-1">{summaryData.miss_punch || 0}</p>
           </div>
           <div className="bg-card rounded-xl border border-border p-4">
             <p className="text-xs font-medium text-secondary">On Leave</p>
@@ -162,6 +170,12 @@ export default function AttendanceCalendar() {
                     } else if (record.status === 'half_day') {
                       badge = 'HD'; badgeBg = 'bg-yellow-100'; badgeText = 'text-yellow-700';
                       tooltip = `Half Day${record.hours ? ` • ${record.hours}h` : ''}`;
+                    } else if (record.status === 'short_punch') {
+                      badge = 'SP'; badgeBg = 'bg-amber-100'; badgeText = 'text-amber-700';
+                      tooltip = `Short Punch — left early${record.hours ? ` • ${record.hours}h` : ''}`;
+                    } else if (record.status === 'miss_punch') {
+                      badge = 'MP'; badgeBg = 'bg-orange-100'; badgeText = 'text-orange-700';
+                      tooltip = 'Miss Punch — marked only once';
                     } else if (record.status === 'on_leave') {
                       badge = 'L'; badgeBg = 'bg-blue-100'; badgeText = 'text-blue-700'; tooltip = 'On Leave';
                     }
@@ -208,6 +222,8 @@ export default function AttendanceCalendar() {
                 { badge: 'P', bg: 'bg-green-100', text: 'text-green-700', label: 'Present' },
                 { badge: 'A', bg: 'bg-red-100', text: 'text-red-700', label: 'Absent' },
                 { badge: 'HD', bg: 'bg-yellow-100', text: 'text-yellow-700', label: 'Half Day' },
+                { badge: 'SP', bg: 'bg-amber-100', text: 'text-amber-700', label: 'Short Punch' },
+                { badge: 'MP', bg: 'bg-orange-100', text: 'text-orange-700', label: 'Miss Punch' },
                 { badge: 'L', bg: 'bg-blue-100', text: 'text-blue-700', label: 'On Leave' },
                 { badge: 'H', bg: 'bg-orange-100', text: 'text-orange-700', label: 'Holiday' },
                 { badge: 'WO', bg: 'bg-gray-100', text: 'text-gray-500', label: 'Weekly Off' },

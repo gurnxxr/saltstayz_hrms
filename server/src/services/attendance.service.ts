@@ -3,6 +3,8 @@ import { ValidationError } from '../utils/errors';
 import { JwtPayload } from '../types';
 import { notify } from './notification.service';
 import { getEmployeeRegion } from './leave.service';
+import { getPaySchedule } from './paySchedule.service';
+import { overnightHours, deriveAttendanceStatus } from './attendance.calc';
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
@@ -24,7 +26,8 @@ export async function autoMarkAttendance(date?: string) {
     .where('ar.date', target)
     .where('st.enable_auto_attendance', true)
     .whereNotNull('ar.working_hours')
-    .whereNot('ar.status', 'on_leave')
+    // Leave + punch-derived statuses are authoritative — the threshold job never overwrites them.
+    .whereNotIn('ar.status', ['on_leave', 'miss_punch', 'short_punch'])
     .where(function (this: any) {
       this.whereNull('st.process_attendance_after').orWhere('st.process_attendance_after', '<=', target);
     })
@@ -92,6 +95,8 @@ export async function getMonthSummary(employeeId: number, month: string) {
       db.raw("SUM(CASE WHEN status = 'present' THEN 1 ELSE 0 END) as present"),
       db.raw("SUM(CASE WHEN status = 'absent' THEN 1 ELSE 0 END) as absent"),
       db.raw("SUM(CASE WHEN status = 'half_day' THEN 1 ELSE 0 END) as half_day"),
+      db.raw("SUM(CASE WHEN status = 'miss_punch' THEN 1 ELSE 0 END) as miss_punch"),
+      db.raw("SUM(CASE WHEN status = 'short_punch' THEN 1 ELSE 0 END) as short_punch"),
       db.raw("SUM(CASE WHEN status = 'on_leave' THEN 1 ELSE 0 END) as on_leave"),
       db.raw("ROUND(AVG(working_hours), 1) as avg_working_hours")
     )
@@ -123,15 +128,6 @@ function parseDDMMYY(raw: string): string {
   return `${year}-${month}-${day}`;
 }
 
-function computeHours(checkIn: string, checkOut: string): number {
-  const [inH, inM] = checkIn.split(':').map(Number);
-  const [outH, outM] = checkOut.split(':').map(Number);
-  const inMins = inH * 60 + inM;
-  const outMins = outH * 60 + outM;
-  const diff = outMins - inMins;
-  return Math.round((diff / 60) * 100) / 100;
-}
-
 export async function uploadAttendanceCsv(csvContent: string) {
   const lines = csvContent.split(/\r?\n/).filter(l => l.trim());
   if (lines.length < 2) throw new ValidationError('CSV must have a header row and at least one data row');
@@ -159,15 +155,17 @@ export async function uploadAttendanceCsv(csvContent: string) {
     const rawIn = cols[inIdx];
     const rawOut = cols[outIdx];
 
-    if (!empCode || !rawDate || !rawIn || !rawOut) {
-      parseErrors.push(`Row ${i + 1}: missing required fields`);
+    // A miss punch has only one time — require an employee, a date, and at
+    // least one punch (rows with neither punch carry no signal and are skipped).
+    if (!empCode || !rawDate || (!rawIn && !rawOut)) {
+      parseErrors.push(`Row ${i + 1}: missing employee, date, or any punch time`);
       continue;
     }
 
     try {
       const date = parseDDMMYY(rawDate);
       const location = locIdx !== -1 ? (cols[locIdx] || '').trim() : '';
-      rows.push({ empCode, date, checkIn: rawIn.trim(), checkOut: rawOut.trim(), location });
+      rows.push({ empCode, date, checkIn: (rawIn || '').trim(), checkOut: (rawOut || '').trim(), location });
     } catch (e: any) {
       parseErrors.push(`Row ${i + 1}: ${e.message}`);
     }
@@ -193,6 +191,25 @@ export async function uploadAttendanceCsv(csvContent: string) {
     locations,
   };
 
+  // ── Attendance policy + shift resolution (batched) ──
+  const schedule = await getPaySchedule();
+  const graceMinutes = schedule.grace_minutes;
+  const standardDayHours = schedule.standard_day_hours;
+
+  const empIds = [...new Set([...empMap.values()])];
+  // Dated roster wins; fall back to the employee's standing shift assignment.
+  const rosterRows = empIds.length ? await db('shift_rosters as r')
+    .join('shift_types as st', 'st.id', 'r.shift_type_id')
+    .whereIn('r.employee_id', empIds).whereIn('r.date', dates)
+    .select('r.employee_id', 'r.date', 'st.start_time', 'st.end_time') : [];
+  const shiftByKey = new Map<string, any>(
+    rosterRows.map((r: any) => [`${r.employee_id}|${String(r.date).slice(0, 10)}`, r]));
+  const assignRows = empIds.length ? await db('employee_shift_assignments as a')
+    .join('shift_types as st', 'st.id', 'a.shift_type_id')
+    .whereIn('a.employee_id', empIds)
+    .select('a.employee_id', 'st.start_time', 'st.end_time') : [];
+  const shiftByEmp = new Map<number, any>(assignRows.map((r: any) => [r.employee_id, r]));
+
   for (const row of rows) {
     const employeeId = empMap.get(row.empCode);
     if (!employeeId) {
@@ -201,27 +218,38 @@ export async function uploadAttendanceCsv(csvContent: string) {
       continue;
     }
 
-    const hours = computeHours(row.checkIn, row.checkOut);
+    const hasIn = !!row.checkIn;
+    const hasOut = !!row.checkOut;
+    const worked = overnightHours(row.checkIn, row.checkOut); // 0 when a punch is missing
+    const shift = shiftByKey.get(`${employeeId}|${row.date}`) ?? shiftByEmp.get(employeeId);
+    const shiftHours = shift ? overnightHours(shift.start_time, shift.end_time) : 0;
 
-    // Per requirement: >= 9 hours = present, otherwise half_day
-    const status = hours >= 9 ? 'present' : 'half_day';
+    const status = deriveAttendanceStatus({
+      hasIn, hasOut, workedHours: worked,
+      shiftHours: shiftHours || standardDayHours,
+      graceMinutes,
+    });
 
-    const checkInDatetime = `${row.date} ${row.checkIn}:00`;
-    const checkOutDatetime = `${row.date} ${row.checkOut}:00`;
+    const checkInDatetime = hasIn ? `${row.date} ${row.checkIn}:00` : null;
+    const checkOutDatetime = hasOut ? `${row.date} ${row.checkOut}:00` : null;
+    const workingHours = (hasIn && hasOut) ? worked : null;
+    const location = row.location || null;
 
     const existing = await db('attendance_records')
       .where('employee_id', employeeId)
       .where('date', row.date)
       .first();
 
-    const location = row.location || null;
-
     if (existing) {
+      // An approved leave (status='on_leave', written by leave approval) is
+      // HR-authoritative — a stray biometric punch must not overwrite it. Keep the
+      // leave status; still capture the punch times for the record.
+      const nextStatus = existing.status === 'on_leave' ? 'on_leave' : status;
       await db('attendance_records').where('id', existing.id).update({
         check_in: checkInDatetime,
         check_out: checkOutDatetime,
-        working_hours: hours,
-        status,
+        working_hours: workingHours,
+        status: nextStatus,
         ...(location ? { location } : {}),
         updated_at: db.fn.now(),
       });
@@ -232,7 +260,7 @@ export async function uploadAttendanceCsv(csvContent: string) {
         date: row.date,
         check_in: checkInDatetime,
         check_out: checkOutDatetime,
-        working_hours: hours,
+        working_hours: workingHours,
         status,
         location,
       });
@@ -341,6 +369,8 @@ export async function getPropertySummary(date: string) {
       db.raw("SUM(CASE WHEN ar.status = 'present' THEN 1 ELSE 0 END) as present"),
       db.raw("SUM(CASE WHEN ar.status = 'absent' THEN 1 ELSE 0 END) as absent"),
       db.raw("SUM(CASE WHEN ar.status = 'half_day' THEN 1 ELSE 0 END) as half_day"),
+      db.raw("SUM(CASE WHEN ar.status = 'miss_punch' THEN 1 ELSE 0 END) as miss_punch"),
+      db.raw("SUM(CASE WHEN ar.status = 'short_punch' THEN 1 ELSE 0 END) as short_punch"),
       db.raw("SUM(CASE WHEN ar.status = 'on_leave' THEN 1 ELSE 0 END) as on_leave"),
       db.raw("ROUND(AVG(ar.working_hours), 1) as avg_hours")
     )

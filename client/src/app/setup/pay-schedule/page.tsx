@@ -38,6 +38,12 @@ export default function PaySchedulePage() {
   const [unmarkedPolicy, setUnmarkedPolicy] = useState<'present' | 'absent'>('present');
   const [holidaysPaid, setHolidaysPaid] = useState(true);
   const [otMultiplier, setOtMultiplier] = useState('2');
+  // Attendance classification (Present / Short Punch / Miss Punch)
+  const [graceMinutes, setGraceMinutes] = useState('15');
+  const [standardDayHours, setStandardDayHours] = useState('8');
+  const [missAllowance, setMissAllowance] = useState('3');
+  const [missLop, setMissLop] = useState('0.5');
+  const [shortLop, setShortLop] = useState('0.5');
   const [dirty, setDirty] = useState(false);
 
   // Hydrate the form once settings load.
@@ -50,6 +56,11 @@ export default function PaySchedulePage() {
     setUnmarkedPolicy(data.unmarked_day_policy === 'absent' ? 'absent' : 'present');
     setHolidaysPaid(data.holidays_paid !== false);
     setOtMultiplier(String(data.overtime_multiplier ?? 2));
+    setGraceMinutes(String(data.grace_minutes ?? 15));
+    setStandardDayHours(String(data.standard_day_hours ?? 8));
+    setMissAllowance(String(data.miss_punch_allowance ?? 3));
+    setMissLop(String(data.miss_punch_lop ?? 0.5));
+    setShortLop(String(data.short_punch_lop ?? 0.5));
     setDirty(false);
   }, [data]);
 
@@ -70,6 +81,11 @@ export default function PaySchedulePage() {
         unmarked_day_policy: unmarkedPolicy,
         holidays_paid: holidaysPaid,
         overtime_multiplier: Number(otMultiplier) || 2,
+        grace_minutes: Number(graceMinutes) || 0,
+        standard_day_hours: Number(standardDayHours) || 8,
+        miss_punch_allowance: Number(missAllowance) || 0,
+        miss_punch_lop: Number(missLop) || 0,
+        short_punch_lop: Number(shortLop) || 0,
       }),
     onSuccess: () => {
       toast.success('Pay schedule saved');
@@ -225,6 +241,83 @@ export default function PaySchedulePage() {
                     <span className="text-sm text-secondary">× hourly rate</span>
                   </div>
                   <p className="text-xs text-secondary mt-1">Applied to hours beyond shift length, only when the employee&apos;s shift type allows overtime. 2× is the Factories Act standard.</p>
+                </div>
+              </div>
+            </section>
+
+            {/* ── Attendance Classification (biometric punches) ── */}
+            <section className="space-y-3">
+              <h2 className="text-base font-semibold text-foreground">Attendance Classification <Req /></h2>
+              <p className="text-sm text-secondary">
+                How each day&apos;s biometric punches are classified when the attendance file is uploaded. The day&apos;s rostered shift length is the reference; a fixed fallback is used when no shift is assigned.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div className="rounded-lg border border-border bg-muted/40 p-3">
+                  <span className="font-semibold text-emerald-600">Present</span>
+                  <span className="block text-secondary mt-0.5">Both punches, worked at least (shift − grace).</span>
+                </div>
+                <div className="rounded-lg border border-border bg-muted/40 p-3">
+                  <span className="font-semibold text-amber-600">Short Punch</span>
+                  <span className="block text-secondary mt-0.5">Both punches, but left early beyond the grace window.</span>
+                </div>
+                <div className="rounded-lg border border-border bg-muted/40 p-3">
+                  <span className="font-semibold text-orange-600">Miss Punch</span>
+                  <span className="block text-secondary mt-0.5">Marked only once — punched in or out, not both.</span>
+                </div>
+                <div className="rounded-lg border border-border bg-muted/40 p-3">
+                  <span className="font-semibold text-red-600">Absent</span>
+                  <span className="block text-secondary mt-0.5">No punches at all for a working day.</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4 pt-1">
+                <div>
+                  <label className="text-sm font-medium text-foreground">Grace period</label>
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <input type="number" step="1" min={0} max={240} value={graceMinutes}
+                      onChange={(e) => { setGraceMinutes(e.target.value); setDirty(true); }}
+                      className="w-24 px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+                    <span className="text-sm text-secondary">minutes</span>
+                  </div>
+                  <p className="text-xs text-secondary mt-1">Early-exit tolerance before a day becomes a Short Punch.</p>
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-foreground">Standard day length</label>
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <input type="number" step="0.5" min={1} max={24} value={standardDayHours}
+                      onChange={(e) => { setStandardDayHours(e.target.value); setDirty(true); }}
+                      className="w-24 px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+                    <span className="text-sm text-secondary">hours</span>
+                  </div>
+                  <p className="text-xs text-secondary mt-1">Fallback shift length when an employee has no rostered or assigned shift.</p>
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-foreground">Miss-punch allowance</label>
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <input type="number" step="1" min={0} max={31} value={missAllowance}
+                      onChange={(e) => { setMissAllowance(e.target.value); setDirty(true); }}
+                      className="w-24 px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+                    <span className="text-sm text-secondary">/ month</span>
+                  </div>
+                  <p className="text-xs text-secondary mt-1">Miss punches per month regularized as paid before Loss of Pay applies.</p>
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-foreground">Loss of pay per penalty day</label>
+                  <div className="flex items-center gap-3 mt-1.5">
+                    <div className="flex items-center gap-2">
+                      <input type="number" step="0.5" min={0} max={1} value={missLop}
+                        onChange={(e) => { setMissLop(e.target.value); setDirty(true); }}
+                        className="w-20 px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+                      <span className="text-sm text-secondary">miss</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input type="number" step="0.5" min={0} max={1} value={shortLop}
+                        onChange={(e) => { setShortLop(e.target.value); setDirty(true); }}
+                        className="w-20 px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+                      <span className="text-sm text-secondary">short</span>
+                    </div>
+                  </div>
+                  <p className="text-xs text-secondary mt-1">Day fraction deducted per miss punch (beyond the allowance) and per short punch. 0.5 = half a day.</p>
                 </div>
               </div>
             </section>
