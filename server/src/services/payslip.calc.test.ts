@@ -12,15 +12,16 @@ const LWF_PERCENT = {
 };
 const NO_PT = { enabled: false, slabs: [] };
 
+const EPF_ON = { enabled: true, employeeRatePct: 12, employerRatePct: 12, wageCeiling: 15000, lopMode: 'prorate_restricted' as const };
 const RATES: StatutoryRates = {
-  epf: { enabled: true, employeeRatePct: 12, employerRatePct: 12 },
+  epf: { ...EPF_ON },
   esi: { enabled: true, employeeRatePct: 0.75, employerRatePct: 3.25, wageCeiling: 21000 },
   lwf: { ...LWF_PERCENT },
   pt: { ...NO_PT },
 };
 
 const DISABLED: StatutoryRates = {
-  epf: { enabled: false, employeeRatePct: 12, employerRatePct: 12 },
+  epf: { ...EPF_ON, enabled: false },
   esi: { enabled: false, employeeRatePct: 0.75, employerRatePct: 3.25, wageCeiling: 21000 },
   lwf: { ...LWF_PERCENT, enabled: false },
   pt: { ...NO_PT },
@@ -209,8 +210,8 @@ describe('computeFromStructure — state-config LWF & PT (Phase 1: Work-Location
       lwf: { enabled: true, mode: 'fixed', employeePct: 0, employeeMaxAmount: 0, employerMultiplier: 1, employeeAmount: 0.75, employerAmount: 2.25, deductionMonths: [6, 12] },
     };
     const june = computeFromStructure(standardStructure(), 20000, delhi, null, 6);
-    expect(june.lwf).toBe(1);          // 0.75 rounded to the rupee
-    expect(june.employer_lwf).toBe(2); // 2.25 rounded
+    expect(june.lwf).toBe(0.75);          // sub-rupee statutory amounts keep paise
+    expect(june.employer_lwf).toBe(2.25);
     const july = computeFromStructure(standardStructure(), 20000, delhi, null, 7);
     expect(july.lwf).toBe(0);
     expect(july.employer_lwf).toBe(0);
@@ -260,6 +261,64 @@ describe('computeFromStructure — state-config LWF & PT (Phase 1: Work-Location
     expect(tiny.pt).toBe(0);
     const disabled = computeFromStructure(standardStructure(), 20000, DISABLED, null, 5);
     expect(disabled.pt).toBe(0);
+  });
+});
+
+describe('computeFromStructure — statutory ceilings & eligibility (Phase 5)', () => {
+  // A single Basic = 100% of base, EPF+ESI applicable, so PF/ESI wage == base.
+  const singleBasic = (): StructureLineInput[] => [
+    { component_id: 1, name: 'Basic', category: 'earning', calculation_type: 'pct_of_base', value: 100, earning_type: 'fixed', consider_epf: 'always', consider_esi: true },
+  ];
+  const days = (working: number, payment: number) => ({ period_days: 30, working_days: working, payment_days: payment, lop_days: working - payment });
+
+  it('PF wage is capped at ₹15,000 (₹1,800), not paid on full wage', () => {
+    expect(computeFromStructure(singleBasic(), 10000, RATES).employee_pf).toBe(1200); // below cap
+    expect(computeFromStructure(singleBasic(), 15000, RATES).employee_pf).toBe(1800); // at cap
+    expect(computeFromStructure(singleBasic(), 30000, RATES).employee_pf).toBe(1800); // capped (was 3600)
+    expect(computeFromStructure(singleBasic(), 30000, RATES).employer_pf).toBe(1800);
+  });
+
+  it('ESI ceiling boundary: ≤ ₹21,000 covered, above it not', () => {
+    expect(computeFromStructure(singleBasic(), 20999, RATES).esi).toBe(Math.ceil(20999 * 0.0075)); // covered
+    expect(computeFromStructure(singleBasic(), 21000, RATES).esi).toBe(Math.ceil(21000 * 0.0075)); // covered at ceiling
+    expect(computeFromStructure(singleBasic(), 21001, RATES).esi).toBe(0);                          // above → not covered
+  });
+
+  it('ESI eligibility uses the CONTRACTED wage, not the LOP-earned wage', () => {
+    // ₹25,000 contracted (above ₹21,000) with 50% LOP earns ₹12,500 — still NOT ESI-eligible.
+    const b = computeFromStructure(singleBasic(), 25000, RATES, days(20, 10));
+    expect(b.esi).toBe(0);          // was: 0.75% of the prorated 12,500 deducted unlawfully
+    expect(b.employer_esi).toBe(0);
+  });
+
+  it('ESI contribution is on the earned wage while covered (₹20,000, 50% LOP)', () => {
+    const b = computeFromStructure(singleBasic(), 20000, RATES, days(20, 10));
+    // contracted 20,000 ≤ 21,000 → covered; contribution on earned 10,000.
+    expect(b.esi).toBe(Math.ceil(10000 * 0.0075));
+  });
+
+  it('PF wage cap prorates by LOP (prorate_restricted): ₹30k, 50% LOP → ₹900', () => {
+    const b = computeFromStructure(singleBasic(), 30000, RATES, days(20, 10));
+    // min(30000, 15000) × 0.5 = 7500 → 12% = 900
+    expect(b.employee_pf).toBe(900);
+  });
+
+  it('lopMode consider_all_below_15000 uses the earned wage up to the cap', () => {
+    const rates: StatutoryRates = { ...RATES, epf: { ...RATES.epf, lopMode: 'consider_all_below_15000' } };
+    const b = computeFromStructure(singleBasic(), 30000, rates, days(20, 10));
+    // earned PF wage = 30000 × 0.5 = 15000, capped at 15000 → 12% = 1800
+    expect(b.employee_pf).toBe(1800);
+  });
+
+  it('if_below_15000 EPF flag is decided on the contracted wage, not the LOP-earned wage', () => {
+    const withAllowance = (base: number, lop?: { working: number; payment: number }) => computeFromStructure([
+      { component_id: 1, name: 'Basic', category: 'earning', calculation_type: 'pct_of_base', value: 50, earning_type: 'fixed', consider_epf: 'always', consider_esi: true },
+      { component_id: 2, name: 'Special', category: 'earning', calculation_type: 'remainder', value: 0, earning_type: 'fixed', consider_epf: 'if_below_15000', consider_esi: true },
+    ], base, RATES, lop ? days(lop.working, lop.payment) : null);
+    // Contracted fixed salary 20,000 > 15,000 → Special excluded even with heavy LOP.
+    const heavy = withAllowance(20000, { working: 20, payment: 2 }); // 90% LOP
+    // PF wage = Basic only (10,000 contracted) capped, prorated: 10000 × (2/20) = 1000 → 12% = 120
+    expect(heavy.employee_pf).toBe(120);
   });
 });
 

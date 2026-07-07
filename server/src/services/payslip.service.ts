@@ -490,12 +490,15 @@ export async function getRunDetails(month: number, year: number) {
     const adj = adjByEmployee.get(r.employee_id);
 
     // Scale the (possibly LOP-prorated) Basic back to a full month before the check.
+    // Skip hourly slips: their Basic derives from rate × hours, not the days ratio,
+    // so a working/payment rescale would produce an arbitrary figure.
+    const isHourly = days != null && days.hours != null;
     const minWage = r.work_state ? minWageByState.get(r.work_state) ?? null : null;
     let fullBasic: number | null = basic > 0 ? basic : null;
-    if (fullBasic !== null && days && num(days.payment_days) > 0 && num(days.working_days) > 0) {
+    if (fullBasic !== null && !isHourly && days && num(days.payment_days) > 0 && num(days.working_days) > 0) {
       fullBasic = Math.round(fullBasic * num(days.working_days) / num(days.payment_days));
     }
-    const below_min_wage = minWage !== null && fullBasic !== null && fullBasic < minWage;
+    const below_min_wage = !isHourly && minWage !== null && fullBasic !== null && fullBasic < minWage;
 
     return {
       employee_id: r.employee_id,

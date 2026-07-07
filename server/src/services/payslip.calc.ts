@@ -20,6 +20,7 @@
  */
 
 const round = (n: number) => Math.round(n);
+const round2 = (n: number) => Math.round(n * 100) / 100;
 const ceil = (n: number) => Math.ceil(n);
 
 // ─── Statutory rates (resolved from statutory_settings — see statutory.service) ───
@@ -32,7 +33,11 @@ export interface PtSlab {
 }
 
 export interface StatutoryRates {
-  epf: { enabled: boolean; employeeRatePct: number; employerRatePct: number };
+  epf: {
+    enabled: boolean; employeeRatePct: number; employerRatePct: number;
+    wageCeiling: number;   // PF wage cap (₹15,000); 0 = no cap
+    lopMode: 'prorate_restricted' | 'consider_all_below_15000';
+  };
   esi: { enabled: boolean; employeeRatePct: number; employerRatePct: number; wageCeiling: number };
   lwf: {
     enabled: boolean;
@@ -138,33 +143,43 @@ export function computeFromStructure(
   const b = isHourly
     ? round((base || 0) * (attendance!.hours || 0))
     : round((base || 0) * factor);
+  // Contracted (full-month) earned base, used for statutory eligibility tests.
+  const fullBase = isHourly ? b : round(base || 0);
 
-  // ── Pass 1: flat + pct_of_base amounts; find Basic ──
-  const amounts = new Map<StructureLineInput, number>();
-  for (const line of lines) {
-    if (line.calculation_type === 'flat') {
-      const scale = line.category === 'earning' && line.pro_rata && !isHourly ? factor : 1;
-      amounts.set(line, round(line.value * scale));
-    } else if (line.calculation_type === 'pct_of_base') amounts.set(line, round((line.value / 100) * b));
-  }
+  const isFixedEarning = (l: StructureLineInput) => l.category === 'earning' && (l.earning_type ?? 'fixed') === 'fixed';
+
+  // Resolve every line's amount for a given effective base + proration factor.
+  const resolve = (effBase: number, f: number): Map<StructureLineInput, number> => {
+    const amt = new Map<StructureLineInput, number>();
+    for (const line of lines) {
+      if (line.calculation_type === 'flat') {
+        const scale = line.category === 'earning' && line.pro_rata && !isHourly ? f : 1;
+        amt.set(line, round(line.value * scale));
+      } else if (line.calculation_type === 'pct_of_base') amt.set(line, round((line.value / 100) * effBase));
+    }
+    const bl = lines.find((l) => l.category === 'earning' && l.calculation_type === 'pct_of_base' && /basic/i.test(l.name))
+      ?? lines.find((l) => l.category === 'earning' && l.calculation_type === 'pct_of_base');
+    const basicAmt = bl ? (amt.get(bl) ?? 0) : 0;
+    for (const line of lines) {
+      if (line.calculation_type === 'pct_of_basic') amt.set(line, round((line.value / 100) * basicAmt));
+    }
+    for (const line of lines) {
+      if (line.calculation_type !== 'remainder') continue;
+      const others = lines
+        .filter((l) => l !== line && isFixedEarning(l) && l.calculation_type !== 'remainder')
+        .reduce((sum, l) => sum + (amt.get(l) ?? 0), 0);
+      amt.set(line, Math.max(0, effBase - others));
+    }
+    return amt;
+  };
+
+  // Actual (prorated) amounts drive the payslip; full (contracted) amounts drive
+  // statutory eligibility so LOP in a month cannot flip PF/ESI coverage.
+  const amounts = resolve(b, factor);
+  const fullAmounts = resolve(fullBase, 1);
   const basicLine = lines.find((l) => l.category === 'earning' && l.calculation_type === 'pct_of_base' && /basic/i.test(l.name))
     ?? lines.find((l) => l.category === 'earning' && l.calculation_type === 'pct_of_base');
   const basic = basicLine ? (amounts.get(basicLine) ?? 0) : 0;
-
-  // ── Pass 2: pct_of_basic ──
-  for (const line of lines) {
-    if (line.calculation_type === 'pct_of_basic') amounts.set(line, round((line.value / 100) * basic));
-  }
-
-  // ── Pass 3: remainder (earnings only) — base minus every other FIXED earning ──
-  const isFixedEarning = (l: StructureLineInput) => l.category === 'earning' && (l.earning_type ?? 'fixed') === 'fixed';
-  for (const line of lines) {
-    if (line.calculation_type !== 'remainder') continue;
-    const others = lines
-      .filter((l) => l !== line && isFixedEarning(l) && l.calculation_type !== 'remainder')
-      .reduce((sum, l) => sum + (amounts.get(l) ?? 0), 0);
-    amounts.set(line, Math.max(0, b - others));
-  }
 
   const toLine = (l: StructureLineInput): PayslipLine => ({
     component_id: l.component_id, name: l.name, amount: amounts.get(l) ?? 0,
@@ -180,21 +195,34 @@ export function computeFromStructure(
   const variable_pay = earningLines.filter((l) => !isFixedEarning(l)).reduce((s, l) => s + (amounts.get(l) ?? 0), 0);
   const gross_earnings = fixed_salary + variable_pay;
 
-  // ── Statutory bases from component applicability flags ──
-  const pfBase = earningLines.reduce((sum, l) => {
+  // Contracted (full-month) sums for statutory eligibility.
+  const fixed_salary_full = earningLines.filter(isFixedEarning).reduce((s, l) => s + (fullAmounts.get(l) ?? 0), 0);
+
+  // ── PF wage bases from component flags. The if_below_15000 flag is decided on
+  // the CONTRACTED PF wage, so Loss of Pay in a month can't flip membership. ──
+  const pfMember = (l: StructureLineInput): boolean => {
     const flag = l.consider_epf ?? 'no';
-    const include = flag === 'always' || (flag === 'if_below_15000' && fixed_salary <= 15000);
-    return include ? sum + (amounts.get(l) ?? 0) : sum;
-  }, 0);
+    return flag === 'always' || (flag === 'if_below_15000' && fixed_salary_full <= 15000);
+  };
+  const pfBaseActual = earningLines.reduce((sum, l) => pfMember(l) ? sum + (amounts.get(l) ?? 0) : sum, 0);
+  const pfBaseFull = earningLines.reduce((sum, l) => pfMember(l) ? sum + (fullAmounts.get(l) ?? 0) : sum, 0);
+
+  // ── PF wage cap (₹15,000). prorate_restricted: cap the contracted PF wage then
+  // prorate by LOP. consider_all_below_15000: cap the earned PF wage — when LOP
+  // pulls it under the ceiling, more of the actual components count. ──
+  const pfCap = statutory.epf.wageCeiling > 0 ? statutory.epf.wageCeiling : Infinity;
+  const pfWage = statutory.epf.lopMode === 'consider_all_below_15000'
+    ? Math.min(pfBaseActual, pfCap)
+    : Math.min(pfBaseFull, pfCap) * factor;
+  const employee_pf = statutory.epf.enabled ? round((statutory.epf.employeeRatePct / 100) * pfWage) : 0;
+  const employer_pf = statutory.epf.enabled ? round((statutory.epf.employerRatePct / 100) * pfWage) : 0;
+
+  // ── ESI — eligibility on the CONTRACTED ESI wage vs the ceiling (coverage can't
+  // be flipped by a heavy-LOP month); contribution on the earned wage, rounds UP. ──
   const esiBase = earningLines.reduce((sum, l) => (l.consider_esi ? sum + (amounts.get(l) ?? 0) : sum), 0);
-
-  // EPF
-  const employee_pf = statutory.epf.enabled ? round((statutory.epf.employeeRatePct / 100) * pfBase) : 0;
-  const employer_pf = statutory.epf.enabled ? round((statutory.epf.employerRatePct / 100) * pfBase) : 0;
-
-  // ESI — only while wages are within the ceiling; contributions round UP per statute
+  const esiBaseFull = earningLines.reduce((sum, l) => (l.consider_esi ? sum + (fullAmounts.get(l) ?? 0) : sum), 0);
   const esiEligible = statutory.esi.enabled
-    && (statutory.esi.wageCeiling <= 0 || esiBase <= statutory.esi.wageCeiling);
+    && (statutory.esi.wageCeiling <= 0 || esiBaseFull <= statutory.esi.wageCeiling);
   const esi = esiEligible ? ceil((statutory.esi.employeeRatePct / 100) * esiBase) : 0;
   const employer_esi = esiEligible ? ceil((statutory.esi.employerRatePct / 100) * esiBase) : 0;
 
@@ -209,8 +237,10 @@ export function computeFromStructure(
   let employer_lwf = 0;
   if (lwfDue) {
     if (lwfCfg.mode === 'fixed') {
-      lwf = round(lwfCfg.employeeAmount);
-      employer_lwf = round(lwfCfg.employerAmount);
+      // Keep paise — several states set sub-rupee statutory amounts (e.g. Delhi
+      // ₹0.75 / ₹2.25). Rounding to the rupee would over/under-remit.
+      lwf = round2(lwfCfg.employeeAmount);
+      employer_lwf = round2(lwfCfg.employerAmount);
     } else {
       lwf = Math.min(round((lwfCfg.employeePct / 100) * fixed_salary), round(lwfCfg.employeeMaxAmount));
       employer_lwf = round(lwf * lwfCfg.employerMultiplier);

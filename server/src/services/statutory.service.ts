@@ -31,6 +31,7 @@ const MW_TABLE = 'state_minimum_wages';
 const EPF_DEFAULT = {
   epfNumber: '', deductionCycle: 'monthly',
   employeeRatePct: 12, employerRatePct: 12,
+  pfWageCeiling: 15000, // PF wage cap (statutory)
   includeEmployerInCtc: true, includeEdli: false, includeAdminCharges: false,
   overrideAtEmployee: false, lopMode: 'prorate_restricted',
 };
@@ -148,6 +149,8 @@ export async function getStatutoryRates(cityOrState?: string | null): Promise<St
       enabled: !!(epfRow && epfRow.enabled),
       employeeRatePct: Number(epfCfg.employeeRatePct) || 0,
       employerRatePct: Number(epfCfg.employerRatePct) || 0,
+      wageCeiling: epfCfg.pfWageCeiling == null ? 15000 : Number(epfCfg.pfWageCeiling) || 0,
+      lopMode: epfCfg.lopMode === 'consider_all_below_15000' ? 'consider_all_below_15000' : 'prorate_restricted',
     },
     esi: {
       enabled: !!(esiRow && esiRow.enabled),
@@ -187,7 +190,10 @@ export async function getMinimumWageFor(state: string): Promise<number | null> {
   if (!rows.length) return null;
   const general = await db(MW_TABLE).where({ state, category: 'general' }).first();
   if (general) return Number(general.monthly_wage) || null;
-  return Math.min(...rows.map((r: any) => Number(r.monthly_wage) || Infinity));
+  // Ignore zero/non-numeric rows so a state with only bad data returns null,
+  // never Infinity (which would flag every slip below "min wage").
+  const valid = rows.map((r: any) => Number(r.monthly_wage)).filter((w) => Number.isFinite(w) && w > 0);
+  return valid.length ? Math.min(...valid) : null;
 }
 
 /** Statutory bonus setting for the payslip engine (Payment of Bonus Act line). */
@@ -261,6 +267,7 @@ export async function saveEpf(input: any, userId?: number) {
     deductionCycle: 'monthly',
     employeeRatePct: num(c.employeeRatePct ?? 12, 'Employee contribution rate', 0.01, 100),
     employerRatePct: num(c.employerRatePct ?? 12, 'Employer contribution rate', 0.01, 100),
+    pfWageCeiling: 15000,
     includeEmployerInCtc: !!c.includeEmployerInCtc,
     includeEdli: !!c.includeEdli,
     includeAdminCharges: !!c.includeAdminCharges,
@@ -333,8 +340,14 @@ export async function savePtState(state: string, input: any, userId?: number) {
   if (!INDIAN_STATES.includes(state)) throw new ValidationError('Unknown state.');
   const c = input.config;
   const cfg = c ? { slabs: validatePtSlabs(c.slabs) } : undefined; // omitted → keep existing (inline enable/disable)
-  if (input.enabled && cfg && cfg.slabs.length === 0) {
-    throw new ValidationError('Add at least one PT slab before enabling Professional Tax for this state.');
+  if (input.enabled) {
+    // Validate the effective config: the incoming slabs, or (inline enable) the
+    // stored ones — so PT can't be enabled with no slabs and silently deduct zero.
+    const stored = cfg ? null : parseConfig(await db(TABLE).where({ component: 'pt', state }).first(), PT_DEFAULT);
+    const slabs = cfg?.slabs ?? stored?.slabs ?? [];
+    if (!slabs.length) {
+      throw new ValidationError('Add at least one PT slab before enabling Professional Tax for this state.');
+    }
   }
   await upsertComponent('pt', state, { enabled: input.enabled, config: cfg }, PT_DEFAULT, userId);
   return getAllStatutory();
@@ -358,7 +371,13 @@ export async function saveLwf(state: string, input: any, userId?: number) {
       employerAmount: num(c.employerAmount ?? 0, 'Employer amount', 0, 1_000_000),
       deductionMonths,
     };
-    if (input.enabled && mode === 'fixed' && cfg.employeeAmount <= 0 && cfg.employerAmount <= 0) {
+  }
+  if (input.enabled) {
+    // Validate the effective config (incoming, or stored for inline enable) so a
+    // fixed-mode state can't be enabled with zero amounts and deduct nothing.
+    const eff = cfg ?? parseConfig(await db(TABLE).where({ component: 'lwf', state }).first(), LWF_DEFAULT);
+    const effMode = eff.mode === 'fixed' ? 'fixed' : 'percent';
+    if (effMode === 'fixed' && Number(eff.employeeAmount) <= 0 && Number(eff.employerAmount) <= 0) {
       throw new ValidationError('Fixed-amount LWF needs an employee or employer amount.');
     }
   }
