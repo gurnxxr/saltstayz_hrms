@@ -249,6 +249,8 @@ export default function PayrollPage() {
                 ['Employee PF', b.employee_pf] as [string, number],
                 ['ESI', b.esi] as [string, number],
                 ['LWF', b.lwf] as [string, number],
+                // PT only where the state levies it
+                ...((b.pt ?? 0) > 0 ? [['Professional Tax', b.pt] as [string, number]] : []),
                 ...(b.other_deductions ?? []).map((l: any) => [l.name, l.amount] as [string, number]),
               ]} total={['Total Deduction', b.total_deduction]} />
             </div>

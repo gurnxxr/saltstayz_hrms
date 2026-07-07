@@ -338,82 +338,243 @@ function PtTab({ pt }: { pt: any[] }) {
     <div className="space-y-4 max-w-2xl">
       <div>
         <h2 className="text-lg font-semibold text-foreground">Professional Tax</h2>
-        <p className="text-sm text-secondary mt-1">This tax is levied on an employee&apos;s income by the State Government. Tax slabs differ in each state.</p>
+        <p className="text-sm text-secondary mt-1">Levied by the State Government on monthly gross salary; slabs differ per state. States are derived from your properties — configure slabs only where PT is actually levied, and the engine deducts automatically.</p>
       </div>
       <div className="space-y-3">
-        {pt.map((row) => (
-          <div key={row.state} className="bg-card rounded-xl border border-border p-5">
-            <h3 className="text-sm font-semibold text-foreground mb-2">{row.state}{row.state === 'Haryana' ? ' (Head Office)' : ''}</h3>
-            {!row.applicable ? (
-              <div className="flex items-center gap-2.5 text-sm text-secondary">
-                <span className="w-8 h-8 rounded-full bg-muted flex items-center justify-center text-secondary shrink-0"><Ban size={16} /></span>
-                Professional Tax is not applicable for your work location in <span className="font-medium text-foreground">{row.state}</span>.
-              </div>
-            ) : (
-              <p className="text-sm text-secondary">Professional Tax is applicable in {row.state}. Tax-slab configuration is coming soon.</p>
-            )}
-          </div>
-        ))}
+        {pt.map((row) => <PtStateCard key={row.state} row={row} />)}
       </div>
     </div>
   );
 }
 
-// ─────────────────────────── Labour Welfare Fund ───────────────────────────
-function LwfTab({ lwf }: { lwf: any[] }) {
-  const qc = useQueryClient();
-  const [pending, setPending] = useState<string | null>(null);
+interface SlabDraft { min: string; max: string; amount: string }
 
-  const toggle = useMutation({
-    mutationFn: ({ state, enabled }: { state: string; enabled: boolean }) => api.put(`/statutory/lwf/${encodeURIComponent(state)}`, { enabled }),
-    onMutate: (v) => setPending(v.state),
-    onSuccess: (_d, v) => { toast.success(`LWF ${v.enabled ? 'enabled' : 'disabled'} for ${v.state}`); qc.invalidateQueries({ queryKey: ['statutory'] }); },
-    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed'),
-    onSettled: () => setPending(null),
+function PtStateCard({ row }: { row: any }) {
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [slabs, setSlabs] = useState<SlabDraft[]>([]);
+
+  const openEditor = () => {
+    const existing = Array.isArray(row.config?.slabs) ? row.config.slabs : [];
+    setSlabs(existing.length
+      ? existing.map((s: any) => ({ min: String(s.min ?? 0), max: s.max == null ? '' : String(s.max), amount: String(s.amount ?? 0) }))
+      : [{ min: '0', max: '', amount: '0' }]);
+    setEditing(true);
+  };
+
+  const save = useMutation({
+    mutationFn: (payload: { enabled: boolean; config?: any }) => api.put(`/statutory/pt/${encodeURIComponent(row.state)}`, payload),
+    onSuccess: () => { toast.success(`Professional Tax updated for ${row.state}`); qc.invalidateQueries({ queryKey: ['statutory'] }); setEditing(false); },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to save'),
   });
 
+  const submit = (enabled: boolean) => save.mutate({
+    enabled,
+    config: {
+      slabs: slabs
+        .filter((s) => s.min !== '' || s.max !== '' || s.amount !== '')
+        .map((s) => ({ min: Number(s.min) || 0, max: s.max === '' ? null : Number(s.max), amount: Number(s.amount) || 0 })),
+    },
+  });
+
+  const configured = Array.isArray(row.config?.slabs) && row.config.slabs.length > 0;
+
+  return (
+    <div className="bg-card rounded-xl border border-border p-5">
+      <div className="flex items-center justify-between gap-3 mb-2">
+        <h3 className="text-sm font-semibold text-foreground">{row.state}</h3>
+        <div className="flex items-center gap-2">
+          {row.enabled
+            ? <span className="px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-xs font-semibold">Enabled</span>
+            : <span className="px-2 py-0.5 rounded-full bg-muted text-secondary text-xs font-semibold">Not levied</span>}
+          <button onClick={() => (editing ? setEditing(false) : openEditor())} className="text-xs text-primary hover:underline">
+            {editing ? 'Close' : configured || row.enabled ? 'Edit slabs' : 'Configure slabs'}
+          </button>
+        </div>
+      </div>
+
+      {!editing && !configured && (
+        <div className="flex items-center gap-2.5 text-sm text-secondary">
+          <span className="w-8 h-8 rounded-full bg-muted flex items-center justify-center text-secondary shrink-0"><Ban size={16} /></span>
+          No PT slabs configured — nothing is deducted for {row.state}.
+        </div>
+      )}
+      {!editing && configured && (
+        <table className="w-full text-sm">
+          <thead><tr className="text-left text-xs text-secondary"><th className="py-1 font-medium">Monthly gross from</th><th className="py-1 font-medium">To</th><th className="py-1 font-medium text-right">PT / month</th></tr></thead>
+          <tbody>
+            {row.config.slabs.map((s: any, i: number) => (
+              <tr key={i} className="border-t border-border">
+                <td className="py-1.5">{formatINR(s.min)}</td>
+                <td className="py-1.5">{s.max == null ? 'No limit' : formatINR(s.max)}</td>
+                <td className="py-1.5 text-right font-medium">{formatINR(s.amount)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {editing && (
+        <div className="space-y-2 mt-2">
+          {slabs.map((s, i) => (
+            <div key={i} className="grid grid-cols-[1fr_1fr_1fr_32px] gap-2 items-center">
+              <input type="number" placeholder="From ₹" value={s.min} onChange={(e) => setSlabs(p => p.map((x, j) => j === i ? { ...x, min: e.target.value } : x))}
+                className="px-2 py-1.5 border border-border rounded-lg bg-background text-sm" />
+              <input type="number" placeholder="To ₹ (blank = no limit)" value={s.max} onChange={(e) => setSlabs(p => p.map((x, j) => j === i ? { ...x, max: e.target.value } : x))}
+                className="px-2 py-1.5 border border-border rounded-lg bg-background text-sm" />
+              <input type="number" placeholder="PT ₹/month" value={s.amount} onChange={(e) => setSlabs(p => p.map((x, j) => j === i ? { ...x, amount: e.target.value } : x))}
+                className="px-2 py-1.5 border border-border rounded-lg bg-background text-sm" />
+              <button onClick={() => setSlabs(p => p.filter((_, j) => j !== i))} className="p-1 text-secondary hover:text-red-600" title="Remove slab">✕</button>
+            </div>
+          ))}
+          <div className="flex items-center justify-between pt-1">
+            <button onClick={() => setSlabs(p => [...p, { min: '', max: '', amount: '' }])} className="text-xs text-primary hover:underline">+ Add slab</button>
+            <div className="flex gap-2">
+              {row.enabled && (
+                <button onClick={() => save.mutate({ enabled: false })} disabled={save.isPending}
+                  className="px-3 py-1.5 border border-border rounded-lg text-xs font-medium hover:bg-muted disabled:opacity-50">Disable PT</button>
+              )}
+              <button onClick={() => submit(true)} disabled={save.isPending}
+                className="px-3 py-1.5 bg-primary text-white rounded-lg text-xs font-medium hover:bg-primary/90 disabled:opacity-50">
+                {save.isPending ? 'Saving…' : 'Save & Enable'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────── Labour Welfare Fund ───────────────────────────
+const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function LwfTab({ lwf }: { lwf: any[] }) {
   return (
     <div className="space-y-4 max-w-2xl">
       <div>
         <h2 className="text-lg font-semibold text-foreground">Labour Welfare Fund</h2>
-        <p className="text-sm text-secondary mt-1">Labour Welfare Fund act ensures social security and improves working conditions for employees.</p>
+        <p className="text-sm text-secondary mt-1">Per-state LWF rules — fixed amounts or a percent of gross, deducted every month or only in specific months (e.g. Delhi: June &amp; December). Everything here is data; the engine follows it exactly. States without an LWF act stay disabled.</p>
       </div>
       <div className="space-y-3">
-        {lwf.map((row) => {
-          const c = row.config || {};
-          return (
-            <div key={row.state} className="bg-card rounded-xl border border-border p-5">
-              <h3 className="text-sm font-semibold text-foreground mb-3">{row.state}{row.state === 'Haryana' ? ' (Head Office)' : ''}</h3>
-              <dl className="space-y-2 text-sm">
-                <div className="flex justify-between gap-4">
-                  <dt className="text-secondary">Employees&apos; Contribution</dt>
-                  <dd className="text-right text-foreground">
-                    {Number(c.employeePct)}% of Gross Pay
-                    <span className="block text-xs text-secondary">(Max Limit : {formatINR(c.employeeMaxAmount)})</span>
-                  </dd>
-                </div>
-                <div className="flex justify-between gap-4"><dt className="text-secondary">Employer&apos;s Contribution</dt><dd className="text-foreground">{Number(c.employerMultiplier)} * Employees&apos; Contribution</dd></div>
-                <div className="flex justify-between gap-4"><dt className="text-secondary">Deduction Cycle</dt><dd className="text-foreground capitalize">{c.deductionCycle || 'monthly'}</dd></div>
-                <div className="flex justify-between gap-4 items-center">
-                  <dt className="text-secondary">Status</dt>
-                  <dd className="flex items-center gap-2">
-                    {row.enabled
-                      ? <span className="px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-xs font-semibold">Enabled</span>
-                      : <span className="px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-xs font-semibold">Disabled</span>}
-                    <button
-                      onClick={() => toggle.mutate({ state: row.state, enabled: !row.enabled })}
-                      disabled={pending === row.state}
-                      className="text-xs text-primary hover:underline disabled:opacity-50"
-                    >
-                      ({row.enabled ? 'Disable' : 'Enable'})
-                    </button>
-                  </dd>
-                </div>
-              </dl>
-            </div>
-          );
-        })}
+        {lwf.map((row) => <LwfStateCard key={row.state} row={row} />)}
       </div>
+    </div>
+  );
+}
+
+function LwfStateCard({ row }: { row: any }) {
+  const qc = useQueryClient();
+  const c = row.config || {};
+  const [editing, setEditing] = useState(false);
+  const [cfg, setCfg] = useState<any>(c);
+
+  const save = useMutation({
+    mutationFn: (payload: { enabled: boolean; config?: any }) => api.put(`/statutory/lwf/${encodeURIComponent(row.state)}`, payload),
+    onSuccess: () => { toast.success(`LWF updated for ${row.state}`); qc.invalidateQueries({ queryKey: ['statutory'] }); setEditing(false); },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to save'),
+  });
+
+  const months: number[] = Array.isArray(c.deductionMonths) ? c.deductionMonths : [];
+  const cycleLabel = months.length === 0 ? 'Every month' : months.map((m) => MONTH_LABELS[m - 1]).join(', ');
+  const draftMonths: number[] = Array.isArray(cfg.deductionMonths) ? cfg.deductionMonths : [];
+  const toggleMonth = (m: number) => setCfg((p: any) => {
+    const cur: number[] = Array.isArray(p.deductionMonths) ? p.deductionMonths : [];
+    return { ...p, deductionMonths: cur.includes(m) ? cur.filter((x) => x !== m) : [...cur, m].sort((a, b) => a - b) };
+  });
+
+  return (
+    <div className="bg-card rounded-xl border border-border p-5">
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <h3 className="text-sm font-semibold text-foreground">{row.state}</h3>
+        <div className="flex items-center gap-2">
+          {row.enabled
+            ? <span className="px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-xs font-semibold">Enabled</span>
+            : <span className="px-2 py-0.5 rounded-full bg-muted text-secondary text-xs font-semibold">Disabled</span>}
+          <button onClick={() => { setCfg({ ...c }); setEditing(!editing); }} className="text-xs text-primary hover:underline">
+            {editing ? 'Close' : 'Edit'}
+          </button>
+        </div>
+      </div>
+
+      {!editing ? (
+        <dl className="space-y-2 text-sm">
+          {c.mode === 'fixed' ? (
+            <>
+              <div className="flex justify-between gap-4"><dt className="text-secondary">Employee&apos;s Contribution</dt><dd className="text-foreground">{formatINR(c.employeeAmount)} fixed</dd></div>
+              <div className="flex justify-between gap-4"><dt className="text-secondary">Employer&apos;s Contribution</dt><dd className="text-foreground">{formatINR(c.employerAmount)} fixed</dd></div>
+            </>
+          ) : (
+            <>
+              <div className="flex justify-between gap-4">
+                <dt className="text-secondary">Employee&apos;s Contribution</dt>
+                <dd className="text-right text-foreground">{Number(c.employeePct)}% of Gross Pay
+                  <span className="block text-xs text-secondary">(Max Limit: {formatINR(c.employeeMaxAmount)})</span></dd>
+              </div>
+              <div className="flex justify-between gap-4"><dt className="text-secondary">Employer&apos;s Contribution</dt><dd className="text-foreground">{Number(c.employerMultiplier)} × Employee&apos;s Contribution</dd></div>
+            </>
+          )}
+          <div className="flex justify-between gap-4"><dt className="text-secondary">Deducted In</dt><dd className="text-foreground">{cycleLabel}</dd></div>
+        </dl>
+      ) : (
+        <div className="space-y-3 text-sm">
+          <div className="flex gap-4">
+            {(['percent', 'fixed'] as const).map((m) => (
+              <label key={m} className="flex items-center gap-1.5 cursor-pointer">
+                <input type="radio" className="accent-primary" checked={(cfg.mode === 'fixed' ? 'fixed' : 'percent') === m}
+                  onChange={() => setCfg((p: any) => ({ ...p, mode: m }))} />
+                <span className="capitalize">{m === 'percent' ? '% of gross (capped)' : 'Fixed amounts'}</span>
+              </label>
+            ))}
+          </div>
+          {(cfg.mode === 'fixed' ? 'fixed' : 'percent') === 'percent' ? (
+            <div className="grid grid-cols-3 gap-2">
+              <label className="text-xs text-secondary">Employee %<input type="number" step="any" value={cfg.employeePct ?? ''} onChange={(e) => setCfg((p: any) => ({ ...p, employeePct: e.target.value }))} className="mt-1 w-full px-2 py-1.5 border border-border rounded-lg bg-background text-sm" /></label>
+              <label className="text-xs text-secondary">Max ₹<input type="number" step="any" value={cfg.employeeMaxAmount ?? ''} onChange={(e) => setCfg((p: any) => ({ ...p, employeeMaxAmount: e.target.value }))} className="mt-1 w-full px-2 py-1.5 border border-border rounded-lg bg-background text-sm" /></label>
+              <label className="text-xs text-secondary">Employer ×<input type="number" step="any" value={cfg.employerMultiplier ?? ''} onChange={(e) => setCfg((p: any) => ({ ...p, employerMultiplier: e.target.value }))} className="mt-1 w-full px-2 py-1.5 border border-border rounded-lg bg-background text-sm" /></label>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              <label className="text-xs text-secondary">Employee ₹<input type="number" step="any" value={cfg.employeeAmount ?? ''} onChange={(e) => setCfg((p: any) => ({ ...p, employeeAmount: e.target.value }))} className="mt-1 w-full px-2 py-1.5 border border-border rounded-lg bg-background text-sm" /></label>
+              <label className="text-xs text-secondary">Employer ₹<input type="number" step="any" value={cfg.employerAmount ?? ''} onChange={(e) => setCfg((p: any) => ({ ...p, employerAmount: e.target.value }))} className="mt-1 w-full px-2 py-1.5 border border-border rounded-lg bg-background text-sm" /></label>
+            </div>
+          )}
+          <div>
+            <p className="text-xs text-secondary mb-1.5">Deduction months <span className="text-secondary/70">(none selected = every month)</span></p>
+            <div className="flex flex-wrap gap-1.5">
+              {MONTH_LABELS.map((label, i) => (
+                <button key={label} onClick={() => toggleMonth(i + 1)}
+                  className={`px-2 py-1 rounded-lg text-xs font-medium border transition-colors ${draftMonths.includes(i + 1) ? 'bg-primary text-white border-primary' : 'border-border text-secondary hover:bg-muted'}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 pt-1">
+            {row.enabled && (
+              <button onClick={() => save.mutate({ enabled: false })} disabled={save.isPending}
+                className="px-3 py-1.5 border border-border rounded-lg text-xs font-medium hover:bg-muted disabled:opacity-50">Disable</button>
+            )}
+            <button
+              onClick={() => save.mutate({
+                enabled: true,
+                config: {
+                  mode: cfg.mode === 'fixed' ? 'fixed' : 'percent',
+                  employeePct: Number(cfg.employeePct) || 0,
+                  employeeMaxAmount: Number(cfg.employeeMaxAmount) || 0,
+                  employerMultiplier: Number(cfg.employerMultiplier) || 1,
+                  employeeAmount: Number(cfg.employeeAmount) || 0,
+                  employerAmount: Number(cfg.employerAmount) || 0,
+                  deductionMonths: draftMonths,
+                },
+              })}
+              disabled={save.isPending}
+              className="px-3 py-1.5 bg-primary text-white rounded-lg text-xs font-medium hover:bg-primary/90 disabled:opacity-50">
+              {save.isPending ? 'Saving…' : 'Save & Enable'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -4,6 +4,7 @@ import db from '../config/database';
 import { NotFoundError, ValidationError } from '../utils/errors';
 import { notifyEmployee, notifyRole } from './notification.service';
 import { getStructureByJobTitle, computeForStructure, getCtcRange, seedEmployeeStructureFromTemplate } from './salaryStructure.service';
+import { getEmployeeState } from './statutory.service';
 import { generateOfferLetterPdf } from './offerLetterPdf.service';
 import { createEmployeeFromCandidate } from './recruitment.service';
 import { getBandForEmployee } from './manpower.service';
@@ -313,7 +314,13 @@ export async function downloadCandidateOfferPdf(candidateId: number) {
   if (!c.offer_data) throw new ValidationError('Generate the offer letter first.');
 
   const struct = await getStructureByJobTitle(c.job_title_id);
-  const salaryBreakdown = struct ? await computeForStructure(struct, Number(struct.default_base) || 0) : undefined;
+  // Statutory preview keyed to the vacancy property's state (work-location model).
+  const vacProp = await db('vacancies as v')
+    .join('properties as p', 'p.id', 'v.property_id')
+    .where('v.id', c.vacancy_id).select('p.state').first();
+  const salaryBreakdown = struct
+    ? await computeForStructure(struct, Number(struct.default_base) || 0, null, undefined, { state: vacProp?.state ?? null })
+    : undefined;
 
   const joiningDate = c.offer_data.joining_date
     ? new Date(c.offer_data.joining_date).toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' })
@@ -510,12 +517,12 @@ export async function listOfferReadyEmployees() {
 }
 
 /** Recompute the full breakdown for a designation at an (optionally adjusted) monthly gross. */
-async function offerBreakdownFor(jobTitleId: number, baseGross?: number) {
+async function offerBreakdownFor(jobTitleId: number, baseGross?: number, state?: string | null) {
   const struct = await getStructureByJobTitle(jobTitleId);
   if (!struct) return null;
   const structGross = Math.round(Number(struct.default_base) || 0);
   const gross = baseGross != null && baseGross > 0 ? Math.round(baseGross) : structGross;
-  const breakdown = await computeForStructure(struct, gross);
+  const breakdown = await computeForStructure(struct, gross, null, undefined, { state: state ?? null });
   return { structGross, gross, breakdown, annual_ctc: Math.round(breakdown.ctc) * 12 };
 }
 
@@ -524,7 +531,7 @@ export async function getEmployeeOfferBreakdown(employeeId: number, baseGross?: 
   const emp = await db('employees').where('id', employeeId).select('job_title_id').first();
   if (!emp) throw new NotFoundError('Employee');
   if (!emp.job_title_id) return null;
-  return offerBreakdownFor(emp.job_title_id, baseGross);
+  return offerBreakdownFor(emp.job_title_id, baseGross, await getEmployeeState(employeeId));
 }
 
 /** Editor prefill: designation, joining date, structure base + calc inputs for live recompute. */
@@ -571,7 +578,7 @@ export async function previewOfferLetterForEmployee(
     .select('e.first_name', 'e.last_name', 'e.employee_code', 'e.job_title_id', 'e.date_of_joining', 'jt.title as designation')
     .first();
   if (!emp) throw new NotFoundError('Employee');
-  const ob = await offerBreakdownFor(emp.job_title_id, input.base_gross);
+  const ob = await offerBreakdownFor(emp.job_title_id, input.base_gross, await getEmployeeState(employeeId));
   if (!ob) throw new ValidationError('This designation has no salary structure.');
   const joining = input.joining_date || emp.date_of_joining;
   const joiningDate = joining
@@ -605,7 +612,7 @@ export async function generateOfferLetterForEmployee(
   const existing = await db('offer_letters').where('employee_id', employeeId).first();
   if (existing) throw new ValidationError('An offer letter has already been generated for this employee.');
 
-  const ob = await offerBreakdownFor(emp.job_title_id, opts.base_gross);
+  const ob = await offerBreakdownFor(emp.job_title_id, opts.base_gross, await getEmployeeState(employeeId));
   if (!ob) {
     throw new ValidationError('This designation has no salary structure. Set it up in Admin → Salary Structure before generating the offer letter.');
   }

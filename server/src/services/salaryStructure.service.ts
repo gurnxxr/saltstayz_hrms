@@ -4,7 +4,7 @@ import {
   computeFromStructure, type StructureLineInput, type PayslipBreakdown, type LineCalcType,
   type AttendanceContext,
 } from './payslip.calc';
-import { getStatutoryRates, getStatutoryBonus } from './statutory.service';
+import { getStatutoryRates, getStatutoryBonus, getEmployeeState } from './statutory.service';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Salary Structures v2: a structure is a named template of salary_components
@@ -66,18 +66,25 @@ async function statutoryBonusLine(): Promise<StructureLineInput | null> {
   };
 }
 
-/** Computes the breakdown for a saved structure at a given base. */
+/**
+ * Computes the breakdown for a saved structure at a given base.
+ * opts.state: the employee's work-location state (Phase 1) — statutory rates are
+ * keyed to it. When absent (template previews), the structure's city field is
+ * used as an explicit preview state. opts.month drives cyclical statutory items
+ * (LWF deduction months, PT month overrides).
+ */
 export async function computeForStructure(
   structure: any,
   base: number,
   attendance?: AttendanceContext | null,
   extraLines?: StructureLineInput[],
+  opts?: { state?: string | null; month?: number | null },
 ): Promise<PayslipBreakdown> {
   const lines = await resolveStructureLines(structure.id);
-  const rates = await getStatutoryRates(structure.city);
+  const rates = await getStatutoryRates(opts?.state ?? structure.city);
   const bonusLine = await statutoryBonusLine();
   const all = [...lines, ...(bonusLine ? [bonusLine] : []), ...(extraLines ?? [])];
-  return computeFromStructure(all, base, rates, attendance);
+  return computeFromStructure(all, base, rates, attendance, opts?.month ?? null);
 }
 
 export async function getStructureRow(id: number) {
@@ -414,6 +421,10 @@ export async function getEmployeeStructure(employeeId: number) {
     .select('a.structure_id', 'a.base', 'a.tds_amount', 'a.effective_from', 's.city', 's.payment_basis')
     .first();
 
+  // Work-Location State: statutory rates for this employee come from their
+  // property's state — shown read-only in the editor and used for the breakdown.
+  const state = await getEmployeeState(employeeId);
+
   if (assignment) {
     const structureRow = await getStructureRow(assignment.structure_id);
     return {
@@ -423,10 +434,10 @@ export async function getEmployeeStructure(employeeId: number) {
       lines: await editorLines(assignment.structure_id),
       base: num(assignment.base),
       tds_amount: num(assignment.tds_amount),
-      city: assignment.city ?? 'Haryana',
+      state,
       payment_basis: assignment.payment_basis ?? 'monthly',
       effective_from: assignment.effective_from ?? null,
-      breakdown: await computeForStructure(structureRow, num(assignment.base)),
+      breakdown: await computeForStructure(structureRow, num(assignment.base), null, undefined, { state }),
       template_source: null,
     };
   }
@@ -441,10 +452,10 @@ export async function getEmployeeStructure(employeeId: number) {
     lines: template ? await editorLines(template.id) : [],
     base,
     tds_amount: 0,
-    city: template?.city ?? 'Haryana',
+    state,
     payment_basis: template?.payment_basis ?? 'monthly',
     effective_from: null,
-    breakdown: template ? await computeForStructure(template, base) : null,
+    breakdown: template ? await computeForStructure(template, base, null, undefined, { state }) : null,
     template_source: template ? { id: template.id, name: template.name } : null,
   };
 }
@@ -471,7 +482,9 @@ export async function saveEmployeeStructure(
   const tds = num(data.tds_amount);
   if (tds < 0) throw new ValidationError('TDS cannot be negative');
   const lines = await validateLines(data.lines);
-  const city = data.city ? String(data.city) : 'Haryana';
+  // Work-Location State: the private structure's city mirrors the employee's
+  // property state (payslips resolve rates from the property, never this field).
+  const city = await getEmployeeState(employeeId);
   const payment_basis = data.payment_basis === 'hourly' ? 'hourly' : 'monthly';
 
   await db.transaction(async (trx) => {
@@ -527,7 +540,6 @@ export async function seedEmployeeStructureFromTemplate(
     lines: lines.map((l: any) => ({ component_id: l.component_id, calculation_type: l.calculation_type, value: l.value })),
     base,
     tds_amount: opts.tds_amount ?? 0,
-    city: template.city,
     payment_basis: template.payment_basis,
     effective_from: emp.date_of_joining || null,
   }, userId);

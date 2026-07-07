@@ -70,7 +70,7 @@ function EmployeesPanel() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [form, setForm] = useState({ base: '', tds: '', city: 'Haryana', payment_basis: 'monthly', lines: [] as LineDraft[] });
+  const [form, setForm] = useState({ base: '', tds: '', payment_basis: 'monthly', lines: [] as LineDraft[] });
   const [confirmReset, setConfirmReset] = useState(false);
 
   const { data: list = [], isLoading } = useQuery({
@@ -92,7 +92,6 @@ function EmployeesPanel() {
     setForm({
       base: detail.base ? String(Math.round(detail.base)) : '',
       tds: detail.tds_amount ? String(Math.round(detail.tds_amount)) : '',
-      city: detail.city ?? 'Haryana',
       payment_basis: detail.payment_basis ?? 'monthly',
       lines: toLineDrafts(detail.lines),
     });
@@ -103,7 +102,8 @@ function EmployeesPanel() {
   const addLine = () => setForm((p) => ({ ...p, lines: [...p.lines, { component_id: '', calculation_type: 'flat', value: '0' }] }));
   const removeLine = (idx: number) => setForm((p) => ({ ...p, lines: p.lines.filter((_, i) => i !== idx) }));
 
-  const previewInput = useDebouncedValue(JSON.stringify({ lines: linesPayload(form.lines), base: Number(form.base) || 0, city: form.city }), 400);
+  // Preview at the employee's work-location state (read-only, from their property).
+  const previewInput = useDebouncedValue(JSON.stringify({ lines: linesPayload(form.lines), base: Number(form.base) || 0, city: detail?.state ?? 'Haryana' }), 400);
   const { data: preview } = useQuery({
     queryKey: ['emp-structure-preview', previewInput],
     queryFn: () => api.post('/admin/salary-structures/preview', JSON.parse(previewInput)).then(r => r.data),
@@ -116,7 +116,6 @@ function EmployeesPanel() {
       lines: linesPayload(form.lines),
       base: Number(form.base) || 0,
       tds_amount: Number(form.tds) || 0,
-      city: form.city,
       payment_basis: form.payment_basis,
     }),
     onSuccess: () => {
@@ -222,11 +221,11 @@ function EmployeesPanel() {
                   onChange={(e) => setForm(p => ({ ...p, tds: e.target.value }))} />
               </div>
               <div>
-                <label className="block text-xs font-medium text-secondary mb-1">City / State (statutory)</label>
-                <select className={inputCls} value={form.city} onChange={(e) => setForm(p => ({ ...p, city: e.target.value }))}>
-                  {!CITIES.includes(form.city) && form.city && <option value={form.city}>{form.city}</option>}
-                  {CITIES.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
+                <label className="block text-xs font-medium text-secondary mb-1">Statutory state</label>
+                <div className={`${inputCls} bg-muted/40 cursor-default`} title="Resolved from the employee's property — change it in Admin → Organization">
+                  {detail?.state ?? '—'}
+                </div>
+                <p className="mt-1 text-[11px] text-secondary">From the employee&apos;s property</p>
               </div>
               <div>
                 <label className="block text-xs font-medium text-secondary mb-1">Payment basis</label>
@@ -446,8 +445,9 @@ function TemplatesPanel() {
                 <input type="number" className={inputCls} value={form.default_base} onChange={(e) => set('default_base', e.target.value)} />
               </div>
               <div>
-                <label className="block text-xs font-medium text-secondary mb-1">City / State (statutory)</label>
-                <select className={inputCls} value={form.city} onChange={(e) => set('city', e.target.value)}>
+                <label className="block text-xs font-medium text-secondary mb-1">Preview state (statutory)</label>
+                <select className={inputCls} value={form.city} onChange={(e) => set('city', e.target.value)}
+                  title="Used only for this template's preview — employees' payslips use their property's state">
                   {!CITIES.includes(form.city) && form.city && <option value={form.city}>{form.city}</option>}
                   {CITIES.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>

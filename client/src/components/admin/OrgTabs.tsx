@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import api from '@/lib/api';
 import { formatINR } from '@/lib/utils';
+import { INDIAN_STATES } from '@/lib/constants';
 import { Plus, Pencil, Trash2, X, Upload } from 'lucide-react';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 
@@ -13,7 +14,7 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 export function PropertiesTab() {
   const qc = useQueryClient();
   const [editing, setEditing] = useState<any>(null);
-  const [form, setForm] = useState({ name: '', hotel_id: '', city: '', address: '', category: '' });
+  const [form, setForm] = useState({ name: '', hotel_id: '', city: '', state: '', address: '', category: '' });
   const [showForm, setShowForm] = useState(false);
   const [delTarget, setDelTarget] = useState<any>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -54,11 +55,11 @@ export function PropertiesTab() {
 
   function openEdit(item: any) {
     setEditing(item);
-    setForm({ name: item.name, hotel_id: item.hotel_id || '', city: item.city || '', address: item.address || '', category: item.category || '' });
+    setForm({ name: item.name, hotel_id: item.hotel_id || '', city: item.city || '', state: item.state || '', address: item.address || '', category: item.category || '' });
     setShowForm(true);
   }
 
-  function closeForm() { setShowForm(false); setEditing(null); setForm({ name: '', hotel_id: '', city: '', address: '', category: '' }); }
+  function closeForm() { setShowForm(false); setEditing(null); setForm({ name: '', hotel_id: '', city: '', state: '', address: '', category: '' }); }
 
   function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -99,6 +100,14 @@ export function PropertiesTab() {
               <label className="block text-xs font-medium mb-1">City</label>
               <input value={form.city} onChange={e => setForm(p => ({ ...p, city: e.target.value }))} className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm" />
             </div>
+            <div>
+              <label className="block text-xs font-medium mb-1">State *</label>
+              <select required value={form.state} onChange={e => setForm(p => ({ ...p, state: e.target.value }))} className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm">
+                <option value="">Select state…</option>
+                {INDIAN_STATES.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+              <p className="mt-1 text-[11px] text-secondary">Statutory rules (LWF, PT, minimum wage) follow this state.</p>
+            </div>
             <div className="col-span-2">
               <label className="block text-xs font-medium mb-1">Address</label>
               <input value={form.address} onChange={e => setForm(p => ({ ...p, address: e.target.value }))} className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm" />
@@ -121,6 +130,7 @@ export function PropertiesTab() {
             <th className="text-left px-4 py-3 text-xs font-medium text-secondary uppercase">Name</th>
             <th className="text-left px-4 py-3 text-xs font-medium text-secondary uppercase">Hotel ID</th>
             <th className="text-left px-4 py-3 text-xs font-medium text-secondary uppercase">City</th>
+            <th className="text-left px-4 py-3 text-xs font-medium text-secondary uppercase">State</th>
             <th className="text-left px-4 py-3 text-xs font-medium text-secondary uppercase">Address</th>
             <th className="text-left px-4 py-3 text-xs font-medium text-secondary uppercase">Category</th>
             <th className="text-left px-4 py-3 text-xs font-medium text-secondary uppercase">Status</th>
@@ -132,6 +142,7 @@ export function PropertiesTab() {
                 <td className="px-4 py-3 text-sm font-medium text-foreground">{item.name}</td>
                 <td className="px-4 py-3 text-sm text-secondary">{item.hotel_id || '—'}</td>
                 <td className="px-4 py-3 text-sm text-secondary">{item.city || '—'}</td>
+                <td className="px-4 py-3 text-sm text-secondary">{item.state || <span className="text-amber-600">Not set</span>}</td>
                 <td className="px-4 py-3 text-sm text-secondary max-w-[200px] truncate">{item.address || '—'}</td>
                 <td className="px-4 py-3 text-sm text-secondary">{item.category || '—'}</td>
                 <td className="px-4 py-3">

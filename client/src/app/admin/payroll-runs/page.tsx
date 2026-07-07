@@ -250,6 +250,12 @@ export default function PayrollRunsPage() {
                                 adjusted
                               </span>
                             )}
+                            {s.below_min_wage && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-700"
+                                title={`Full-month Basic is below the ${s.work_state || ''} minimum wage${s.min_wage ? ` (₹${s.min_wage})` : ''} — check the salary structure`}>
+                                &lt; min wage
+                              </span>
+                            )}
                           </div>
                         </td>
                         <td className="px-4 py-2 text-right">

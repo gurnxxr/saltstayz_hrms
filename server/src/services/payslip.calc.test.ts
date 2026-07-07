@@ -4,17 +4,26 @@ import {
   type StatutoryRates, type StructureLineInput,
 } from './payslip.calc';
 
-// Mirrors the enabled defaults in Statutory Components (migration 050).
+// Mirrors the enabled defaults in Statutory Components (migrations 050 + 059).
+const LWF_PERCENT = {
+  enabled: true, mode: 'percent' as const,
+  employeePct: 0.2, employeeMaxAmount: 35, employerMultiplier: 2,
+  employeeAmount: 0, employerAmount: 0, deductionMonths: [] as number[],
+};
+const NO_PT = { enabled: false, slabs: [] };
+
 const RATES: StatutoryRates = {
   epf: { enabled: true, employeeRatePct: 12, employerRatePct: 12 },
   esi: { enabled: true, employeeRatePct: 0.75, employerRatePct: 3.25, wageCeiling: 21000 },
-  lwf: { enabled: true, employeePct: 0.2, employeeMaxAmount: 35, employerMultiplier: 2 },
+  lwf: { ...LWF_PERCENT },
+  pt: { ...NO_PT },
 };
 
 const DISABLED: StatutoryRates = {
   epf: { enabled: false, employeeRatePct: 12, employerRatePct: 12 },
   esi: { enabled: false, employeeRatePct: 0.75, employerRatePct: 3.25, wageCeiling: 21000 },
-  lwf: { enabled: false, employeePct: 0.2, employeeMaxAmount: 35, employerMultiplier: 2 },
+  lwf: { ...LWF_PERCENT, enabled: false },
+  pt: { ...NO_PT },
 };
 
 // The standard SaltStayz structure: Basic 50% of base, HRA 50% of Basic,
@@ -130,7 +139,7 @@ describe('computeFromStructure — deductions, benefits, totals', () => {
       const otherDed = b.other_deductions.reduce((s, l) => s + l.amount, 0);
       const reimb = b.reimbursements.reduce((s, l) => s + l.amount, 0);
       expect(b.gross_earnings).toBe(b.fixed_salary + b.variable_pay);
-      expect(b.total_deduction).toBe(b.employee_pf + b.esi + b.lwf + otherDed);
+      expect(b.total_deduction).toBe(b.employee_pf + b.esi + b.lwf + b.pt + otherDed);
       expect(b.net_pay).toBe(b.gross_earnings - b.total_deduction + reimb);
       expect(b.ctc).toBe(b.gross_earnings + b.employer_pf + b.employer_esi + b.employer_lwf + b.employer_costs_total + reimb);
     }
@@ -190,6 +199,67 @@ describe('computeFromStructure — attendance-driven proration (Phase 3)', () =>
     expect(b.fixed_salary).toBe(17600);
     expect(b.basic).toBe(8800);
     expect(b.days?.hours).toBe(176);
+  });
+});
+
+describe('computeFromStructure — state-config LWF & PT (Phase 1: Work-Location State)', () => {
+  it('fixed-amount LWF deducts only in the configured months (Delhi: June & December)', () => {
+    const delhi: StatutoryRates = {
+      ...DISABLED,
+      lwf: { enabled: true, mode: 'fixed', employeePct: 0, employeeMaxAmount: 0, employerMultiplier: 1, employeeAmount: 0.75, employerAmount: 2.25, deductionMonths: [6, 12] },
+    };
+    const june = computeFromStructure(standardStructure(), 20000, delhi, null, 6);
+    expect(june.lwf).toBe(1);          // 0.75 rounded to the rupee
+    expect(june.employer_lwf).toBe(2); // 2.25 rounded
+    const july = computeFromStructure(standardStructure(), 20000, delhi, null, 7);
+    expect(july.lwf).toBe(0);
+    expect(july.employer_lwf).toBe(0);
+    // Reference breakdown (no month known): cyclical LWF is excluded
+    const reference = computeFromStructure(standardStructure(), 20000, delhi, null, null);
+    expect(reference.lwf).toBe(0);
+  });
+
+  it('fixed-amount LWF with empty months deducts every month (Chandigarh ₹5/₹20)', () => {
+    const chd: StatutoryRates = {
+      ...DISABLED,
+      lwf: { enabled: true, mode: 'fixed', employeePct: 0, employeeMaxAmount: 0, employerMultiplier: 1, employeeAmount: 5, employerAmount: 20, deductionMonths: [] },
+    };
+    for (const month of [1, 6, null]) {
+      const b = computeFromStructure(standardStructure(), 20000, chd, null, month);
+      expect(b.lwf).toBe(5);
+      expect(b.employer_lwf).toBe(20);
+    }
+  });
+
+  it('percent LWF keeps the cap behaviour and applies monthly', () => {
+    const b = computeFromStructure(standardStructure(), 20000, RATES, null, 3);
+    expect(b.lwf).toBe(Math.min(Math.round(20000 * 0.002), 35));
+  });
+
+  it('PT: slab on monthly gross, month overrides, none without a matching slab', () => {
+    const mh: StatutoryRates = {
+      ...DISABLED,
+      pt: {
+        enabled: true,
+        slabs: [
+          { min: 0, max: 7500, amount: 0 },
+          { min: 7501, max: 10000, amount: 175 },
+          { min: 10001, max: null, amount: 200, monthAmounts: { '2': 300 } }, // Maharashtra-style February
+        ],
+      },
+    };
+    const b = computeFromStructure(standardStructure(), 20000, mh, null, 5);
+    expect(b.pt).toBe(200);
+    expect(b.total_deduction).toBe(200); // everything else disabled
+    expect(b.net_pay).toBe(b.gross_earnings - 200);
+    const feb = computeFromStructure(standardStructure(), 20000, mh, null, 2);
+    expect(feb.pt).toBe(300);
+    const mid = computeFromStructure(standardStructure(), 9000, mh, null, 5); // gross 9000 → second slab
+    expect(mid.pt).toBe(175);
+    const tiny = computeFromStructure(standardStructure(), 7000, mh, null, 5); // gross 7000 → first slab, ₹0
+    expect(tiny.pt).toBe(0);
+    const disabled = computeFromStructure(standardStructure(), 20000, DISABLED, null, 5);
+    expect(disabled.pt).toBe(0);
   });
 });
 

@@ -114,6 +114,8 @@ export function generatePayslipPdf(data: PayslipPdfData): Promise<Buffer> {
         ['Employee PF', b.employee_pf],
         ['ESI', b.esi],
         ['LWF', b.lwf],
+        // PT applies only in states that levy it — omit the noise elsewhere
+        ...((b.pt ?? 0) > 0 ? [['Professional Tax', b.pt] as [string, number]] : []),
         ...b.other_deductions.map((l): [string, number] => [l.name, l.amount]),
       ],
       rightX, y + 22,

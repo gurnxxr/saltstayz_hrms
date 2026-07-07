@@ -1,28 +1,42 @@
 import db from '../config/database';
 import { NotFoundError, ValidationError } from '../utils/errors';
+import { INDIAN_STATES } from './statutory.service';
 
 // ─── Properties ───
+
+// Work-Location State model: every property carries a mandatory Indian state —
+// the payroll engine resolves each employee's statutory rules (LWF/PT/min wage)
+// from their property's state.
+function validState(state?: string | null): string {
+  const s = String(state || '').trim();
+  if (!s) throw new ValidationError('State is required — statutory rules are resolved from the property state');
+  if (!INDIAN_STATES.includes(s)) throw new ValidationError(`Unknown state "${s}"`);
+  return s;
+}
 
 export async function listProperties() {
   return db('properties').orderBy('name');
 }
 
-export async function createProperty(data: { name: string; hotel_id?: string; city?: string; address?: string; category?: string }) {
+export async function createProperty(data: { name: string; hotel_id?: string; city?: string; state?: string; address?: string; category?: string }) {
   if (!data.name?.trim()) throw new ValidationError('Property name is required');
   const [id] = await db('properties').insert({
     name: data.name.trim(),
     hotel_id: data.hotel_id?.trim() || null,
     city: data.city?.trim() || null,
+    state: validState(data.state),
     address: data.address?.trim() || null,
     category: data.category?.trim() || null,
   });
   return db('properties').where('id', id).first();
 }
 
-export async function updateProperty(id: number, data: Partial<{ name: string; hotel_id: string; city: string; address: string; category: string; is_active: boolean }>) {
+export async function updateProperty(id: number, data: Partial<{ name: string; hotel_id: string; city: string; state: string; address: string; category: string; is_active: boolean }>) {
   const row = await db('properties').where('id', id).first();
   if (!row) throw new NotFoundError('Property');
-  await db('properties').where('id', id).update({ ...data, updated_at: db.fn.now() });
+  const patch: any = { ...data, updated_at: db.fn.now() };
+  if ('state' in data) patch.state = validState(data.state);
+  await db('properties').where('id', id).update(patch);
   return db('properties').where('id', id).first();
 }
 
@@ -34,7 +48,10 @@ export async function deleteProperty(id: number) {
   await db('properties').where('id', id).delete();
 }
 
-export async function bulkCreateProperties(rows: Array<{ name: string; hotel_id?: string; city?: string; address?: string; category?: string }>) {
+export async function bulkCreateProperties(rows: Array<{ name: string; hotel_id?: string; city?: string; state?: string; address?: string; category?: string }>) {
+  // CSV rows may lack a state column — derive one from the state/city cell so
+  // every property lands with a valid statutory state (editable afterwards).
+  const { resolveStatutoryState } = await import('./statutory.service');
   const results = { created: 0, skipped: 0, errors: [] as string[] };
   for (const row of rows) {
     if (!row.name?.trim()) { results.skipped++; results.errors.push('Skipped row with empty name'); continue; }
@@ -44,6 +61,7 @@ export async function bulkCreateProperties(rows: Array<{ name: string; hotel_id?
       name: row.name.trim(),
       hotel_id: row.hotel_id?.trim() || null,
       city: row.city?.trim() || null,
+      state: resolveStatutoryState(row.state?.trim() || row.city?.trim() || null),
       address: row.address?.trim() || null,
       category: row.category?.trim() || null,
     });

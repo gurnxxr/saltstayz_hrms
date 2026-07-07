@@ -24,10 +24,28 @@ const ceil = (n: number) => Math.ceil(n);
 
 // ─── Statutory rates (resolved from statutory_settings — see statutory.service) ───
 
+export interface PtSlab {
+  min: number;            // monthly gross lower bound (inclusive)
+  max: number | null;     // upper bound (inclusive); null = no upper limit
+  amount: number;         // monthly PT amount in this slab
+  monthAmounts?: Record<string, number>; // calendar-month overrides, e.g. { "2": 300 }
+}
+
 export interface StatutoryRates {
   epf: { enabled: boolean; employeeRatePct: number; employerRatePct: number };
   esi: { enabled: boolean; employeeRatePct: number; employerRatePct: number; wageCeiling: number };
-  lwf: { enabled: boolean; employeePct: number; employeeMaxAmount: number; employerMultiplier: number };
+  lwf: {
+    enabled: boolean;
+    mode: 'percent' | 'fixed';
+    // percent mode: % of fixed gross capped at a max, employer = multiple
+    employeePct: number; employeeMaxAmount: number; employerMultiplier: number;
+    // fixed mode: flat state amounts
+    employeeAmount: number; employerAmount: number;
+    // calendar months the deduction applies in; empty = every month.
+    // Half-yearly states (e.g. Delhi: June & December) list their months here.
+    deductionMonths: number[];
+  };
+  pt: { enabled: boolean; slabs: PtSlab[] };
 }
 
 // ─── Structure lines (resolved from salary_structure_components + catalog) ───
@@ -82,6 +100,7 @@ export interface PayslipBreakdown {
   employee_pf: number;
   esi: number;
   lwf: number;
+  pt: number;              // Professional Tax (state slab; 0 where not levied)
   total_deduction: number; // statutory + other_deductions
   net_pay: number;         // gross − deductions + reimbursements
   // Employer side
@@ -108,6 +127,7 @@ export function computeFromStructure(
   base: number,
   statutory: StatutoryRates,
   attendance?: AttendanceContext | null,
+  month?: number | null, // calendar month of the pay period — drives cyclical statutory items (LWF months, PT overrides)
 ): PayslipBreakdown {
   const isHourly = attendance?.hours !== undefined && attendance?.hours !== null;
   const factor = !attendance || isHourly
@@ -176,25 +196,49 @@ export function computeFromStructure(
   const esi = esiEligible ? ceil((statutory.esi.employeeRatePct / 100) * esiBase) : 0;
   const employer_esi = esiEligible ? ceil((statutory.esi.employerRatePct / 100) * esiBase) : 0;
 
-  // LWF — % of fixed gross capped at the state max
+  // LWF — per-state config: percent-of-gross+cap or fixed amounts, deducted only
+  // in the state's deduction months (empty = every month). Without a known month
+  // (reference/preview breakdowns) only monthly-cycle LWF is shown.
   const lwfCfg = statutory.lwf;
-  const lwf = lwfCfg.enabled
-    ? Math.min(round((lwfCfg.employeePct / 100) * fixed_salary), round(lwfCfg.employeeMaxAmount))
-    : 0;
-  const employer_lwf = lwfCfg.enabled ? round(lwf * lwfCfg.employerMultiplier) : 0;
+  const months = lwfCfg.deductionMonths ?? [];
+  const lwfDue = lwfCfg.enabled
+    && (months.length === 0 || (month != null && months.includes(month)));
+  let lwf = 0;
+  let employer_lwf = 0;
+  if (lwfDue) {
+    if (lwfCfg.mode === 'fixed') {
+      lwf = round(lwfCfg.employeeAmount);
+      employer_lwf = round(lwfCfg.employerAmount);
+    } else {
+      lwf = Math.min(round((lwfCfg.employeePct / 100) * fixed_salary), round(lwfCfg.employeeMaxAmount));
+      employer_lwf = round(lwf * lwfCfg.employerMultiplier);
+    }
+  }
+
+  // PT — state slab on monthly gross earnings; employee-only deduction.
+  const ptCfg = statutory.pt;
+  let pt = 0;
+  if (ptCfg?.enabled && Array.isArray(ptCfg.slabs)) {
+    const slab = ptCfg.slabs.find((s) =>
+      gross_earnings >= (Number(s.min) || 0) && (s.max == null || gross_earnings <= Number(s.max)));
+    if (slab) {
+      const override = month != null ? slab.monthAmounts?.[String(month)] : undefined;
+      pt = round(Number(override ?? slab.amount) || 0);
+    }
+  }
 
   const otherDeductionTotal = other_deductions.reduce((s, l) => s + l.amount, 0);
   const reimbursementTotal = reimbursements.reduce((s, l) => s + l.amount, 0);
   const employer_costs_total = employer_costs.reduce((s, l) => s + l.amount, 0);
 
-  const total_deduction = employee_pf + esi + lwf + otherDeductionTotal;
+  const total_deduction = employee_pf + esi + lwf + pt + otherDeductionTotal;
   const net_pay = gross_earnings - total_deduction + reimbursementTotal;
   const ctc = gross_earnings + employer_pf + employer_esi + employer_lwf + employer_costs_total + reimbursementTotal;
 
   return {
     earnings, other_deductions, employer_costs, reimbursements,
     basic, fixed_salary, variable_pay, gross_earnings,
-    employee_pf, esi, lwf, total_deduction, net_pay,
+    employee_pf, esi, lwf, pt, total_deduction, net_pay,
     employer_pf, employer_esi, employer_lwf, employer_costs_total, ctc,
     ...(attendance ? { days: attendance } : {}),
   };
@@ -205,7 +249,11 @@ export function computeFromStructure(
  * stored payslips keep rendering (PDF re-downloads).
  */
 export function legacyBreakdownToLines(old: any): PayslipBreakdown {
-  if (old && Array.isArray(old.earnings)) return old as PayslipBreakdown; // already v2
+  if (old && Array.isArray(old.earnings)) {
+    if (typeof old.pt === 'number') return old as PayslipBreakdown; // already v2, current shape
+    // v2 snapshot stored before Work-Location State — default the pt field
+    return { ...(old as PayslipBreakdown), pt: 0 };
+  }
   const n = (v: any) => Number(v) || 0;
   const line = (name: string, amount: number): PayslipLine => ({ component_id: null, name, amount });
   const earnings: PayslipLine[] = [
@@ -222,7 +270,7 @@ export function legacyBreakdownToLines(old: any): PayslipBreakdown {
     earnings, other_deductions, employer_costs, reimbursements: [],
     basic: n(old?.basic), fixed_salary: n(old?.fixed_salary), variable_pay: n(old?.pli),
     gross_earnings: n(old?.gross_earnings),
-    employee_pf: n(old?.employee_pf), esi: n(old?.esi), lwf: n(old?.lwf),
+    employee_pf: n(old?.employee_pf), esi: n(old?.esi), lwf: n(old?.lwf), pt: 0,
     total_deduction: n(old?.total_deduction), net_pay: n(old?.net_pay),
     employer_pf: n(old?.employer_pf), employer_esi: n(old?.employer_esi), employer_lwf: n(old?.employer_lwf),
     employer_costs_total: n(old?.gratuity) + n(old?.accommodation_allowance),
