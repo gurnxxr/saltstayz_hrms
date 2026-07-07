@@ -111,6 +111,7 @@ export async function getMonthlyBreakdown(
     attendance = {
       period_days: days.period_days,
       working_days: days.working_days,
+      scheduled_working_days: days.scheduled_working_days,
       lop_days: days.lop_days,
       not_employed_days: days.not_employed_days,
       payment_days: days.payment_days,
@@ -155,8 +156,13 @@ export async function getMonthlyBreakdown(
     if (adjustment) {
       if (adjustment.lop_override !== null && adjustment.lop_override !== undefined) {
         attendance.lop_days = num(adjustment.lop_override);
-        // Non-employment days still reduce pay alongside the overridden LOP.
-        attendance.payment_days = Math.max(0, attendance.working_days - num(attendance.not_employed_days) - attendance.lop_days);
+        // Re-project the employed-and-paid share onto the denominator, so an
+        // override behaves correctly under fixed_days and partial employment.
+        const scheduled = num(attendance.scheduled_working_days) || attendance.working_days;
+        const paidRatio = scheduled > 0
+          ? Math.max(0, scheduled - num(attendance.not_employed_days) - attendance.lop_days) / scheduled
+          : 0;
+        attendance.payment_days = Math.round(attendance.working_days * paidRatio * 100) / 100;
         attendance.lop_overridden = true;
       }
       const amount = num(adjustment.adjustment_amount);
@@ -532,12 +538,22 @@ export async function getRunDetails(month: number, year: number) {
 
 const pct = (u: number, w: number) => (w > 0 ? Math.round((u / w) * 1000) / 10 : 0);
 
+// Markable working-day cells for an employee this month: every elapsed working
+// day the register could carry a mark. This is the true coverage denominator —
+// NOT days.working_days, which is the pay denominator (fixed in fixed_days mode,
+// and inflated by paid holidays), so dividing by it understates the unmarked share.
+function markableCells(c: any): number {
+  if (!c) return 0;
+  return num(c.present) + num(c.half_day) + num(c.absent) + num(c.miss_punch)
+    + num(c.short_punch) + num(c.paid_leave) + num(c.unpaid_leave) + num(c.unmarked);
+}
+
 function computeCoverage(slips: any[], gatePct: number) {
   const byProp = new Map<string, { working: number; unmarked: number }>();
   let totWorking = 0;
   let totUnmarked = 0;
   for (const s of slips) {
-    const wd = num(s.days?.working_days);
+    const wd = markableCells(s.days?.counts);
     const um = num(s.days?.counts?.unmarked);
     totWorking += wd;
     totUnmarked += um;

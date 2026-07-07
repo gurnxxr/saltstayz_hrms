@@ -72,6 +72,7 @@ export interface StructureLineInput {
 export interface AttendanceContext {
   period_days: number;
   working_days: number;
+  scheduled_working_days?: number; // actual scheduled working days (for fixed_days proration)
   lop_days: number;
   payment_days: number;
   not_employed_days?: number;      // scheduled working days outside the employment span

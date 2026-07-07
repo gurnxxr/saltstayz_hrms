@@ -32,6 +32,7 @@ export interface DayTrace {
   status: DayStatus | null;                       // null on non-working days
   lop: number;                                    // 0 | 0.5 | 1
   holiday_name?: string;
+  leave_type?: string;                            // leave category on a leave day
 }
 
 export interface PayableDays extends AttendanceContext {
@@ -43,6 +44,7 @@ export interface PayableDays extends AttendanceContext {
   };
   weekly_offs: number;
   holidays: number;
+  scheduled_working_days: number; // actual scheduled working days (denominator basis)
   not_employed_days: number; // scheduled working days outside the employment span
   method: string;            // actual_days | fixed_days
   unmarked_policy: string;   // present | absent
@@ -88,8 +90,17 @@ export interface WorkCalendar {
  * Builds an employee's working-day calendar for a date range. Roster presence is
  * decided per calendar month (so a leave that spans only off-days still resolves
  * correctly when the rest of the month is rostered).
+ *
+ * useRoster (default true) drives the retrospective payroll view: a rostered
+ * month treats un-rostered dates as off days. Leave counting passes useRoster:
+ * false so a not-yet-published future roster does not make ordinary working days
+ * read as offs — those fall back to the org work week (weekly-off pattern).
  */
-export async function buildWorkCalendar(employeeId: number, startDate: string, endDate: string): Promise<WorkCalendar> {
+export async function buildWorkCalendar(
+  employeeId: number, startDate: string, endDate: string,
+  opts: { useRoster?: boolean } = {},
+): Promise<WorkCalendar> {
+  const useRoster = opts.useRoster !== false;
   const emp = await db('employees').where('id', employeeId)
     .select('date_of_joining', 'last_working_day').first();
   const doj = emp?.date_of_joining ? String(emp.date_of_joining).slice(0, 10) : null;
@@ -137,7 +148,7 @@ export async function buildWorkCalendar(employeeId: number, startDate: string, e
     const holidayName = holidayByDate.get(date);
     if (holidayName !== undefined) return { base: 'holiday', employed, holidayName, shiftHours, allowOt };
 
-    const isWorking = rosterMonth(date) ? rosterByDate.has(date) : workWeek.has(dowOf(date));
+    const isWorking = (useRoster && rosterMonth(date)) ? rosterByDate.has(date) : workWeek.has(dowOf(date));
     return { base: isWorking ? 'working' : 'weekly_off', employed, shiftHours, allowOt };
   };
 
@@ -145,12 +156,14 @@ export async function buildWorkCalendar(employeeId: number, startDate: string, e
 }
 
 /**
- * Count of scheduled working days for the employee in [start, end], excluding
- * holidays, weekly offs, and days outside the employment span. Used by leave so
- * a leave request consumes the same days payroll would treat as working.
+ * Count of working days for the employee in [start, end], excluding holidays,
+ * weekly offs, and days outside the employment span — on the work-week (weekly-off)
+ * pattern, not the dated roster, so a leave applied before its roster is published
+ * is sized correctly. Payroll re-derives LOP from the final roster when the month
+ * is run; for a normal work-week month the two agree.
  */
 export async function countWorkingDaysInRange(employeeId: number, startDate: string, endDate: string): Promise<number> {
-  const cal = await buildWorkCalendar(employeeId, startDate, endDate);
+  const cal = await buildWorkCalendar(employeeId, startDate, endDate, { useRoster: false });
   let count = 0;
   const [sy, sm, sd] = startDate.split('-').map(Number);
   const [ey, em, ed] = endDate.split('-').map(Number);
@@ -196,6 +209,7 @@ export async function getOvertimeHours(employeeId: number, month: number, year: 
   for (const r of rows) {
     const date = String(r.date).slice(0, 10);
     const info = cal.classify(date);
+    if (!info.employed) continue; // no OT for days outside the employment span
     // Per-date rostered shift wins; otherwise the standing assignment.
     const hasRoster = info.shiftHours > 0;
     const shiftHours = hasRoster ? info.shiftHours : assignHours;
@@ -248,12 +262,12 @@ export async function computePayableDays(employeeId: number, month: number, year
     .where('lr.status', 'approved')
     .where('lr.start_date', '<=', end)
     .where('lr.end_date', '>=', start)
-    .select('lr.start_date', 'lr.end_date', 'lt.is_paid');
+    .select('lr.start_date', 'lr.end_date', 'lt.is_paid', 'lt.name as leave_type');
 
-  const leaveOn = (date: string): { paid: boolean } | null => {
+  const leaveOn = (date: string): { paid: boolean; name: string } | null => {
     for (const l of leaves) {
       if (String(l.start_date).slice(0, 10) <= date && String(l.end_date).slice(0, 10) >= date) {
-        return { paid: !!l.is_paid };
+        return { paid: !!l.is_paid, name: l.leave_type };
       }
     }
     return null;
@@ -285,7 +299,7 @@ export async function computePayableDays(employeeId: number, month: number, year
       // the denominator but not paid, exactly like a scheduled working day.
       if (holidaysPaid) {
         workingDays += 1;
-        if (!info.employed) notEmployedDays += 1;
+        if (!info.employed) { notEmployedDays += 1; counts.not_employed += 1; }
       }
       trace.push({ date, kind: 'holiday', status: info.employed ? null : 'not_employed', lop: 0, holiday_name: info.holidayName });
       continue;
@@ -354,19 +368,27 @@ export async function computePayableDays(employeeId: number, month: number, year
 
     counts[dayStatus] += 1;
     lop += dayLop;
-    trace.push({ date, kind: 'working', status: dayStatus, lop: dayLop });
+    // Name the leave category on leave days so the four categories surface in the trace.
+    const leaveName = (dayStatus === 'paid_leave' || dayStatus === 'unpaid_leave') ? leave?.name : undefined;
+    trace.push({ date, kind: 'working', status: dayStatus, lop: dayLop, ...(leaveName ? { leave_type: leaveName } : {}) });
   }
 
   // fixed_days: salary divides over a fixed number of days (e.g. 30) regardless
   // of the month's real shape; LOP still comes from actual attendance.
   const method = schedule.salary_calculation_method === 'fixed_days' ? 'fixed_days' : 'actual_days';
   const denominator = method === 'fixed_days' ? Number(schedule.fixed_working_days) || 30 : workingDays;
-  // Non-employment days and LOP both cut into payable days.
-  const paymentDays = Math.max(0, round2(denominator - notEmployedDays - lop));
+  // Employed-and-paid share of the scheduled working days, projected onto the
+  // denominator. For actual_days (denominator = workingDays) this reduces to
+  // scheduled − not_employed − lop; for fixed_days it scales that ratio onto the
+  // fixed base, so a mid-month joiner or a fully-absent month is paid correctly
+  // instead of subtracting actual-scale days from a 30-day base.
+  const paidRatio = workingDays > 0 ? Math.max(0, workingDays - notEmployedDays - lop) / workingDays : 0;
+  const paymentDays = round2(denominator * paidRatio);
 
   return {
     period_days: periodDays,
     working_days: denominator,
+    scheduled_working_days: workingDays,
     lop_days: lop,
     not_employed_days: notEmployedDays,
     payment_days: paymentDays,
