@@ -112,6 +112,7 @@ export async function getMonthlyBreakdown(
       period_days: days.period_days,
       working_days: days.working_days,
       lop_days: days.lop_days,
+      not_employed_days: days.not_employed_days,
       payment_days: days.payment_days,
       counts: days.counts as any,
     };
@@ -135,9 +136,10 @@ export async function getMonthlyBreakdown(
     if (otHours > 0) {
       const schedule = await getPaySchedule();
       const multiplier = Math.max(1, num((schedule as any).overtime_multiplier) || 2);
+      const stdDayHours = Math.max(1, num((schedule as any).standard_day_hours) || 8);
       const hourlyRate = hourly
         ? base * (multiplier - 1)
-        : (attendance.working_days > 0 ? (base / (attendance.working_days * 8)) * multiplier : 0);
+        : (attendance.working_days > 0 ? (base / (attendance.working_days * stdDayHours)) * multiplier : 0);
       const amount = Math.round(otHours * hourlyRate);
       if (amount > 0) {
         extraLines.push({
@@ -153,7 +155,8 @@ export async function getMonthlyBreakdown(
     if (adjustment) {
       if (adjustment.lop_override !== null && adjustment.lop_override !== undefined) {
         attendance.lop_days = num(adjustment.lop_override);
-        attendance.payment_days = Math.max(0, attendance.working_days - attendance.lop_days);
+        // Non-employment days still reduce pay alongside the overridden LOP.
+        attendance.payment_days = Math.max(0, attendance.working_days - num(attendance.not_employed_days) - attendance.lop_days);
         attendance.lop_overridden = true;
       }
       const amount = num(adjustment.adjustment_amount);
@@ -518,7 +521,43 @@ export async function getRunDetails(month: number, year: number) {
     .filter((e: any) => !covered.has(e.id))
     .map((e: any) => ({ employee_id: e.id, employee_code: e.employee_code, name: `${e.first_name} ${e.last_name}` }));
 
-  return { run: run ?? null, slips, skipped };
+  // Attendance-coverage gate (Phase 3): share of working-day cells with no
+  // attendance record, overall and per property. Locking above the gate needs
+  // confirmation so a month cannot be paid on a handful of records.
+  const gatePct = num((await getPaySchedule() as any).attendance_gate_pct);
+  const coverage = computeCoverage(slips, gatePct);
+
+  return { run: run ?? null, slips, skipped, coverage };
+}
+
+const pct = (u: number, w: number) => (w > 0 ? Math.round((u / w) * 1000) / 10 : 0);
+
+function computeCoverage(slips: any[], gatePct: number) {
+  const byProp = new Map<string, { working: number; unmarked: number }>();
+  let totWorking = 0;
+  let totUnmarked = 0;
+  for (const s of slips) {
+    const wd = num(s.days?.working_days);
+    const um = num(s.days?.counts?.unmarked);
+    totWorking += wd;
+    totUnmarked += um;
+    const key = s.branch || 'Unassigned';
+    const cur = byProp.get(key) || { working: 0, unmarked: 0 };
+    cur.working += wd;
+    cur.unmarked += um;
+    byProp.set(key, cur);
+  }
+  const unmarkedPct = pct(totUnmarked, totWorking);
+  return {
+    working_days: totWorking,
+    unmarked_days: totUnmarked,
+    unmarked_pct: unmarkedPct,
+    gate_pct: gatePct,
+    over_gate: unmarkedPct > gatePct,
+    by_property: [...byProp.entries()]
+      .map(([branch, v]) => ({ branch, working_days: v.working, unmarked_days: v.unmarked, unmarked_pct: pct(v.unmarked, v.working) }))
+      .sort((a, b) => b.unmarked_pct - a.unmarked_pct),
+  };
 }
 
 const csvCell = (v: any) => {
@@ -556,7 +595,7 @@ export async function getSalaryRegister(month: number, year: number): Promise<st
   return lines.join('\n');
 }
 
-export async function lockRun(month: number, year: number, userId?: number | null) {
+export async function lockRun(month: number, year: number, userId?: number | null, confirm = false) {
   assertValidPeriod(month, year);
   const run = await getRun(month, year);
   if (!run) throw new AppError('No payroll run to lock. Run payroll for this month first.', 400);
@@ -565,6 +604,16 @@ export async function lockRun(month: number, year: number, userId?: number | nul
   const countRow = await db('payslip_history').where({ month, year }).count('id as c').first();
   if (!Number(countRow?.c ?? 0)) {
     throw new AppError('No payslips generated for this month yet.', 400);
+  }
+
+  // Attendance-coverage gate: block the lock (unless explicitly confirmed) when
+  // too many working-day cells are unmarked — the run would pay on thin data.
+  const { coverage } = await getRunDetails(month, year);
+  if (coverage.over_gate && !confirm) {
+    throw new AppError(
+      `Attendance is only ${(100 - coverage.unmarked_pct).toFixed(1)}% complete — ${coverage.unmarked_pct}% of working days are unmarked (gate: ${coverage.gate_pct}%). Review coverage, then confirm to lock anyway.`,
+      409,
+    );
   }
 
   await db('payroll_runs').where('id', run.id).update({

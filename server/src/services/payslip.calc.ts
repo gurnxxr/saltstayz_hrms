@@ -74,6 +74,7 @@ export interface AttendanceContext {
   working_days: number;
   lop_days: number;
   payment_days: number;
+  not_employed_days?: number;      // scheduled working days outside the employment span
   hours?: number | null; // hourly-rated only: attendance working hours
   counts?: Record<string, number>; // day-status counts for the review screen
   lop_overridden?: boolean;        // HR replaced the computed LOP in review

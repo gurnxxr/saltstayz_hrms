@@ -1,7 +1,6 @@
 import type { Knex } from 'knex';
 
 export async function seed(knex: Knex): Promise<void> {
-  await knex('work_week_config').del();
   await knex('holidays').del();
   await knex('leave_entitlements').del();
   await knex('leave_requests').del();
@@ -30,20 +29,6 @@ export async function seed(knex: Knex): Promise<void> {
     { name: 'Diwali', date: '2026-10-20', is_recurring: false },
     { name: 'Christmas', date: '2026-12-25', is_recurring: true },
   ]);
-
-  // Work week config for all properties (Mon-Sat working)
-  const properties = await knex('properties').select('id');
-  const wwRows: any[] = [];
-  for (const prop of properties) {
-    for (let day = 0; day <= 6; day++) {
-      wwRows.push({
-        property_id: prop.id,
-        day_of_week: day,
-        is_working_day: day !== 0, // Sunday off
-      });
-    }
-  }
-  await knex('work_week_config').insert(wwRows);
 
   // Leave entitlements for all employees in current period
   const employees = await knex('employees').select('id');

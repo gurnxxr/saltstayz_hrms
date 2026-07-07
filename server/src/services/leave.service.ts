@@ -2,6 +2,7 @@ import type { Knex } from 'knex';
 import db from '../config/database';
 import { NotFoundError, ValidationError, ForbiddenError } from '../utils/errors';
 import { notifyEmployee } from './notification.service';
+import { countWorkingDaysInRange } from './payableDays.service';
 
 /** Inclusive list of 'YYYY-MM-DD' dates between start and end (capped for safety). */
 function enumerateDates(start: string, end: string): string[] {
@@ -286,8 +287,10 @@ export async function applyLeave(employeeId: number, data: {
   const leaveType = await db('leave_types').where('id', leave_type_id).first();
   if (!leaveType) throw new NotFoundError('Leave type');
 
-  const days = calculateLeaveDays(start_date, end_date);
-  if (days <= 0) throw new ValidationError('Leave must be at least 1 day');
+  // One calendar everywhere (Phase 3): count leave days on the employee's own
+  // roster/work-week calendar, so leave balance and payroll LOP agree.
+  const days = await countWorkingDaysInRange(employeeId, start_date, end_date);
+  if (days <= 0) throw new ValidationError('Leave must be at least 1 working day for this employee');
 
   const period = await getCurrentPeriod();
   const entitlement = await db('leave_entitlements')
@@ -681,16 +684,5 @@ export async function deleteHoliday(id: number) {
 }
 
 // ─── Helpers ───
-
-function calculateLeaveDays(startDate: string, endDate: string): number {
-  const start = new Date(startDate);
-  const end = new Date(endDate);
-  let days = 0;
-  const current = new Date(start);
-  while (current <= end) {
-    const day = current.getDay();
-    if (day !== 0) days++; // exclude Sundays
-    current.setDate(current.getDate() + 1);
-  }
-  return days;
-}
+// Leave-day counting now lives in payableDays.countWorkingDaysInRange so leave
+// and payroll share one per-employee calendar (Phase 3).

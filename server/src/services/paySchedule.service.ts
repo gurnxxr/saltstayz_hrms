@@ -23,6 +23,9 @@ export interface PaySchedule {
   miss_punch_allowance: number; // miss punches/month treated as present
   miss_punch_lop: number;       // LOP per miss punch beyond the allowance
   short_punch_lop: number;      // LOP per short punch
+  // Coverage gate (Phase 3): max % of working-day cells that may be unmarked
+  // before locking a payroll month requires an explicit confirmation.
+  attendance_gate_pct: number;
 }
 
 const DEFAULTS: PaySchedule = {
@@ -39,6 +42,7 @@ const DEFAULTS: PaySchedule = {
   miss_punch_allowance: 3,
   miss_punch_lop: 0.5,
   short_punch_lop: 0.5,
+  attendance_gate_pct: 10,
 };
 
 function parseRow(row: any) {
@@ -65,6 +69,7 @@ function parseRow(row: any) {
     miss_punch_allowance: row.miss_punch_allowance == null ? DEFAULTS.miss_punch_allowance : Number(row.miss_punch_allowance),
     miss_punch_lop: row.miss_punch_lop == null ? DEFAULTS.miss_punch_lop : Number(row.miss_punch_lop),
     short_punch_lop: row.short_punch_lop == null ? DEFAULTS.short_punch_lop : Number(row.short_punch_lop),
+    attendance_gate_pct: row.attendance_gate_pct == null ? DEFAULTS.attendance_gate_pct : Number(row.attendance_gate_pct),
     updated_by: row.updated_by,
     updated_at: row.updated_at,
   };
@@ -137,6 +142,7 @@ export async function updatePaySchedule(input: any, userId?: number) {
   const missAllowance = intIn(input.miss_punch_allowance, 'Miss-punch allowance', 0, 31, DEFAULTS.miss_punch_allowance);
   const missLop = lopIn(input.miss_punch_lop, 'Miss-punch LOP', DEFAULTS.miss_punch_lop);
   const shortLop = lopIn(input.short_punch_lop, 'Short-punch LOP', DEFAULTS.short_punch_lop);
+  const attendanceGatePct = intIn(input.attendance_gate_pct, 'Attendance coverage threshold', 0, 100, DEFAULTS.attendance_gate_pct);
   let standardDayHours = DEFAULTS.standard_day_hours;
   if (input.standard_day_hours != null) {
     standardDayHours = Number(input.standard_day_hours);
@@ -159,6 +165,7 @@ export async function updatePaySchedule(input: any, userId?: number) {
     miss_punch_allowance: missAllowance,
     miss_punch_lop: missLop,
     short_punch_lop: shortLop,
+    attendance_gate_pct: attendanceGatePct,
     updated_by: userId || null,
     updated_at: db.fn.now(),
   };

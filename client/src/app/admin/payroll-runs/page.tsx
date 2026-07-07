@@ -66,14 +66,23 @@ export default function PayrollRunsPage() {
   });
 
   const lockMutation = useMutation({
-    mutationFn: (vars: { month: number; year: number; lock: boolean }) =>
-      api.post(`/payroll/runs/${vars.lock ? 'lock' : 'unlock'}`, { month: vars.month, year: vars.year }).then(r => r.data),
+    mutationFn: (vars: { month: number; year: number; lock: boolean; confirm?: boolean }) =>
+      api.post(`/payroll/runs/${vars.lock ? 'lock' : 'unlock'}`, { month: vars.month, year: vars.year, confirm: vars.confirm === true }).then(r => r.data),
     onSuccess: (_d, vars) => {
       queryClient.invalidateQueries({ queryKey: ['payroll-runs'] });
       queryClient.invalidateQueries({ queryKey: ['run-details'] });
       toast.success(vars.lock ? 'Payroll locked' : 'Payroll unlocked');
     },
-    onError: (err: any) => toast.error(err.response?.data?.error || 'Action failed'),
+    onError: (err: any, vars) => {
+      // Attendance-coverage gate (409): let the user lock anyway after confirming.
+      if (err.response?.status === 409 && vars.lock && !vars.confirm) {
+        if (window.confirm(`${err.response?.data?.error}\n\nLock anyway?`)) {
+          lockMutation.mutate({ ...vars, confirm: true });
+        }
+        return;
+      }
+      toast.error(err.response?.data?.error || 'Action failed');
+    },
   });
 
   const adjustMutation = useMutation({
@@ -208,6 +217,32 @@ export default function PayrollRunsPage() {
                 <Download size={14} /> Salary Register (CSV)
               </button>
             </div>
+
+            {/* Attendance-coverage gate (Phase 3) */}
+            {details.coverage && details.coverage.working_days > 0 && (
+              <div className={`px-6 py-3 border-b border-border flex flex-wrap items-center gap-x-6 gap-y-2 text-xs ${
+                details.coverage.over_gate ? 'bg-amber-50 text-amber-800' : 'bg-muted/30 text-secondary'
+              }`}>
+                <span className="flex items-center gap-1.5 font-medium">
+                  {details.coverage.over_gate
+                    ? <AlertTriangle size={14} className="text-amber-600" />
+                    : <CheckCircle2 size={14} className="text-green-600" />}
+                  Attendance coverage: {(100 - details.coverage.unmarked_pct).toFixed(1)}% marked
+                  <span className="text-secondary font-normal">
+                    ({details.coverage.unmarked_days} of {details.coverage.working_days} working days unmarked · gate {details.coverage.gate_pct}%)
+                  </span>
+                </span>
+                {details.coverage.by_property.filter((p: any) => p.unmarked_pct > 0).slice(0, 4).map((p: any) => (
+                  <span key={p.branch} className="text-secondary">
+                    {p.branch}: <span className={p.unmarked_pct > details.coverage.gate_pct ? 'text-amber-700 font-medium' : 'text-foreground'}>{p.unmarked_pct}% unmarked</span>
+                  </span>
+                ))}
+                {details.coverage.over_gate && currentRun.status !== 'locked' && (
+                  <span className="text-amber-700">Locking will require confirmation.</span>
+                )}
+              </div>
+            )}
+
             <div className="overflow-x-auto max-h-[480px] overflow-y-auto">
               <table className="w-full text-sm">
                 <thead className="sticky top-0 bg-card">
@@ -227,6 +262,7 @@ export default function PayrollRunsPage() {
                     const unmarked = s.days?.counts?.unmarked ?? 0;
                     const missPunch = s.days?.counts?.miss_punch ?? 0;
                     const shortPunch = s.days?.counts?.short_punch ?? 0;
+                    const notEmployed = s.days?.not_employed_days ?? 0;
                     return (
                       <tr key={s.employee_id} className="hover:bg-muted/20">
                         <td className="px-4 py-2">
@@ -242,6 +278,11 @@ export default function PayrollRunsPage() {
                         <td className="px-3 py-2 text-right font-medium text-green-700">{formatINR(s.net_pay)}</td>
                         <td className="px-4 py-2">
                           <div className="flex flex-wrap gap-1">
+                            {notEmployed > 0 && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-700" title="Working days outside the employment span (before joining / after last working day) — in the denominator but not paid">
+                                {notEmployed}d not employed
+                              </span>
+                            )}
                             {unmarked > 0 && (
                               <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700" title="Working days without an attendance record">
                                 {unmarked} unmarked
@@ -381,7 +422,7 @@ export default function PayrollRunsPage() {
               <div>
                 <h3 className="text-base font-semibold text-foreground">Correct — {adjusting.name}</h3>
                 <p className="text-xs text-secondary mt-0.5">
-                  Computed: {adjusting.days?.working_days ?? '—'} working · {adjusting.days?.lop_days ?? '—'} LOP · {adjusting.days?.payment_days ?? '—'} paid
+                  Computed: {adjusting.days?.working_days ?? '—'} working · {(adjusting.days?.not_employed_days ?? 0) > 0 ? `${adjusting.days.not_employed_days} not-employed · ` : ''}{adjusting.days?.lop_days ?? '—'} LOP · {adjusting.days?.payment_days ?? '—'} paid
                   {adjusting.days?.counts ? ` (${adjusting.days.counts.absent} absent, ${adjusting.days.counts.half_day} half-day, ${adjusting.days.counts.short_punch ?? 0} short-punch, ${adjusting.days.counts.miss_punch ?? 0} miss-punch, ${adjusting.days.counts.unpaid_leave} unpaid leave, ${adjusting.days.counts.unmarked} unmarked)` : ''}
                 </p>
               </div>

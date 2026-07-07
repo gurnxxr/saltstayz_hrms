@@ -189,7 +189,7 @@ export async function runPayroll(req: AuthRequest, res: Response, next: NextFunc
 export async function lockRun(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     res.json(await payslip.lockRun(
-      Number(req.body.month), Number(req.body.year), req.user?.userId ?? null,
+      Number(req.body.month), Number(req.body.year), req.user?.userId ?? null, req.body.confirm === true,
     ));
   } catch (err) { next(err); }
 }

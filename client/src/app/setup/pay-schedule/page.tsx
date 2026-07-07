@@ -44,6 +44,7 @@ export default function PaySchedulePage() {
   const [missAllowance, setMissAllowance] = useState('3');
   const [missLop, setMissLop] = useState('0.5');
   const [shortLop, setShortLop] = useState('0.5');
+  const [gatePct, setGatePct] = useState('10');
   const [dirty, setDirty] = useState(false);
 
   // Hydrate the form once settings load.
@@ -61,6 +62,7 @@ export default function PaySchedulePage() {
     setMissAllowance(String(data.miss_punch_allowance ?? 3));
     setMissLop(String(data.miss_punch_lop ?? 0.5));
     setShortLop(String(data.short_punch_lop ?? 0.5));
+    setGatePct(String(data.attendance_gate_pct ?? 10));
     setDirty(false);
   }, [data]);
 
@@ -86,6 +88,7 @@ export default function PaySchedulePage() {
         miss_punch_allowance: Number(missAllowance) || 0,
         miss_punch_lop: Number(missLop) || 0,
         short_punch_lop: Number(shortLop) || 0,
+        attendance_gate_pct: Number(gatePct) || 0,
       }),
     onSuccess: () => {
       toast.success('Pay schedule saved');
@@ -241,6 +244,16 @@ export default function PaySchedulePage() {
                     <span className="text-sm text-secondary">× hourly rate</span>
                   </div>
                   <p className="text-xs text-secondary mt-1">Applied to hours beyond shift length, only when the employee&apos;s shift type allows overtime. 2× is the Factories Act standard.</p>
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-foreground mb-1.5">Attendance coverage gate</p>
+                  <div className="flex items-center gap-2">
+                    <input type="number" step="1" min={0} max={100} value={gatePct}
+                      onChange={(e) => { setGatePct(e.target.value); setDirty(true); }}
+                      className="w-24 px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+                    <span className="text-sm text-secondary">% working days may be unmarked</span>
+                  </div>
+                  <p className="text-xs text-secondary mt-1">If more than this share of a month&apos;s working-day cells have no attendance record, locking the payroll run requires an explicit confirmation — so a month can&apos;t be paid on thin data.</p>
                 </div>
               </div>
             </section>
