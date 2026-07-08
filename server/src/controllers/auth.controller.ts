@@ -9,6 +9,13 @@ export async function login(req: Request, res: Response, next: NextFunction) {
     const { email, password } = req.body;
     const { token, user } = await authService.login(email, password);
 
+    // Assemble the full response BEFORE staging the cookie: if the permission /
+    // override queries throw, we must not emit a valid session cookie alongside
+    // the resulting 500 (that would authenticate the browser while the UI shows
+    // a login error — another "worked on the second attempt" trap).
+    const permissions = await authService.getUserPermissions(user.roleId, user.employeeId);
+    const overrides = user.employeeId ? await getEmployeeOverrides(user.employeeId) : { granted: [], denied: [] };
+
     const isProduction = process.env.NODE_ENV === 'production';
     res.cookie('token', token, {
       httpOnly: true,
@@ -16,9 +23,6 @@ export async function login(req: Request, res: Response, next: NextFunction) {
       sameSite: isProduction ? 'strict' : 'lax',
       maxAge: 24 * 60 * 60 * 1000,
     });
-
-    const permissions = await authService.getUserPermissions(user.roleId, user.employeeId);
-    const overrides = user.employeeId ? await getEmployeeOverrides(user.employeeId) : { granted: [], denied: [] };
 
     res.json({ user, permissions, overrides });
 

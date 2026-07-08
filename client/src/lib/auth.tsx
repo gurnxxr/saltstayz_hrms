@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import api from './api';
 import { User, Permission, AuthState, type RoleName } from './types';
@@ -22,6 +22,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isLoading: true,
   });
   const router = useRouter();
+  // Monotonic guard: a completed login/logout must win over any in-flight
+  // checkAuth(). The provider mounts once (persisted in the root layout) and
+  // fires checkAuth() → GET /auth/me; on a cold start that request can resolve
+  // *after* a successful login and clobber the session back to null, bouncing
+  // the user to /login — which is why login sometimes needed a second attempt.
+  const authSeq = useRef(0);
 
   useEffect(() => {
     checkAuth();
@@ -30,22 +36,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const emptyOverrides = { granted: [], denied: [] };
 
   async function checkAuth() {
+    const seq = ++authSeq.current;
     try {
       const { data } = await api.get('/auth/me');
+      if (seq !== authSeq.current) return; // superseded by a login/logout — ignore
       setState({ user: data.user, permissions: data.permissions, overrides: data.overrides ?? emptyOverrides, isLoading: false });
     } catch {
+      if (seq !== authSeq.current) return; // superseded — don't clobber a fresh session
       setState({ user: null, permissions: [], overrides: emptyOverrides, isLoading: false });
     }
   }
 
   async function login(email: string, password: string) {
     const { data } = await api.post('/auth/login', { email, password });
+    authSeq.current++; // this session supersedes any in-flight checkAuth()
     setState({ user: data.user, permissions: data.permissions, overrides: data.overrides ?? emptyOverrides, isLoading: false });
     const defaultRoute = ROLE_DEFAULT_DASHBOARD[data.user.roleName as RoleName] || '/dashboard';
     router.push(defaultRoute);
   }
 
   async function logout() {
+    authSeq.current++; // supersede any in-flight checkAuth()
     await api.post('/auth/logout');
     setState({ user: null, permissions: [], overrides: emptyOverrides, isLoading: false });
     router.push('/login');
