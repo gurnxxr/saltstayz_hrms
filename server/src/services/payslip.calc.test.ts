@@ -264,6 +264,30 @@ describe('computeFromStructure — state-config LWF & PT (Phase 1: Work-Location
   });
 });
 
+describe('computeFromStructure — proration of fixed flat earnings (Phase 5)', () => {
+  const days = (working: number, payment: number) => ({ period_days: 30, working_days: working, payment_days: payment, lop_days: working - payment });
+  // Basic 50% + a FIXED flat Transport (pro_rata not set) + remainder Other.
+  const withFixedFlat = (): StructureLineInput[] => [
+    { component_id: 1, name: 'Basic', category: 'earning', calculation_type: 'pct_of_base', value: 50, earning_type: 'fixed', consider_epf: 'always', consider_esi: true },
+    { component_id: 2, name: 'Transport', category: 'earning', calculation_type: 'flat', value: 6000, earning_type: 'fixed', consider_epf: 'no', consider_esi: true },
+    { component_id: 3, name: 'Other', category: 'earning', calculation_type: 'remainder', value: 0, earning_type: 'fixed', consider_epf: 'no', consider_esi: true },
+  ];
+
+  it('a fixed flat earning prorates with LOP — gross never exceeds base × factor', () => {
+    const full = computeFromStructure(withFixedFlat(), 20000, RATES);
+    expect(full.gross_earnings).toBe(20000);           // full month sums to base
+    const half = computeFromStructure(withFixedFlat(), 20000, RATES, days(20, 10)); // 50% LOP
+    expect(half.gross_earnings).toBe(10000);           // no overpay (was 11000: full Transport + floored remainder)
+    expect(half.earnings.find((l) => l.name === 'Transport')?.amount).toBe(3000); // prorated
+  });
+
+  it('a variable flat earning still sits on top (not prorated)', () => {
+    const pli: StructureLineInput = { component_id: 9, name: 'PLI', category: 'earning', calculation_type: 'flat', value: 2000, earning_type: 'variable', consider_epf: 'no', consider_esi: false };
+    const half = computeFromStructure(standardStructure([pli]), 20000, RATES, days(20, 10));
+    expect(half.variable_pay).toBe(2000); // variable pay unaffected by LOP
+  });
+});
+
 describe('computeFromStructure — statutory ceilings & eligibility (Phase 5)', () => {
   // A single Basic = 100% of base, EPF+ESI applicable, so PF/ESI wage == base.
   const singleBasic = (): StructureLineInput[] => [

@@ -300,9 +300,9 @@ export async function saveEsi(input: any, userId?: number) {
 
 export async function saveBonus(input: any, userId?: number) {
   const c = input.config || {};
-  const frequency = ['monthly', 'yearly'].includes(c.frequency) ? c.frequency : 'monthly';
+  // Only monthly statutory bonus is computed; yearly (off-cycle) is not offered.
   const monthlyPercent = num(c.monthlyPercent ?? 8.33, 'Bonus percentage', 8.33, 20);
-  await upsertComponent('bonus', null, { enabled: input.enabled, config: { frequency, monthlyPercent } }, BONUS_DEFAULT, userId);
+  await upsertComponent('bonus', null, { enabled: input.enabled, config: { frequency: 'monthly', monthlyPercent } }, BONUS_DEFAULT, userId);
   return getAllStatutory();
 }
 

@@ -153,7 +153,10 @@ export function computeFromStructure(
     const amt = new Map<StructureLineInput, number>();
     for (const line of lines) {
       if (line.calculation_type === 'flat') {
-        const scale = line.category === 'earning' && line.pro_rata && !isHourly ? f : 1;
+        // Fixed earnings are part of monthly gross and prorate with LOP; variable
+        // earnings (PLI, bonus payout) sit on top and only prorate when flagged.
+        // Non-earning flat lines (deductions/benefits) never scale.
+        const scale = !isHourly && (isFixedEarning(line) || (line.category === 'earning' && line.pro_rata)) ? f : 1;
         amt.set(line, round(line.value * scale));
       } else if (line.calculation_type === 'pct_of_base') amt.set(line, round((line.value / 100) * effBase));
     }

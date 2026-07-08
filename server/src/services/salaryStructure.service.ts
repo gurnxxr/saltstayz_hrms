@@ -4,7 +4,7 @@ import {
   computeFromStructure, type StructureLineInput, type PayslipBreakdown, type LineCalcType,
   type AttendanceContext,
 } from './payslip.calc';
-import { getStatutoryRates, getStatutoryBonus, getEmployeeState } from './statutory.service';
+import { getStatutoryRates, getStatutoryBonus, getEmployeeState, getMinimumWageFor } from './statutory.service';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Salary Structures v2: a structure is a named template of salary_components
@@ -44,25 +44,48 @@ export async function resolveStructureLines(structureId: number): Promise<Struct
   return rows.map(toLineInput);
 }
 
+const round = (n: number) => Math.round(n);
+
+/**
+ * The employee's contracted monthly Basic, derived from the structure's Basic
+ * line and the assigned base (mirrors the engine's Basic detection). Used for the
+ * Payment of Bonus Act ceilings, which key off the wage, not the prorated pay.
+ */
+function contractedBasic(lines: StructureLineInput[], base: number): number {
+  const basicLine = lines.find((l) => l.category === 'earning' && l.calculation_type === 'pct_of_base' && /basic/i.test(l.name))
+    ?? lines.find((l) => l.category === 'earning' && l.calculation_type === 'pct_of_base');
+  return basicLine ? round((basicLine.value / 100) * base) : 0;
+}
+
 /**
  * Statutory bonus line (Payment of Bonus Act) — injected on every computation
- * when enabled in Statutory Components with monthly frequency. Percentage of
- * Basic, so it prorates with attendance automatically. Yearly frequency means
- * an off-cycle payout and adds no monthly line.
+ * when enabled with monthly frequency, with the Act's ceilings applied:
+ *   • eligibility: only when monthly Basic ≤ ₹21,000;
+ *   • calculation: bonus % of min(Basic, max(₹7,000, state minimum wage)).
+ * Emitted as a flat pro-rata earning so it still scales down with Loss of Pay.
+ * Yearly frequency is an off-cycle payout and adds no monthly line.
  */
-async function statutoryBonusLine(): Promise<StructureLineInput | null> {
+async function statutoryBonusLine(basic: number, state?: string | null): Promise<StructureLineInput | null> {
   const bonus = await getStatutoryBonus();
   if (!bonus.enabled || bonus.frequency !== 'monthly' || bonus.monthlyPercent <= 0) return null;
+  // Eligibility ceiling: employees earning above the wage ceiling are excluded.
+  if (basic > 21000) return null;
+  // Calculation ceiling: max of ₹7,000 and the state minimum wage.
+  const minWage = state ? await getMinimumWageFor(state) : null;
+  const calcCeiling = Math.max(7000, minWage ?? 0);
+  const bonusBase = Math.min(basic, calcCeiling);
+  const amount = round((bonus.monthlyPercent / 100) * bonusBase);
+  if (amount <= 0) return null;
   return {
     component_id: null,
     name: 'Statutory Bonus',
     category: 'earning',
-    calculation_type: 'pct_of_basic',
-    value: bonus.monthlyPercent,
+    calculation_type: 'flat',
+    value: amount,
     earning_type: 'variable',
     consider_epf: 'no',
     consider_esi: false,
-    pro_rata: false,
+    pro_rata: true, // still prorates with attendance
   };
 }
 
@@ -81,8 +104,9 @@ export async function computeForStructure(
   opts?: { state?: string | null; month?: number | null },
 ): Promise<PayslipBreakdown> {
   const lines = await resolveStructureLines(structure.id);
-  const rates = await getStatutoryRates(opts?.state ?? structure.city);
-  const bonusLine = await statutoryBonusLine();
+  const state = opts?.state ?? structure.city;
+  const rates = await getStatutoryRates(state);
+  const bonusLine = await statutoryBonusLine(contractedBasic(lines, base), state);
   const all = [...lines, ...(bonusLine ? [bonusLine] : []), ...(extraLines ?? [])];
   return computeFromStructure(all, base, rates, attendance, opts?.month ?? null);
 }
@@ -292,8 +316,9 @@ export async function previewStructure(data: { lines: any[]; base: number; city?
       component_name: c.name, name_in_payslip: c.name_in_payslip, category: c.category, config: c.config,
     }));
   }
-  const rates = await getStatutoryRates(data.city || 'Haryana');
-  const bonusLine = await statutoryBonusLine();
+  const state = data.city || 'Haryana';
+  const rates = await getStatutoryRates(state);
+  const bonusLine = await statutoryBonusLine(contractedBasic(lines, num(data.base)), state);
   return computeFromStructure([...lines, ...(bonusLine ? [bonusLine] : [])], num(data.base), rates);
 }
 

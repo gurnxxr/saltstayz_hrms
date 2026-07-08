@@ -141,6 +141,12 @@ export default function PayrollPage() {
                     {bulkResult.skipped.slice(0, 5).map((s: any) => s.employee_code).join(', ')}{bulkResult.skipped.length > 5 ? '…' : ''}
                   </p>
                 )}
+                {bulkResult.failed?.length > 0 && (
+                  <p className="text-xs text-red-600 mt-2">
+                    {bulkResult.failed.length} employee(s) failed and were reported (the run continued) — see{' '}
+                    <a href="/admin/payroll-runs" className="underline hover:text-foreground">Payroll Runs</a>.
+                  </p>
+                )}
               </div>
             )}
           </div>

@@ -619,17 +619,6 @@ function BonusTab({ bonus, states, minimumWages }: { bonus: any; states: string[
     <div className="space-y-4">
       <h2 className="text-lg font-semibold text-foreground">Statutory Bonus</h2>
       <div className="bg-card rounded-xl border border-border p-6 space-y-5 max-w-2xl">
-        <Field label="Payment Frequency">
-          <div className="flex gap-6">
-            {['monthly', 'yearly'].map((f) => (
-              <label key={f} className="flex items-center gap-2 cursor-pointer">
-                <input type="radio" name="bonus-freq" className="accent-primary w-4 h-4" checked={cfg.frequency === f} onChange={() => set('frequency', f)} />
-                <span className="text-sm text-foreground capitalize">{f}</span>
-              </label>
-            ))}
-          </div>
-        </Field>
-
         <Field label="Monthly Percentage of Bonus" required>
           <div className="flex items-center gap-2">
             <div className="relative w-32">
