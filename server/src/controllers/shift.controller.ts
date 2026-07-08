@@ -2,28 +2,11 @@ import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../types';
 import * as shiftService from '../services/shift.service';
 
-// ─── Employee self-service: my shift + request a change ───
+// ─── Employee self-service: my current shift (shown on the dashboard) ───
 
 export async function getMyShift(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     res.json(await shiftService.getMyShift(req.user!.employeeId));
-  } catch (err) { next(err); }
-}
-
-export async function listMyShiftChangeRequests(req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    res.json(await shiftService.getMyShiftChangeRequests(req.user!.userId));
-  } catch (err) { next(err); }
-}
-
-export async function createMyShiftChangeRequest(req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    res.status(201).json(await shiftService.createMyShiftChangeRequest(
-      req.user!.userId,
-      req.user!.employeeId,
-      Number(req.body.shift_type_id),
-      req.body.reason,
-    ));
   } catch (err) { next(err); }
 }
 
@@ -173,55 +156,3 @@ export async function unpublishRoster(req: AuthRequest, res: Response, next: Nex
   } catch (err) { next(err); }
 }
 
-// ─── Per-employee shift assignment ───
-
-export async function listEmployeeShifts(req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    res.json(await shiftService.listEmployeeShifts(req.query.q as string));
-  } catch (err) { next(err); }
-}
-
-export async function assignEmployeeShift(req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    res.json(await shiftService.assignEmployeeShift(
-      Number(req.params.employeeId), Number(req.body.shift_type_id), req.user?.userId ?? null,
-    ));
-  } catch (err) { next(err); }
-}
-
-export async function removeEmployeeShift(req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    res.json(await shiftService.removeEmployeeShift(Number(req.params.employeeId)));
-  } catch (err) { next(err); }
-}
-
-// ─── Change Requests ───
-
-export async function listChangeRequests(req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    res.json(await shiftService.listChangeRequests({
-      status: req.query.status as string,
-      property_id: req.query.property_id ? Number(req.query.property_id) : undefined,
-    }));
-  } catch (err) { next(err); }
-}
-
-export async function createChangeRequest(req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    res.status(201).json(await shiftService.createChangeRequest({
-      ...req.body,
-      requested_by: req.user!.userId,
-    }));
-  } catch (err) { next(err); }
-}
-
-export async function approveChangeRequest(req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    const { approved } = req.body;
-    res.json(await shiftService.approveChangeRequest(
-      Number(req.params.id),
-      req.user!.userId,
-      approved
-    ));
-  } catch (err) { next(err); }
-}

@@ -339,57 +339,6 @@ export async function getPropertyEmployees(propertyId?: number) {
     .orderBy('e.first_name');
 }
 
-// ─── Per-employee shift assignment (property-agnostic) ───
-
-export async function listEmployeeShifts(q?: string) {
-  const query = db('employees as e')
-    .leftJoin('job_titles as jt', 'jt.id', 'e.job_title_id')
-    .leftJoin('employee_shift_assignments as esa', 'esa.employee_id', 'e.id')
-    .leftJoin('shift_types as st', 'st.id', 'esa.shift_type_id')
-    .where('e.is_active', true)
-    .select(
-      'e.id', 'e.employee_code', 'e.first_name', 'e.last_name',
-      'e.dept_name', 'e.branch_name', 'jt.title as designation',
-      'esa.shift_type_id',
-      'st.name as shift_name', 'st.start_time', 'st.end_time',
-    )
-    .orderBy('e.first_name')
-    .limit(50);
-
-  if (q && q.trim()) {
-    const term = `%${q.trim()}%`;
-    query.where(function (this: any) {
-      this.where('e.first_name', 'like', term)
-        .orWhere('e.last_name', 'like', term)
-        .orWhere('e.employee_code', 'like', term)
-        .orWhere('jt.title', 'like', term)
-        .orWhereRaw("(e.first_name || ' ' || e.last_name) like ?", [term]);
-    });
-  }
-  return query;
-}
-
-export async function assignEmployeeShift(employeeId: number, shiftTypeId: number, assignedBy?: number | null) {
-  const emp = await db('employees').where('id', employeeId).first();
-  if (!emp) throw new NotFoundError('Employee');
-  const shift = await db('shift_types').where('id', shiftTypeId).first();
-  if (!shift) throw new NotFoundError('Shift type');
-
-  const existing = await db('employee_shift_assignments').where('employee_id', employeeId).first();
-  if (existing) {
-    await db('employee_shift_assignments').where('employee_id', employeeId)
-      .update({ shift_type_id: shiftTypeId, assigned_by: assignedBy ?? null, updated_at: db.fn.now() });
-  } else {
-    await db('employee_shift_assignments').insert({ employee_id: employeeId, shift_type_id: shiftTypeId, assigned_by: assignedBy ?? null });
-  }
-  return { employee_id: employeeId, shift_type_id: shiftTypeId };
-}
-
-export async function removeEmployeeShift(employeeId: number) {
-  await db('employee_shift_assignments').where('employee_id', employeeId).del();
-  return { employee_id: employeeId, shift_type_id: null };
-}
-
 // ── Roster editing (draft) + publish lifecycle ──
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -569,71 +518,7 @@ export async function copyPreviousWeek(propertyId: number, weekStart: string, we
   return { copied };
 }
 
-// ─── Shift Change Requests ───
-
-export async function listChangeRequests(filters: { status?: string; property_id?: number }) {
-  const query = db('shift_change_requests')
-    .join('shift_types', 'shift_types.id', 'shift_change_requests.shift_type_id')
-    .join('users as requester', 'requester.id', 'shift_change_requests.requested_by')
-    .leftJoin('employees as remp', 'remp.id', 'requester.employee_id')
-    .leftJoin('users as approver', 'approver.id', 'shift_change_requests.approved_by')
-    .select(
-      'shift_change_requests.*',
-      'shift_types.name as shift_name',
-      'shift_types.property_id',
-      'requester.email as requested_by_email',
-      db.raw("trim(coalesce(remp.first_name,'') || ' ' || coalesce(remp.last_name,'')) as requested_by_name"),
-      'approver.email as approved_by_email'
-    )
-    .orderBy('shift_change_requests.created_at', 'desc');
-
-  if (filters.status) query.where('shift_change_requests.status', filters.status);
-  if (filters.property_id) query.where('shift_types.property_id', filters.property_id);
-  return query;
-}
-
-export async function createChangeRequest(data: {
-  shift_type_id: number;
-  requested_by: number;
-  field_changed: string;
-  old_value: string;
-  new_value: string;
-  reason?: string;
-}) {
-  const [id] = await db('shift_change_requests').insert(data);
-  return db('shift_change_requests').where('id', id).first();
-}
-
-export async function approveChangeRequest(id: number, approvedBy: number, approved: boolean) {
-  const request = await db('shift_change_requests').where('id', id).first();
-  if (!request) throw new NotFoundError('Change request');
-  if (request.status !== 'pending') throw new ValidationError('Request already processed');
-
-  const newStatus = approved ? 'approved' : 'rejected';
-
-  await db('shift_change_requests')
-    .where('id', id)
-    .update({ status: newStatus, approved_by: approvedBy, updated_at: db.fn.now() });
-
-  if (approved) {
-    if (request.field_changed === 'shift_assignment') {
-      // Employee shift-change request → move the requester onto the requested shift.
-      const requester = await db('users').where('id', request.requested_by).first();
-      if (requester?.employee_id) {
-        await assignEmployeeShift(requester.employee_id, request.shift_type_id, approvedBy);
-      }
-    } else {
-      // Legacy shift-type definition edit.
-      await db('shift_types')
-        .where('id', request.shift_type_id)
-        .update({ [request.field_changed]: request.new_value, updated_at: db.fn.now() });
-    }
-  }
-
-  return db('shift_change_requests').where('id', id).first();
-}
-
-// ─── Employee self-service: my shift + request a change ───
+// ─── Employee self-service: my current shift (dashboard card) ───
 
 export async function getMyShift(employeeId: number | null | undefined) {
   if (!employeeId) return null;
@@ -645,34 +530,3 @@ export async function getMyShift(employeeId: number | null | undefined) {
   return row ?? null;
 }
 
-export async function getMyShiftChangeRequests(userId: number) {
-  return db('shift_change_requests as r')
-    .join('shift_types as st', 'st.id', 'r.shift_type_id')
-    .where('r.requested_by', userId)
-    .where('r.field_changed', 'shift_assignment')
-    .select('r.id', 'r.status', 'r.old_value', 'r.new_value', 'r.reason', 'r.created_at', 'st.name as requested_shift')
-    .orderBy('r.created_at', 'desc');
-}
-
-export async function createMyShiftChangeRequest(userId: number, employeeId: number | null | undefined, requestedShiftTypeId: number, reason?: string) {
-  if (!employeeId) throw new ValidationError('No employee profile linked to this account');
-  const shift = await db('shift_types').where('id', requestedShiftTypeId).first();
-  if (!shift) throw new NotFoundError('Shift type');
-
-  const pending = await db('shift_change_requests')
-    .where({ requested_by: userId, field_changed: 'shift_assignment', status: 'pending' })
-    .first();
-  if (pending) throw new ValidationError('You already have a pending shift-change request');
-
-  const current = await getMyShift(employeeId);
-  const [id] = await db('shift_change_requests').insert({
-    shift_type_id: requestedShiftTypeId,
-    requested_by: userId,
-    field_changed: 'shift_assignment',
-    old_value: current?.name ?? '—',
-    new_value: shift.name,
-    reason: reason ?? null,
-    status: 'pending',
-  });
-  return db('shift_change_requests').where('id', id).first();
-}

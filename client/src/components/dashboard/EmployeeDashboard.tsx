@@ -1,20 +1,14 @@
 'use client';
 
-import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { toast } from 'sonner';
+import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
-import { CalendarCheck, CalendarOff, Clock, Wallet, CalendarPlus, FileText, User, BarChart3, RefreshCw, Loader2 } from 'lucide-react';
+import { CalendarCheck, CalendarOff, Clock, Wallet, CalendarPlus, FileText, User, BarChart3 } from 'lucide-react';
 
 const fmt = (t?: string) => (t ? t.slice(0, 5) : '');
 
 export default function EmployeeDashboard() {
   const router = useRouter();
-  const queryClient = useQueryClient();
-  const [shiftModal, setShiftModal] = useState(false);
-  const [requestedShift, setRequestedShift] = useState('');
-  const [shiftReason, setShiftReason] = useState('');
 
   const { data, isLoading } = useQuery({
     queryKey: ['my-overview'],
@@ -24,28 +18,6 @@ export default function EmployeeDashboard() {
   const { data: myShift } = useQuery({
     queryKey: ['my-shift'],
     queryFn: () => api.get('/shifts/me').then(r => r.data).catch(() => null),
-  });
-  const { data: shiftTypes = [] } = useQuery({
-    queryKey: ['shift-types-for-request'],
-    queryFn: () => api.get('/shifts/types').then(r => r.data).catch(() => []),
-    enabled: shiftModal,
-  });
-  const { data: myShiftRequests = [] } = useQuery({
-    queryKey: ['my-shift-requests'],
-    queryFn: () => api.get('/shifts/me/change-requests').then(r => r.data).catch(() => []),
-  });
-  const pendingShiftReq = myShiftRequests.find((r: any) => r.status === 'pending');
-
-  const requestShiftMutation = useMutation({
-    mutationFn: () => api.post('/shifts/me/change-request', { shift_type_id: Number(requestedShift), reason: shiftReason }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['my-shift-requests'] });
-      toast.success('Shift-change request submitted');
-      setShiftModal(false);
-      setRequestedShift('');
-      setShiftReason('');
-    },
-    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to submit request'),
   });
 
   const att = data?.attendance ?? { present: 0, total: 0, present_pct: 0, avg_working_hours: 0, on_leave: 0, absent: 0, half_day: 0 };
@@ -118,33 +90,20 @@ export default function EmployeeDashboard() {
 
       {/* My Shift */}
       <div className="bg-card rounded-xl border border-border p-6">
-        <div className="flex items-center justify-between gap-4 flex-wrap">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
-              <Clock className="w-6 h-6" />
-            </div>
-            <div>
-              <p className="text-sm text-secondary">My Shift</p>
-              {myShift ? (
-                <p className="text-lg font-bold text-foreground">
-                  {myShift.name} <span className="text-sm font-normal text-secondary">({fmt(myShift.start_time)}–{fmt(myShift.end_time)})</span>
-                </p>
-              ) : (
-                <p className="text-lg font-bold text-foreground">No shift assigned</p>
-              )}
-              {pendingShiftReq && (
-                <p className="text-xs text-amber-600 mt-0.5">Change to <b>{pendingShiftReq.requested_shift}</b> — pending approval</p>
-              )}
-            </div>
+        <div className="flex items-center gap-3">
+          <div className="w-12 h-12 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+            <Clock className="w-6 h-6" />
           </div>
-          <button
-            onClick={() => setShiftModal(true)}
-            disabled={!!pendingShiftReq}
-            title={pendingShiftReq ? 'You already have a pending request' : ''}
-            className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium text-foreground hover:bg-muted transition-colors disabled:opacity-50"
-          >
-            <RefreshCw size={15} /> Request change
-          </button>
+          <div>
+            <p className="text-sm text-secondary">My Shift</p>
+            {myShift ? (
+              <p className="text-lg font-bold text-foreground">
+                {myShift.name} <span className="text-sm font-normal text-secondary">({fmt(myShift.start_time)}–{fmt(myShift.end_time)})</span>
+              </p>
+            ) : (
+              <p className="text-lg font-bold text-foreground">No shift assigned</p>
+            )}
+          </div>
         </div>
       </div>
 
@@ -153,7 +112,7 @@ export default function EmployeeDashboard() {
         <h2 className="text-lg font-semibold text-foreground mb-4">Quick Actions</h2>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {[
-            { label: 'Apply for Leave', href: '/attendance', icon: CalendarPlus },
+            { label: 'Apply for Leave', href: '/leaves/my', icon: CalendarPlus },
             { label: 'My Attendance', href: '/attendance', icon: CalendarCheck },
             { label: 'My Performance', href: '/analytics', icon: BarChart3 },
             { label: 'My Payslips', href: '/payroll', icon: FileText },
@@ -166,45 +125,6 @@ export default function EmployeeDashboard() {
           ))}
         </div>
       </div>
-
-      {/* Request shift change modal */}
-      {shiftModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setShiftModal(false)}>
-          <div className="bg-card rounded-xl border border-border w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold text-foreground flex items-center gap-2">
-              <RefreshCw size={18} className="text-primary" /> Request Shift Change
-            </h3>
-            <p className="text-sm text-secondary mt-1">
-              Current: <b>{myShift ? `${myShift.name} (${fmt(myShift.start_time)}–${fmt(myShift.end_time)})` : 'No shift assigned'}</b>. Your request goes to a manager for approval.
-            </p>
-
-            <label className="block text-sm font-medium text-foreground mt-4 mb-1">Requested shift</label>
-            <select value={requestedShift} onChange={(e) => setRequestedShift(e.target.value)}
-              className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50">
-              <option value="">Select a shift…</option>
-              {shiftTypes.filter((s: any) => s.is_active && s.id !== myShift?.shift_type_id).map((s: any) => (
-                <option key={s.id} value={s.id}>{s.name} ({fmt(s.start_time)}–{fmt(s.end_time)})</option>
-              ))}
-            </select>
-
-            <label className="block text-sm font-medium text-foreground mt-3 mb-1">Reason <span className="text-secondary font-normal">(optional)</span></label>
-            <textarea value={shiftReason} onChange={(e) => setShiftReason(e.target.value)} rows={2}
-              placeholder="Why do you need this change?"
-              className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none" />
-
-            <div className="flex justify-end gap-2 mt-5">
-              <button onClick={() => setShiftModal(false)} className="px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted transition-colors">Cancel</button>
-              <button
-                onClick={() => requestShiftMutation.mutate()}
-                disabled={!requestedShift || requestShiftMutation.isPending}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium disabled:opacity-50"
-              >
-                {requestShiftMutation.isPending ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />} Submit request
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

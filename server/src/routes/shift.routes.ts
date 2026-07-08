@@ -11,10 +11,8 @@ const SHIFT_STAFF = authorizeRoles('admin', 'chro', 'hr', 'property_manager');
 // Shift-type definitions (Shift Setup) are managed by admin/CHRO/HR only.
 const SHIFT_TYPE_MANAGE = authorizeRoles('admin', 'chro', 'hr');
 
-// Self-service — any authenticated employee manages their own shift (no module RBAC).
+// Self-service — the employee's current shift (shown on their dashboard).
 router.get('/me', ctrl.getMyShift);
-router.get('/me/change-requests', ctrl.listMyShiftChangeRequests);
-router.post('/me/change-request', ctrl.createMyShiftChangeRequest);
 
 // Shift types — read for all, management restricted to admin/CHRO/HR (Shift Setup)
 router.get('/types', authorize('shifts', 'read'), ctrl.listShiftTypes);
@@ -37,11 +35,6 @@ router.post('/schedules', SHIFT_TYPE_MANAGE, ctrl.createShiftSchedule);
 router.put('/schedules/:id', SHIFT_TYPE_MANAGE, ctrl.updateShiftSchedule);
 router.delete('/schedules/:id', SHIFT_TYPE_MANAGE, ctrl.deleteShiftSchedule);
 
-// Per-employee shift assignment (property-agnostic)
-router.get('/employee-shifts', authorize('shifts', 'read'), SHIFT_STAFF, ctrl.listEmployeeShifts);
-router.put('/employee-shifts/:employeeId', authorize('shifts', 'update'), ctrl.assignEmployeeShift);
-router.delete('/employee-shifts/:employeeId', authorize('shifts', 'update'), ctrl.removeEmployeeShift);
-
 // Roster — read + build/publish. Writes are gated by BOTH shifts:create and the
 // SHIFT_STAFF role (admin/CHRO/HR/property manager), so a write is never less
 // protected than a read.
@@ -51,10 +44,5 @@ router.post('/roster/save', authorize('shifts', 'create'), SHIFT_STAFF, ctrl.sav
 router.post('/roster/copy-previous', authorize('shifts', 'create'), SHIFT_STAFF, ctrl.copyPreviousWeek);
 router.post('/roster/publish', authorize('shifts', 'create'), SHIFT_STAFF, ctrl.publishRoster);
 router.post('/roster/unpublish', authorize('shifts', 'create'), SHIFT_STAFF, ctrl.unpublishRoster);
-
-// Change requests — admin only for management
-router.get('/change-requests', authorize('admin', 'read'), ctrl.listChangeRequests);
-router.post('/change-requests', authorize('shifts', 'create'), ctrl.createChangeRequest);
-router.put('/change-requests/:id', authorize('admin', 'update'), ctrl.approveChangeRequest);
 
 export default router;
