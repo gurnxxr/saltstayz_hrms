@@ -37,8 +37,16 @@ export interface StatutoryRates {
     enabled: boolean; employeeRatePct: number; employerRatePct: number;
     wageCeiling: number;   // PF wage cap (₹15,000); 0 = no cap
     lopMode: 'prorate_restricted' | 'consider_all_below_15000';
+    includeInCtc: boolean; // employer PF counts toward CTC
   };
-  esi: { enabled: boolean; employeeRatePct: number; employerRatePct: number; wageCeiling: number };
+  esi: {
+    enabled: boolean; employeeRatePct: number; employerRatePct: number; wageCeiling: number;
+    includeInCtc: boolean; // employer ESI counts toward CTC
+    // Contribution-period override (Apr–Sep / Oct–Mar): once decided at period
+    // start, coverage is fixed for the period even if a mid-period raise crosses
+    // the ceiling. null = decide from this month's contracted wage.
+    coveredOverride?: boolean | null;
+  };
   lwf: {
     enabled: boolean;
     mode: 'percent' | 'fixed';
@@ -116,6 +124,8 @@ export interface PayslipBreakdown {
   employer_lwf: number;
   employer_costs_total: number; // Σ employer_costs lines
   ctc: number;                  // gross + employer statutory + employer costs + reimbursements
+  esi_wage_full?: number;       // contracted ESI wage (drives contribution-period decisions)
+  esi_covered?: boolean;        // whether ESI was charged this month
   // Attendance context (present when the slip is attendance-driven)
   days?: AttendanceContext;
 }
@@ -224,8 +234,11 @@ export function computeFromStructure(
   // be flipped by a heavy-LOP month); contribution on the earned wage, rounds UP. ──
   const esiBase = earningLines.reduce((sum, l) => (l.consider_esi ? sum + (amounts.get(l) ?? 0) : sum), 0);
   const esiBaseFull = earningLines.reduce((sum, l) => (l.consider_esi ? sum + (fullAmounts.get(l) ?? 0) : sum), 0);
-  const esiEligible = statutory.esi.enabled
-    && (statutory.esi.wageCeiling <= 0 || esiBaseFull <= statutory.esi.wageCeiling);
+  // Wage within the ceiling this month; a persisted contribution-period decision
+  // (coveredOverride) freezes it for the Apr–Sep / Oct–Mar period when supplied.
+  const esiWageWithinCeiling = statutory.esi.wageCeiling <= 0 || esiBaseFull <= statutory.esi.wageCeiling;
+  const esiCovered = statutory.esi.coveredOverride != null ? statutory.esi.coveredOverride : esiWageWithinCeiling;
+  const esiEligible = statutory.esi.enabled && esiCovered;
   const esi = esiEligible ? ceil((statutory.esi.employeeRatePct / 100) * esiBase) : 0;
   const employer_esi = esiEligible ? ceil((statutory.esi.employerRatePct / 100) * esiBase) : 0;
 
@@ -268,13 +281,17 @@ export function computeFromStructure(
 
   const total_deduction = employee_pf + esi + lwf + pt + otherDeductionTotal;
   const net_pay = gross_earnings - total_deduction + reimbursementTotal;
-  const ctc = gross_earnings + employer_pf + employer_esi + employer_lwf + employer_costs_total + reimbursementTotal;
+  // Employer PF/ESI count toward CTC only when the config says so (Statutory Components).
+  const employer_pf_ctc = statutory.epf.includeInCtc ? employer_pf : 0;
+  const employer_esi_ctc = statutory.esi.includeInCtc ? employer_esi : 0;
+  const ctc = gross_earnings + employer_pf_ctc + employer_esi_ctc + employer_lwf + employer_costs_total + reimbursementTotal;
 
   return {
     earnings, other_deductions, employer_costs, reimbursements,
     basic, fixed_salary, variable_pay, gross_earnings,
     employee_pf, esi, lwf, pt, total_deduction, net_pay,
     employer_pf, employer_esi, employer_lwf, employer_costs_total, ctc,
+    esi_wage_full: esiBaseFull, esi_covered: esiEligible,
     ...(attendance ? { days: attendance } : {}),
   };
 }

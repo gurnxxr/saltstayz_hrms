@@ -4,7 +4,7 @@ import {
   computeFromStructure, type StructureLineInput, type PayslipBreakdown, type LineCalcType,
   type AttendanceContext,
 } from './payslip.calc';
-import { getStatutoryRates, getStatutoryBonus, getEmployeeState, getMinimumWageFor } from './statutory.service';
+import { getStatutoryRates, getStatutoryBonus, getEmployeeState, getMinimumWageFor, resolveStatutoryState } from './statutory.service';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Salary Structures v2: a structure is a named template of salary_components
@@ -65,13 +65,17 @@ function contractedBasic(lines: StructureLineInput[], base: number): number {
  * Emitted as a flat pro-rata earning so it still scales down with Loss of Pay.
  * Yearly frequency is an off-cycle payout and adds no monthly line.
  */
-async function statutoryBonusLine(basic: number, state?: string | null): Promise<StructureLineInput | null> {
+async function statutoryBonusLine(basic: number, state?: string | null, hourly = false): Promise<StructureLineInput | null> {
   const bonus = await getStatutoryBonus();
   if (!bonus.enabled || bonus.frequency !== 'monthly' || bonus.monthlyPercent <= 0) return null;
+  // Hourly-rated pay has no fixed monthly Basic to test the Act's rupee ceilings
+  // against (base is a per-hour rate), so statutory bonus is skipped for it.
+  if (hourly) return null;
   // Eligibility ceiling: employees earning above the wage ceiling are excluded.
   if (basic > 21000) return null;
-  // Calculation ceiling: max of ₹7,000 and the state minimum wage.
-  const minWage = state ? await getMinimumWageFor(state) : null;
+  // Calculation ceiling: max of ₹7,000 and the state minimum wage. Resolve any
+  // city to its canonical state first (min wages are keyed by state).
+  const minWage = state ? await getMinimumWageFor(resolveStatutoryState(state)) : null;
   const calcCeiling = Math.max(7000, minWage ?? 0);
   const bonusBase = Math.min(basic, calcCeiling);
   const amount = round((bonus.monthlyPercent / 100) * bonusBase);
@@ -101,12 +105,13 @@ export async function computeForStructure(
   base: number,
   attendance?: AttendanceContext | null,
   extraLines?: StructureLineInput[],
-  opts?: { state?: string | null; month?: number | null },
+  opts?: { state?: string | null; month?: number | null; esiCoveredOverride?: boolean | null },
 ): Promise<PayslipBreakdown> {
   const lines = await resolveStructureLines(structure.id);
   const state = opts?.state ?? structure.city;
   const rates = await getStatutoryRates(state);
-  const bonusLine = await statutoryBonusLine(contractedBasic(lines, base), state);
+  if (opts?.esiCoveredOverride != null) rates.esi.coveredOverride = opts.esiCoveredOverride;
+  const bonusLine = await statutoryBonusLine(contractedBasic(lines, base), state, structure.payment_basis === 'hourly');
   const all = [...lines, ...(bonusLine ? [bonusLine] : []), ...(extraLines ?? [])];
   return computeFromStructure(all, base, rates, attendance, opts?.month ?? null);
 }

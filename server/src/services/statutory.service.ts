@@ -32,8 +32,7 @@ const EPF_DEFAULT = {
   epfNumber: '', deductionCycle: 'monthly',
   employeeRatePct: 12, employerRatePct: 12,
   pfWageCeiling: 15000, // PF wage cap (statutory)
-  includeEmployerInCtc: true, includeEdli: false, includeAdminCharges: false,
-  overrideAtEmployee: false, lopMode: 'prorate_restricted',
+  includeEmployerInCtc: true, lopMode: 'prorate_restricted',
 };
 const ESI_DEFAULT = {
   esiNumber: '', deductionCycle: 'monthly',
@@ -151,12 +150,14 @@ export async function getStatutoryRates(cityOrState?: string | null): Promise<St
       employerRatePct: Number(epfCfg.employerRatePct) || 0,
       wageCeiling: epfCfg.pfWageCeiling == null ? 15000 : Number(epfCfg.pfWageCeiling) || 0,
       lopMode: epfCfg.lopMode === 'consider_all_below_15000' ? 'consider_all_below_15000' : 'prorate_restricted',
+      includeInCtc: epfCfg.includeEmployerInCtc !== false,
     },
     esi: {
       enabled: !!(esiRow && esiRow.enabled),
       employeeRatePct: Number(esiCfg.employeeRatePct) || 0,
       employerRatePct: Number(esiCfg.employerRatePct) || 0,
       wageCeiling: Number(esiCfg.wageCeiling) || 0,
+      includeInCtc: esiCfg.includeEmployerInCtc !== false,
     },
     lwf: {
       enabled: !!(lwfRow && lwfRow.enabled),
@@ -268,10 +269,7 @@ export async function saveEpf(input: any, userId?: number) {
     employeeRatePct: num(c.employeeRatePct ?? 12, 'Employee contribution rate', 0.01, 100),
     employerRatePct: num(c.employerRatePct ?? 12, 'Employer contribution rate', 0.01, 100),
     pfWageCeiling: 15000,
-    includeEmployerInCtc: !!c.includeEmployerInCtc,
-    includeEdli: !!c.includeEdli,
-    includeAdminCharges: !!c.includeAdminCharges,
-    overrideAtEmployee: !!c.overrideAtEmployee,
+    includeEmployerInCtc: c.includeEmployerInCtc !== false,
     lopMode: ['prorate_restricted', 'consider_all_below_15000'].includes(c.lopMode) ? c.lopMode : 'prorate_restricted',
   };
   if (input.enabled && !/^[A-Z]{2}\/[A-Z]{3}\/\d{7}\/\d{3}$/.test(cfg.epfNumber)) {

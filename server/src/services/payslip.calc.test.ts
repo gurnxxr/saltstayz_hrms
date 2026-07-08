@@ -12,17 +12,18 @@ const LWF_PERCENT = {
 };
 const NO_PT = { enabled: false, slabs: [] };
 
-const EPF_ON = { enabled: true, employeeRatePct: 12, employerRatePct: 12, wageCeiling: 15000, lopMode: 'prorate_restricted' as const };
+const EPF_ON = { enabled: true, employeeRatePct: 12, employerRatePct: 12, wageCeiling: 15000, lopMode: 'prorate_restricted' as const, includeInCtc: true };
+const ESI_ON = { enabled: true, employeeRatePct: 0.75, employerRatePct: 3.25, wageCeiling: 21000, includeInCtc: true };
 const RATES: StatutoryRates = {
   epf: { ...EPF_ON },
-  esi: { enabled: true, employeeRatePct: 0.75, employerRatePct: 3.25, wageCeiling: 21000 },
+  esi: { ...ESI_ON },
   lwf: { ...LWF_PERCENT },
   pt: { ...NO_PT },
 };
 
 const DISABLED: StatutoryRates = {
   epf: { ...EPF_ON, enabled: false },
-  esi: { enabled: false, employeeRatePct: 0.75, employerRatePct: 3.25, wageCeiling: 21000 },
+  esi: { ...ESI_ON, enabled: false },
   lwf: { ...LWF_PERCENT, enabled: false },
   pt: { ...NO_PT },
 };
@@ -332,6 +333,22 @@ describe('computeFromStructure — statutory ceilings & eligibility (Phase 5)', 
     const b = computeFromStructure(singleBasic(), 30000, rates, days(20, 10));
     // earned PF wage = 30000 × 0.5 = 15000, capped at 15000 → 12% = 1800
     expect(b.employee_pf).toBe(1800);
+  });
+
+  it('ESI contribution-period override fixes coverage regardless of this month’s wage', () => {
+    const forcedOn: StatutoryRates = { ...RATES, esi: { ...RATES.esi, coveredOverride: true } };
+    // 25,000 is above the 21,000 ceiling, but a period decision of "covered" holds.
+    expect(computeFromStructure(singleBasic(), 25000, forcedOn).esi).toBe(Math.ceil(25000 * 0.0075));
+    const forcedOff: StatutoryRates = { ...RATES, esi: { ...RATES.esi, coveredOverride: false } };
+    // 20,000 is within the ceiling, but a period decision of "not covered" holds.
+    expect(computeFromStructure(singleBasic(), 20000, forcedOff).esi).toBe(0);
+  });
+
+  it('employer PF counts toward CTC only when includeInCtc is set', () => {
+    const b = computeFromStructure(singleBasic(), 20000, RATES);
+    const excluded: StatutoryRates = { ...RATES, epf: { ...RATES.epf, includeInCtc: false } };
+    const b2 = computeFromStructure(singleBasic(), 20000, excluded);
+    expect(b2.ctc).toBe(b.ctc - b.employer_pf);
   });
 
   it('if_below_15000 EPF flag is decided on the contracted wage, not the LOP-earned wage', () => {

@@ -7,7 +7,7 @@ import {
 import {
   getAssignment, getStructureByJobTitle, getStructureRow, computeForStructure,
 } from './salaryStructure.service';
-import { getEmployeeState, getMinimumWageFor } from './statutory.service';
+import { getEmployeeState, getMinimumWageFor, getStatutoryRates } from './statutory.service';
 import { getPaySchedule } from './paySchedule.service';
 import { computePayableDays, getMonthlyHours, getOvertimeHours } from './payableDays.service';
 import { notifyEmployee } from './notification.service';
@@ -76,6 +76,13 @@ export async function getAdjustment(employeeId: number, month: number, year: num
  * computed from hours (hourly). Without a period (offboarding F&F) it is a
  * plain full-month breakdown.
  */
+/** ESI contribution period for a pay month: Apr–Sep = H1, Oct–Mar = H2. */
+function esiPeriodKey(month: number, year: number): string {
+  if (month >= 4 && month <= 9) return `${year}-H1`;
+  // The Oct–Mar period starts in October; Jan–Mar belong to the prior year's H2.
+  return `${month >= 10 ? year : year - 1}-H2`;
+}
+
 export async function getMonthlyBreakdown(
   employeeId: number, month?: number, year?: number,
 ): Promise<PayslipBreakdown | null> {
@@ -182,10 +189,34 @@ export async function getMonthlyBreakdown(
     }
   }
 
-  return computeForStructure(structure, base, attendance, extraLines, {
+  // ESI contribution period (Phase 5): reuse the period's persisted coverage
+  // decision; on first encounter this month's contracted wage sets it, so a
+  // mid-period raise across the ceiling can't drop coverage until the next period.
+  let esiCoveredOverride: boolean | null = null;
+  let esiPeriodToPersist: string | null = null;
+  if (hasPeriod) {
+    const periodKey = esiPeriodKey(month!, year!);
+    const existing = await db('employee_esi_periods').where({ employee_id: employeeId, period_key: periodKey }).first();
+    if (existing) esiCoveredOverride = !!existing.covered;
+    else esiPeriodToPersist = periodKey;
+  }
+
+  const breakdown = await computeForStructure(structure, base, attendance, extraLines, {
     state,
     month: hasPeriod ? month! : null,
+    esiCoveredOverride,
   });
+
+  if (esiPeriodToPersist && breakdown) {
+    const ceiling = (await getStatutoryRates(state)).esi.wageCeiling;
+    const wage = num((breakdown as any).esi_wage_full);
+    const covered = ceiling <= 0 || wage <= ceiling;
+    await db('employee_esi_periods')
+      .insert({ employee_id: employeeId, period_key: esiPeriodToPersist, covered: covered ? 1 : 0 })
+      .onConflict(['employee_id', 'period_key']).ignore();
+  }
+
+  return breakdown;
 }
 
 export async function computeForEmployee(

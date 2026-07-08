@@ -203,22 +203,8 @@ function EpfTab({ epf }: { epf: any }) {
 
           <div className="space-y-3 pt-1">
             <label className="flex items-start gap-2.5 cursor-pointer text-sm text-foreground">
-              <input type="checkbox" className="accent-primary w-4 h-4 mt-0.5" checked={!!cfg.includeEmployerInCtc} onChange={(e) => set('includeEmployerInCtc', e.target.checked)} />
-              <span>Include employer&apos;s contribution in employee&apos;s salary structure.</span>
-            </label>
-            <div>
-              <label className="flex items-start gap-2.5 cursor-pointer text-sm text-foreground">
-                <input type="checkbox" className="accent-primary w-4 h-4 mt-0.5" checked={!!cfg.includeEdli} onChange={(e) => set('includeEdli', e.target.checked)} />
-                <span className="inline-flex items-center gap-1.5">Include employer&apos;s EDLI contribution in employee&apos;s salary structure. <InfoTip text="EDLI is the Employees' Deposit Linked Insurance contribution paid by the employer." /></span>
-              </label>
-              <label className="flex items-start gap-2.5 cursor-pointer text-sm text-foreground ml-6 mt-2.5">
-                <input type="checkbox" className="accent-primary w-4 h-4 mt-0.5" checked={!!cfg.includeAdminCharges} onChange={(e) => set('includeAdminCharges', e.target.checked)} disabled={!cfg.includeEdli} />
-                <span className={`inline-flex items-center gap-1.5 ${!cfg.includeEdli ? 'opacity-50' : ''}`}>Include admin charges in employee&apos;s salary structure. <InfoTip text="EPFO administration charges (0.5% of PF wage) paid by the employer." /></span>
-              </label>
-            </div>
-            <label className="flex items-start gap-2.5 cursor-pointer text-sm text-foreground">
-              <input type="checkbox" className="accent-primary w-4 h-4 mt-0.5" checked={!!cfg.overrideAtEmployee} onChange={(e) => set('overrideAtEmployee', e.target.checked)} />
-              <span>Override PF contribution rate at employee level.</span>
+              <input type="checkbox" className="accent-primary w-4 h-4 mt-0.5" checked={cfg.includeEmployerInCtc !== false} onChange={(e) => set('includeEmployerInCtc', e.target.checked)} />
+              <span>Include employer&apos;s PF contribution in the employee&apos;s CTC.</span>
             </label>
           </div>
 
