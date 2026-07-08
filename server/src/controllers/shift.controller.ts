@@ -146,29 +146,30 @@ export async function getPropertyEmployees(req: AuthRequest, res: Response, next
   } catch (err) { next(err); }
 }
 
-export async function assignShift(req: AuthRequest, res: Response, next: NextFunction) {
+export async function saveRoster(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    res.status(201).json(await shiftService.assignShift({
-      ...req.body,
-      assigned_by: req.user!.userId,
-    }));
+    res.json(await shiftService.saveRosterCells(Number(req.body.property_id), req.body.cells, req.user!.userId));
   } catch (err) { next(err); }
 }
 
-export async function bulkAssignShifts(req: AuthRequest, res: Response, next: NextFunction) {
+export async function copyPreviousWeek(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    const assignments = req.body.assignments.map((a: any) => ({
-      ...a,
-      assigned_by: req.user!.userId,
-    }));
-    res.status(201).json(await shiftService.bulkAssignShifts(assignments));
+    const { property_id, week_start, week_end } = req.body;
+    res.json(await shiftService.copyPreviousWeek(Number(property_id), week_start, week_end, req.user!.userId));
   } catch (err) { next(err); }
 }
 
-export async function removeShift(req: AuthRequest, res: Response, next: NextFunction) {
+export async function publishRoster(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    await shiftService.removeShift(Number(req.params.id));
-    res.json({ message: 'Shift removed' });
+    const { property_id, week_start, week_end } = req.body;
+    res.json(await shiftService.publishRoster(Number(property_id), week_start, week_end, req.user!.userId));
+  } catch (err) { next(err); }
+}
+
+export async function unpublishRoster(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const { property_id, week_start, week_end } = req.body;
+    res.json(await shiftService.unpublishRoster(Number(property_id), week_start, week_end));
   } catch (err) { next(err); }
 }
 

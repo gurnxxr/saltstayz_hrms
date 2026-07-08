@@ -1,5 +1,6 @@
 import db from '../config/database';
 import { NotFoundError, ValidationError } from '../utils/errors';
+import { notifyEmployee } from './notification.service';
 
 // ─── Shift Types (organization-wide) ───
 
@@ -264,24 +265,65 @@ export async function deleteShiftLocation(id: number) {
 
 // ─── Shift Roster ───
 
+/**
+ * The weekly roster for a property as a grid: each property employee with a
+ * `cells` map (date → shift or weekly-off), plus the week's publish status.
+ */
 export async function getWeeklyRoster(propertyId: number, weekStart: string, weekEnd: string) {
-  const roster = await db('shift_rosters')
-    .join('employees', 'employees.id', 'shift_rosters.employee_id')
-    .join('shift_types', 'shift_types.id', 'shift_rosters.shift_type_id')
-    .where('shift_rosters.property_id', propertyId)
-    .whereBetween('shift_rosters.date', [weekStart, weekEnd])
-    .select(
-      'shift_rosters.*',
-      'employees.first_name',
-      'employees.last_name',
-      'employees.employee_code',
-      'shift_types.name as shift_name',
-      'shift_types.start_time',
-      'shift_types.end_time'
-    )
-    .orderBy(['employees.first_name', 'shift_rosters.date']);
+  const property = await db('properties').where('id', propertyId).first();
+  if (!property) throw new NotFoundError('Property');
 
-  return roster;
+  const employees = await getPropertyEmployees(propertyId);
+
+  const rows = await db('shift_rosters as r')
+    .leftJoin('shift_types as st', 'st.id', 'r.shift_type_id')
+    .leftJoin('users as pub', 'pub.id', 'r.published_by')
+    .leftJoin('employees as pube', 'pube.id', 'pub.employee_id')
+    .where('r.property_id', propertyId)
+    .whereBetween('r.date', [weekStart, weekEnd])
+    .select(
+      'r.id', 'r.employee_id', 'r.date', 'r.shift_type_id', 'r.day_type', 'r.is_published', 'r.published_at',
+      'st.name as shift_name', 'st.start_time', 'st.end_time',
+      db.raw("trim(coalesce(pube.first_name,'') || ' ' || coalesce(pube.last_name,'')) as published_by_name"),
+    );
+
+  const cellsByEmp = new Map<number, Record<string, any>>();
+  let total = 0, published = 0;
+  let publishedAt: string | null = null, publishedByName: string | null = null;
+  for (const r of rows) {
+    const date = String(r.date).slice(0, 10);
+    const map = cellsByEmp.get(r.employee_id) ?? {};
+    map[date] = {
+      id: r.id,
+      day_type: r.day_type,
+      shift_type_id: r.shift_type_id,
+      shift_name: r.shift_name,
+      start_time: r.start_time ? String(r.start_time).slice(0, 5) : null,
+      end_time: r.end_time ? String(r.end_time).slice(0, 5) : null,
+      is_published: !!r.is_published,
+    };
+    cellsByEmp.set(r.employee_id, map);
+    total += 1;
+    if (r.is_published) {
+      published += 1;
+      if (!publishedAt) { publishedAt = r.published_at; publishedByName = r.published_by_name || null; }
+    }
+  }
+
+  const status = total === 0 ? 'empty' : published === total ? 'published' : published === 0 ? 'draft' : 'partial';
+
+  return {
+    property_id: propertyId,
+    property_name: property.name,
+    week_start: weekStart,
+    week_end: weekEnd,
+    status,
+    total_cells: total,
+    published_cells: published,
+    published_at: publishedAt,
+    published_by_name: publishedByName,
+    employees: employees.map((e: any) => ({ ...e, cells: cellsByEmp.get(e.id) ?? {} })),
+  };
 }
 
 export async function getPropertyEmployees(propertyId?: number) {
@@ -348,51 +390,183 @@ export async function removeEmployeeShift(employeeId: number) {
   return { employee_id: employeeId, shift_type_id: null };
 }
 
-export async function assignShift(data: {
-  employee_id: number;
-  shift_type_id: number;
-  date: string;
-  property_id: number;
-  assigned_by: number;
-}) {
-  const existing = await db('shift_rosters')
-    .where({ employee_id: data.employee_id, date: data.date })
-    .first();
+// ── Roster editing (draft) + publish lifecycle ──
 
-  if (existing) {
-    await db('shift_rosters')
-      .where('id', existing.id)
-      .update({
-        shift_type_id: data.shift_type_id,
-        assigned_by: data.assigned_by,
-        updated_at: db.fn.now(),
-      });
-    return db('shift_rosters').where('id', existing.id).first();
-  }
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-  const [id] = await db('shift_rosters').insert(data);
-  return db('shift_rosters').where('id', id).first();
+function addDaysStr(date: string, n: number): string {
+  const [y, m, d] = date.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + n);
+  return dt.toISOString().slice(0, 10);
 }
 
-export async function bulkAssignShifts(assignments: Array<{
-  employee_id: number;
-  shift_type_id: number;
-  date: string;
-  property_id: number;
-  assigned_by: number;
-}>) {
-  const results = [];
-  for (const a of assignments) {
-    results.push(await assignShift(a));
+/** Block roster edits/publish for a week whose payroll month is already locked. */
+async function assertWeekEditable(weekStart: string, weekEnd: string) {
+  const months = new Set<string>();
+  for (let d = weekStart; d <= weekEnd; d = addDaysStr(d, 1)) months.add(d.slice(0, 7));
+  for (const ym of months) {
+    const [year, month] = ym.split('-').map(Number);
+    const run = await db('payroll_runs').where({ month, year }).first();
+    if (run?.status === 'locked') {
+      throw new ValidationError(`Payroll for ${ym} is locked; unlock it before changing that week's roster.`);
+    }
   }
-  return results;
 }
 
-export async function removeShift(id: number) {
-  const row = await db('shift_rosters').where('id', id).first();
-  if (!row) throw new NotFoundError('Shift assignment');
-  await db('shift_rosters').where('id', id).delete();
-  return row;
+/** A roster week must be exactly 7 days and start on a Monday. */
+function assertWeekShape(weekStart: string, weekEnd: string) {
+  if (!ISO_DATE.test(weekStart) || !ISO_DATE.test(weekEnd)) throw new ValidationError('Invalid week');
+  if (addDaysStr(weekStart, 6) !== weekEnd) throw new ValidationError('A roster week must be exactly 7 days');
+  if (new Date(`${weekStart}T00:00:00Z`).getUTCDay() !== 1) throw new ValidationError('A roster week must start on Monday');
+}
+
+/** Block editing a range that already has published rows — unpublish it first. */
+async function assertNotPublished(propertyId: number, from: string, to: string) {
+  const pub = await db('shift_rosters')
+    .where('property_id', propertyId).where('is_published', true)
+    .whereBetween('date', [from, to]).first();
+  if (pub) throw new ValidationError('This week is published — unpublish it before editing.');
+}
+
+/** Active employees who belong to a property (branch_name = property name). */
+async function propertyEmployeeIds(propertyId: number): Promise<Set<number>> {
+  const property = await db('properties').where('id', propertyId).first();
+  if (!property) throw new NotFoundError('Property');
+  const ids = await db('employees').where({ branch_name: property.name, is_active: true }).pluck('id');
+  return new Set<number>(ids as number[]);
+}
+
+export interface RosterCellInput {
+  employee_id: number;
+  date: string;
+  day_type: 'working' | 'weekly_off' | 'clear';
+  shift_type_id?: number | null;
+}
+
+/** Upsert/clear a batch of roster cells as DRAFT (unpublished), atomically. */
+export async function saveRosterCells(propertyId: number, cells: RosterCellInput[], userId: number) {
+  if (!Array.isArray(cells) || cells.length === 0) throw new ValidationError('No cells to save');
+  const empIds = await propertyEmployeeIds(propertyId);
+
+  const shiftIds = new Set<number>();
+  for (const c of cells) {
+    if (!ISO_DATE.test(String(c.date || ''))) throw new ValidationError(`Invalid date: ${c.date}`);
+    if (!empIds.has(Number(c.employee_id))) throw new ValidationError('An employee does not belong to this property');
+    if (c.day_type === 'working') {
+      if (!c.shift_type_id) throw new ValidationError('A working cell needs a shift');
+      shiftIds.add(Number(c.shift_type_id));
+    } else if (c.day_type !== 'weekly_off' && c.day_type !== 'clear') {
+      throw new ValidationError(`Invalid day type: ${c.day_type}`);
+    }
+  }
+  if (shiftIds.size) {
+    const found = await db('shift_types').whereIn('id', [...shiftIds]).pluck('id');
+    if (found.length !== shiftIds.size) throw new ValidationError('Unknown shift type');
+  }
+
+  const sorted = cells.map((c) => c.date).sort();
+  await assertWeekEditable(sorted[0], sorted[sorted.length - 1]);
+  await assertNotPublished(propertyId, sorted[0], sorted[sorted.length - 1]);
+
+  let saved = 0, cleared = 0;
+  await db.transaction(async (trx) => {
+    for (const c of cells) {
+      const key = { employee_id: Number(c.employee_id), date: c.date };
+      if (c.day_type === 'clear') {
+        cleared += await trx('shift_rosters').where(key).del();
+        continue;
+      }
+      const payload = {
+        shift_type_id: c.day_type === 'working' ? Number(c.shift_type_id) : null,
+        day_type: c.day_type,
+        property_id: propertyId,
+        assigned_by: userId,
+        is_published: false,
+        published_at: null,
+        published_by: null,
+        updated_at: trx.fn.now(),
+      };
+      const existing = await trx('shift_rosters').where(key).first();
+      if (existing) await trx('shift_rosters').where('id', existing.id).update(payload);
+      else await trx('shift_rosters').insert({ ...key, ...payload });
+      saved += 1;
+    }
+  });
+  return { saved, cleared };
+}
+
+/** Publish a property's week: stamp its rows published + notify the rostered staff. */
+export async function publishRoster(propertyId: number, weekStart: string, weekEnd: string, userId: number) {
+  assertWeekShape(weekStart, weekEnd);
+  await assertWeekEditable(weekStart, weekEnd);
+
+  // Publish only rows for the property's CURRENT employees, so a row left behind by
+  // someone who has since transferred away is not published into their new pay.
+  const currentEmp = [...await propertyEmployeeIds(propertyId)];
+  const rows = await db('shift_rosters')
+    .where('property_id', propertyId).whereBetween('date', [weekStart, weekEnd])
+    .whereIn('employee_id', currentEmp)
+    .select('employee_id');
+  if (rows.length === 0) throw new ValidationError('Nothing to publish — add shifts to the week first');
+
+  const published = await db('shift_rosters')
+    .where('property_id', propertyId).whereBetween('date', [weekStart, weekEnd])
+    .whereIn('employee_id', currentEmp)
+    .update({ is_published: true, published_at: db.fn.now(), published_by: userId, updated_at: db.fn.now() });
+
+  const empIds = [...new Set(rows.map((r: any) => r.employee_id))];
+  for (const empId of empIds) {
+    await notifyEmployee(empId, {
+      type: 'roster_published',
+      title: 'Your shifts are published',
+      message: `Your roster for the week of ${weekStart} has been published.`,
+      link: '/shifts/roster',
+    });
+  }
+  return { published, notified: empIds.length };
+}
+
+/** Revert a property's week to draft so it can be edited again. */
+export async function unpublishRoster(propertyId: number, weekStart: string, weekEnd: string) {
+  assertWeekShape(weekStart, weekEnd);
+  await assertWeekEditable(weekStart, weekEnd);
+  const unpublished = await db('shift_rosters')
+    .where('property_id', propertyId).whereBetween('date', [weekStart, weekEnd])
+    .update({ is_published: false, published_at: null, published_by: null, updated_at: db.fn.now() });
+  return { unpublished };
+}
+
+/** Copy the previous week's cells into this week as a draft (managers rarely start blank). */
+export async function copyPreviousWeek(propertyId: number, weekStart: string, weekEnd: string, userId: number) {
+  assertWeekShape(weekStart, weekEnd);
+  await assertWeekEditable(weekStart, weekEnd);
+  await assertNotPublished(propertyId, weekStart, weekEnd);
+  const empIds = await propertyEmployeeIds(propertyId);
+
+  const prev = await db('shift_rosters')
+    .where('property_id', propertyId)
+    .whereBetween('date', [addDaysStr(weekStart, -7), addDaysStr(weekEnd, -7)]);
+  if (prev.length === 0) throw new ValidationError('The previous week has no roster to copy');
+
+  let copied = 0;
+  await db.transaction(async (trx) => {
+    for (const r of prev) {
+      if (!empIds.has(r.employee_id)) continue; // employee no longer at this property
+      const date = addDaysStr(String(r.date).slice(0, 10), 7);
+      const key = { employee_id: r.employee_id, date };
+      const payload = {
+        shift_type_id: r.shift_type_id, day_type: r.day_type,
+        property_id: propertyId, assigned_by: userId,
+        is_published: false, published_at: null, published_by: null, updated_at: trx.fn.now(),
+      };
+      const existing = await trx('shift_rosters').where(key).first();
+      if (existing) await trx('shift_rosters').where('id', existing.id).update(payload);
+      else await trx('shift_rosters').insert({ ...key, ...payload });
+      copied += 1;
+    }
+  });
+  return { copied };
 }
 
 // ─── Shift Change Requests ───

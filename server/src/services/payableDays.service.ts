@@ -72,6 +72,20 @@ const dowOf = (date: string): number => {
   return new Date(y, m - 1, d).getDay();
 };
 
+/** Add days to a YYYY-MM-DD date (UTC math, DST-safe). */
+function addDaysIso(date: string, n: number): string {
+  const [y, m, d] = date.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + n);
+  return dt.toISOString().slice(0, 10);
+}
+
+/** Monday (YYYY-MM-DD) of the week containing `date`. */
+function mondayOf(date: string): string {
+  const offset = (dowOf(date) + 6) % 7; // days since Monday
+  return addDaysIso(date, -offset);
+}
+
 interface DayInfo {
   base: 'working' | 'weekly_off' | 'holiday';
   employed: boolean;
@@ -82,8 +96,8 @@ interface DayInfo {
 
 export interface WorkCalendar {
   classify(date: string): DayInfo;
-  /** True when this date's month is roster-driven for the employee. */
-  rosterMonth(date: string): boolean;
+  /** True when this date's WEEK has a published roster for the employee. */
+  weekCovered(date: string): boolean;
 }
 
 /**
@@ -102,29 +116,45 @@ export async function buildWorkCalendar(
 ): Promise<WorkCalendar> {
   const useRoster = opts.useRoster !== false;
   const emp = await db('employees').where('id', employeeId)
-    .select('date_of_joining', 'last_working_day').first();
+    .select('date_of_joining', 'last_working_day', 'branch_name').first();
   const doj = emp?.date_of_joining ? String(emp.date_of_joining).slice(0, 10) : null;
   const lwd = emp?.last_working_day ? String(emp.last_working_day).slice(0, 10) : null;
 
   const schedule = await getPaySchedule();
   const workWeek = new Set<number>(schedule.work_week);
 
-  // Widen the roster lookup to whole months so per-month roster-mode is stable.
   const monthStart = `${startDate.slice(0, 7)}-01`;
   const [ey, em] = endDate.split('-').map(Number);
   const monthEnd = `${endDate.slice(0, 7)}-${pad(new Date(ey, em, 0).getDate())}`;
 
-  const rosterRows = await db('shift_rosters as r')
-    .join('shift_types as st', 'st.id', 'r.shift_type_id')
+  // Roster is scoped to the employee's CURRENT property; a stale row from a prior
+  // property must never drag the old site's schedule into this employee's pay.
+  const prop = emp?.branch_name
+    ? await db('properties').where('name', emp.branch_name).select('id').first()
+    : null;
+
+  // Only PUBLISHED rows drive pay — a draft never contaminates payroll. Coverage is
+  // decided per WEEK (Monday-start): a date is roster-controlled only when its own
+  // week has a published row, so publishing one week never reclassifies the rest of
+  // the month. The lookup is widened by a week at each edge so a Monday-start week
+  // that straddles the month boundary is fully loaded. A published weekly-off cell
+  // marks the week covered but is a rest day, not a working day.
+  const rosterQ = db('shift_rosters as r')
+    .leftJoin('shift_types as st', 'st.id', 'r.shift_type_id')
     .where('r.employee_id', employeeId)
-    .whereBetween('r.date', [monthStart, monthEnd])
-    .select('r.date', 'st.start_time', 'st.end_time', 'st.allow_overtime');
+    .where('r.is_published', true)
+    .whereBetween('r.date', [addDaysIso(monthStart, -6), addDaysIso(monthEnd, 6)]);
+  if (prop) rosterQ.where('r.property_id', prop.id);
+  else rosterQ.whereRaw('1 = 0'); // no current property → no roster; fall back to work week
+  const rosterRows = await rosterQ.select('r.date', 'r.day_type', 'st.start_time', 'st.end_time', 'st.allow_overtime');
+
   const rosterByDate = new Map<string, { shiftHours: number; allowOt: boolean }>();
-  const rosterMonths = new Set<string>();
+  const rosterWeeks = new Set<string>(); // Monday ISO of each week with a published row
   for (const r of rosterRows) {
     const key = String(r.date).slice(0, 10);
+    rosterWeeks.add(mondayOf(key));
+    if (r.day_type === 'weekly_off') continue; // explicit rest day — not a working day
     rosterByDate.set(key, { shiftHours: shiftDurationHours(r.start_time, r.end_time), allowOt: !!r.allow_overtime });
-    rosterMonths.add(key.slice(0, 7));
   }
 
   const region = await getEmployeeRegion(employeeId);
@@ -137,7 +167,7 @@ export async function buildWorkCalendar(
     .select('date', 'name');
   const holidayByDate = new Map<string, string>(holidayRows.map((h: any) => [String(h.date).slice(0, 10), h.name]));
 
-  const rosterMonth = (date: string) => rosterMonths.has(date.slice(0, 7));
+  const weekCovered = (date: string) => rosterWeeks.has(mondayOf(date));
 
   const classify = (date: string): DayInfo => {
     const employed = (!doj || date >= doj) && (!lwd || date <= lwd);
@@ -148,11 +178,13 @@ export async function buildWorkCalendar(
     const holidayName = holidayByDate.get(date);
     if (holidayName !== undefined) return { base: 'holiday', employed, holidayName, shiftHours, allowOt };
 
-    const isWorking = (useRoster && rosterMonth(date)) ? rosterByDate.has(date) : workWeek.has(dowOf(date));
+    // Roster-controlled only within a published week; other weeks fall back to the
+    // org work-week, so a single published week never reclassifies the whole month.
+    const isWorking = (useRoster && weekCovered(date)) ? rosterByDate.has(date) : workWeek.has(dowOf(date));
     return { base: isWorking ? 'working' : 'weekly_off', employed, shiftHours, allowOt };
   };
 
-  return { classify, rosterMonth };
+  return { classify, weekCovered };
 }
 
 /**
@@ -210,6 +242,7 @@ export async function getOvertimeHours(employeeId: number, month: number, year: 
     const date = String(r.date).slice(0, 10);
     const info = cal.classify(date);
     if (!info.employed) continue; // no OT for days outside the employment span
+    if (info.base !== 'working') continue; // no OT on a rostered rest day / holiday
     // Per-date rostered shift wins; otherwise the standing assignment.
     const hasRoster = info.shiftHours > 0;
     const shiftHours = hasRoster ? info.shiftHours : assignHours;
@@ -281,10 +314,12 @@ export async function computePayableDays(employeeId: number, month: number, year
   let holidayCount = 0;
   let notEmployedDays = 0;  // scheduled working days outside the employment span
   let lop = 0;
+  let rosterDriven = false; // true once any day in the month sits in a published week
 
   for (let d = 1; d <= periodDays; d++) {
     const date = `${year}-${pad(month)}-${pad(d)}`;
     const info = cal.classify(date);
+    if (cal.weekCovered(date)) rosterDriven = true;
 
     if (info.base === 'weekly_off') {
       if (info.employed) { weeklyOffs += 1; trace.push({ date, kind: 'weekly_off', status: null, lop: 0 }); }
@@ -397,7 +432,7 @@ export async function computePayableDays(employeeId: number, month: number, year
     holidays: holidayCount,
     method,
     unmarked_policy: unmarkedPolicy,
-    roster_driven: cal.rosterMonth(start),
+    roster_driven: rosterDriven,
     trace,
   };
 }

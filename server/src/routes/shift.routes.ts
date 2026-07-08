@@ -42,12 +42,15 @@ router.get('/employee-shifts', authorize('shifts', 'read'), SHIFT_STAFF, ctrl.li
 router.put('/employee-shifts/:employeeId', authorize('shifts', 'update'), ctrl.assignEmployeeShift);
 router.delete('/employee-shifts/:employeeId', authorize('shifts', 'update'), ctrl.removeEmployeeShift);
 
-// Roster — assignment open to property managers
+// Roster — read + build/publish. Writes are gated by BOTH shifts:create and the
+// SHIFT_STAFF role (admin/CHRO/HR/property manager), so a write is never less
+// protected than a read.
 router.get('/roster', authorize('shifts', 'read'), SHIFT_STAFF, ctrl.getWeeklyRoster);
 router.get('/roster/employees/:propertyId', authorize('shifts', 'read'), SHIFT_STAFF, ctrl.getPropertyEmployees);
-router.post('/roster', authorize('shifts', 'create'), ctrl.assignShift);
-router.post('/roster/bulk', authorize('shifts', 'create'), ctrl.bulkAssignShifts);
-router.delete('/roster/:id', authorize('admin', 'delete'), ctrl.removeShift);
+router.post('/roster/save', authorize('shifts', 'create'), SHIFT_STAFF, ctrl.saveRoster);
+router.post('/roster/copy-previous', authorize('shifts', 'create'), SHIFT_STAFF, ctrl.copyPreviousWeek);
+router.post('/roster/publish', authorize('shifts', 'create'), SHIFT_STAFF, ctrl.publishRoster);
+router.post('/roster/unpublish', authorize('shifts', 'create'), SHIFT_STAFF, ctrl.unpublishRoster);
 
 // Change requests — admin only for management
 router.get('/change-requests', authorize('admin', 'read'), ctrl.listChangeRequests);

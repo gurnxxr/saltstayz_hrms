@@ -79,10 +79,12 @@ export const NAVIGATION: NavItem[] = [
   },
   {
     label: 'Shift Management',
-    href: '/shifts',
+    href: '/shifts/roster',
     icon: 'Clock',
-    roles: ['admin', 'chro', 'hr'],
+    roles: ['admin', 'chro', 'hr', 'property_manager'],
     children: [
+      // Roster: build + publish the weekly plan. Property managers roster their own site.
+      { label: 'Roster', href: '/shifts/roster', icon: 'CalendarDays', roles: ['admin', 'chro', 'hr', 'property_manager'] },
       // Employee assignment + change-request approvals live on /shifts and were
       // previously admin-only (the Admin dashboard card), so keep them admin-only.
       { label: 'Employee Shifts', href: '/shifts', icon: 'Users', roles: ['admin'] },
