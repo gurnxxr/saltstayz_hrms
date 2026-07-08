@@ -34,6 +34,10 @@ export async function listEmployeeSalary(_req: AuthRequest, res: Response, next:
   try { res.json(await service.listEmployeeSalary()); } catch (err) { next(err); }
 }
 
+export async function getCtcRegister(_req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await service.getCtcRegister()); } catch (err) { next(err); }
+}
+
 export async function getEmployeeSalary(req: AuthRequest, res: Response, next: NextFunction) {
   try { res.json(await service.getEmployeeStructure(Number(req.params.employeeId))); } catch (err) { next(err); }
 }

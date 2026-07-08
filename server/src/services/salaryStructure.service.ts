@@ -435,6 +435,34 @@ export async function listEmployeeSalary() {
     .orderBy('e.first_name');
 }
 
+/**
+ * CTC register (Phase 6 — Visibility): every active employee with their monthly
+ * Salary (gross), Net and CTC from a live full-month breakdown, plus company
+ * totals. Answers "what is X's CTC?" and "what is our monthly salary bill?".
+ */
+export async function getCtcRegister() {
+  const base = await listEmployeeSalary();
+  const rows: any[] = [];
+  const totals = { gross: 0, net: 0, ctc: 0, configured: 0 };
+  for (const r of base) {
+    let gross: number | null = null;
+    let net: number | null = null;
+    let ctc: number | null = null;
+    if (r.configured) {
+      try {
+        const asg = await db('salary_structure_assignments').where('employee_id', r.employee_id).first();
+        const structureRow = await getStructureRow(asg.structure_id);
+        const state = await getEmployeeState(r.employee_id);
+        const bd = await computeForStructure(structureRow, num(asg.base), null, undefined, { state });
+        gross = bd.gross_earnings; net = bd.net_pay; ctc = bd.ctc;
+        totals.gross += gross; totals.net += net; totals.ctc += ctc; totals.configured += 1;
+      } catch { /* leave nulls for a structure that can't resolve */ }
+    }
+    rows.push({ ...r, gross, net, ctc });
+  }
+  return { rows, totals };
+}
+
 /** An employee's full salary config (lines + base + TDS + city) with a live breakdown. */
 export async function getEmployeeStructure(employeeId: number) {
   const emp = await db('employees as e')

@@ -9,7 +9,7 @@ import Breadcrumb from '@/components/ui/Breadcrumb';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { formatINR } from '@/lib/utils';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
-import { Search, Layers, Loader2, Save, Plus, Trash2, X, IndianRupee, Users, RotateCcw, UserCog } from 'lucide-react';
+import { Search, Layers, Loader2, Save, Plus, Trash2, X, IndianRupee, Users, RotateCcw, UserCog, Wallet, Download } from 'lucide-react';
 
 // Operating cities/states — resolve to a statutory state on the server.
 const CITIES = ['Haryana', 'Gurugram', 'Faridabad', 'Delhi', 'Noida', 'Greater Noida', 'Uttar Pradesh', 'Chandigarh', 'Dehradun', 'Uttarakhand'];
@@ -34,7 +34,7 @@ const linesPayload = (lines: LineDraft[]) =>
   lines.filter((l) => l.component_id).map((l) => ({ component_id: Number(l.component_id), calculation_type: l.calculation_type, value: Number(l.value) || 0 }));
 
 export default function SalaryStructurePage() {
-  const [tab, setTab] = useState<'employee' | 'templates'>('employee');
+  const [tab, setTab] = useState<'employee' | 'register' | 'templates'>('employee');
   return (
     <AppShell>
       <div className="space-y-6">
@@ -46,12 +46,118 @@ export default function SalaryStructurePage() {
 
         <div className="flex gap-1 border-b border-border">
           <TabBtn active={tab === 'employee'} onClick={() => setTab('employee')} icon={Users} label="By Employee" />
+          <TabBtn active={tab === 'register'} onClick={() => setTab('register')} icon={Wallet} label="CTC Register" />
           <TabBtn active={tab === 'templates'} onClick={() => setTab('templates')} icon={Layers} label="Templates" />
         </div>
 
-        {tab === 'employee' ? <EmployeesPanel /> : <TemplatesPanel />}
+        {tab === 'employee' ? <EmployeesPanel /> : tab === 'register' ? <CtcRegisterPanel /> : <TemplatesPanel />}
       </div>
     </AppShell>
+  );
+}
+
+// ─────────────────────────────── CTC Register ───────────────────────────────
+
+function CtcRegisterPanel() {
+  const [search, setSearch] = useState('');
+  const [branch, setBranch] = useState('');
+
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['ctc-register'],
+    queryFn: () => api.get('/admin/employee-salary-register').then(r => r.data),
+  });
+  const rows: any[] = data?.rows ?? [];
+
+  const branches = useMemo(() => [...new Set(rows.map((r) => r.branch_name).filter(Boolean))].sort(), [rows]);
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase();
+    return rows.filter((r) => (!branch || r.branch_name === branch)
+      && (!q || `${r.first_name} ${r.last_name}`.toLowerCase().includes(q)
+        || r.employee_code?.toLowerCase().includes(q) || r.designation?.toLowerCase().includes(q)));
+  }, [rows, search, branch]);
+
+  const totals = useMemo(() => filtered.reduce((a, r) => ({
+    gross: a.gross + (Number(r.gross) || 0), net: a.net + (Number(r.net) || 0),
+    ctc: a.ctc + (Number(r.ctc) || 0), configured: a.configured + (r.gross != null ? 1 : 0),
+  }), { gross: 0, net: 0, ctc: 0, configured: 0 }), [filtered]);
+
+  const exportCsv = () => {
+    const head = ['Employee Code', 'Name', 'Designation', 'Property', 'Salary/Month', 'Net/Month', 'CTC/Month'];
+    const lines = [head.join(',')];
+    for (const r of filtered) {
+      lines.push([r.employee_code, `${r.first_name} ${r.last_name}`, r.designation ?? '', r.branch_name ?? '',
+        r.gross ?? '', r.net ?? '', r.ctc ?? ''].map((v) => {
+        const s = v == null ? '' : String(v);
+        return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      }).join(','));
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'CTC_Register.csv';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  return (
+    <div className="bg-card rounded-xl border border-border overflow-hidden">
+      <div className="p-4 border-b border-border flex flex-wrap items-center gap-3">
+        <div className="relative flex-1 min-w-[220px]">
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-secondary" />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search employee, code, designation..."
+            className="w-full pl-9 pr-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+        </div>
+        <select value={branch} onChange={(e) => setBranch(e.target.value)}
+          className="px-3 py-2 border border-border rounded-lg bg-background text-sm">
+          <option value="">All properties</option>
+          {branches.map((b) => <option key={b} value={b}>{b}</option>)}
+        </select>
+        <button onClick={exportCsv} disabled={!filtered.length}
+          className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50">
+          <Download size={14} /> Export CSV
+        </button>
+      </div>
+
+      {/* Company totals */}
+      <div className="px-6 py-3 border-b border-border bg-muted/30 flex flex-wrap gap-x-8 gap-y-1 text-sm">
+        <span className="text-secondary">Employees <span className="font-semibold text-foreground">{totals.configured}</span></span>
+        <span className="text-secondary">Monthly salary bill (gross) <span className="font-semibold text-foreground">{formatINR(totals.gross)}</span></span>
+        <span className="text-secondary">Net <span className="font-semibold text-foreground">{formatINR(totals.net)}</span></span>
+        <span className="text-secondary">CTC <span className="font-semibold text-foreground">{formatINR(totals.ctc)}</span></span>
+      </div>
+
+      <div className="overflow-x-auto max-h-[560px] overflow-y-auto">
+        <table className="w-full text-sm">
+          <thead className="sticky top-0 bg-card">
+            <tr className="border-b border-border text-left text-secondary">
+              <th className="px-4 py-2.5 font-medium">Employee</th>
+              <th className="px-4 py-2.5 font-medium">Property</th>
+              <th className="px-3 py-2.5 font-medium text-right">Salary/Month</th>
+              <th className="px-3 py-2.5 font-medium text-right">Net/Month</th>
+              <th className="px-3 py-2.5 font-medium text-right">CTC/Month</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {isLoading ? (
+              <tr><td colSpan={5} className="px-4 py-10 text-center text-secondary">Computing salaries…</td></tr>
+            ) : isError ? (
+              <tr><td colSpan={5} className="px-4 py-10 text-center text-red-600">Couldn&apos;t load the register.</td></tr>
+            ) : filtered.map((r) => (
+              <tr key={r.employee_id} className="hover:bg-muted/20">
+                <td className="px-4 py-2">
+                  <p className="font-medium text-foreground">{r.first_name} {r.last_name}</p>
+                  <p className="text-xs text-secondary">{r.employee_code} · {r.designation || '—'}</p>
+                </td>
+                <td className="px-4 py-2 text-secondary">{r.branch_name || '—'}</td>
+                <td className="px-3 py-2 text-right text-foreground">{r.gross != null ? formatINR(r.gross) : <span className="text-amber-600 text-xs">Not set</span>}</td>
+                <td className="px-3 py-2 text-right text-foreground">{r.net != null ? formatINR(r.net) : '—'}</td>
+                <td className="px-3 py-2 text-right font-medium text-foreground">{r.ctc != null ? formatINR(r.ctc) : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 

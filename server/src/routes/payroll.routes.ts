@@ -12,6 +12,7 @@ const PAYROLL_STAFF = authorizeRoles('admin', 'chro', 'hr', 'finance');
 
 // ─── Self-service (any role with payroll:read) ───
 router.get('/me/setup', authorize('payroll', 'read'), ctrl.getMySetup);
+router.get('/me/structure', authorize('payroll', 'read'), ctrl.getMyStructure);
 router.get('/me/payslip', authorize('payroll', 'read'), ctrl.computeMyPayslip);
 router.get('/me/payslip/pdf', authorize('payroll', 'read'), ctrl.downloadMyPayslip);
 router.get('/me/history', authorize('payroll', 'read'), ctrl.listMyHistory);

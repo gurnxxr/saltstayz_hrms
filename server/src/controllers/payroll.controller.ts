@@ -48,6 +48,13 @@ export async function getMySetup(req: AuthRequest, res: Response, next: NextFunc
   } catch (err) { next(err); }
 }
 
+/** Employee's own salary structure — component lines, base, breakdown, CTC (read-only). */
+export async function getMyStructure(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json(await structures.getEmployeeStructure(requireEmployeeId(req)));
+  } catch (err) { next(err); }
+}
+
 export async function computeMyPayslip(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     const employeeId = requireEmployeeId(req);

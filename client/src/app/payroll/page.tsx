@@ -48,6 +48,12 @@ export default function PayrollPage() {
     enabled: hasProfile, // avoid the "no employee profile" 400 for staff accounts
   });
 
+  const { data: myStructure } = useQuery({
+    queryKey: ['my-salary-structure'],
+    queryFn: () => api.get('/payroll/me/structure').then(r => r.data),
+    enabled: hasProfile,
+  });
+
   const bulkMutation = useMutation({
     mutationFn: () => api.post('/payroll/runs', { month: bulkMonth, year: bulkYear }).then(r => r.data),
     onSuccess: (data) => { setBulkResult(data); toast.success(`${data.generated} payslip(s) generated`); },
@@ -162,6 +168,9 @@ export default function PayrollPage() {
         )}
 
         {hasProfile && (<>
+
+        {/* My Salary Structure — read-only */}
+        {myStructure?.breakdown && <MySalaryStructure data={myStructure} />}
 
         {/* Viewer — published (locked) months only */}
         <div className="bg-card rounded-xl border border-border p-6">
@@ -382,6 +391,65 @@ function CtcLine({ label, value, indent, bold }: {
     <div className={`flex items-center justify-between ${indent ? 'pl-4' : ''}`}>
       <span className={bold ? 'font-medium text-foreground' : 'text-secondary'}>{label}</span>
       <span className={bold ? 'font-medium text-foreground' : 'text-foreground'}>{formatINR(value)}</span>
+    </div>
+  );
+}
+
+function SalRow({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-secondary">{label}</span>
+      <span className="text-foreground font-medium">{formatINR(value)}</span>
+    </div>
+  );
+}
+
+// Read-only view of the employee's own salary structure (Phase 6 — Visibility).
+function MySalaryStructure({ data }: { data: any }) {
+  const b = data.breakdown;
+  const earnings = (b.earnings ?? []).filter((l: any) => l.amount);
+  const componentDeductions = (b.other_deductions ?? []).filter((l: any) => l.amount);
+  const statutory: [string, number][] = ([
+    ['Provident Fund', b.employee_pf], ['ESI', b.esi], ['Professional Tax', b.pt], ['Labour Welfare Fund', b.lwf],
+  ] as [string, number][]).filter(([, v]) => v);
+  const hasDeductions = statutory.length > 0 || componentDeductions.length > 0;
+
+  return (
+    <div className="bg-card rounded-xl border border-border overflow-hidden">
+      <div className="px-6 py-4 border-b border-border flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-foreground flex items-center gap-2"><Wallet size={16} className="text-primary" /> My Salary Structure</h2>
+          <p className="text-xs text-secondary mt-0.5">
+            Your fixed monthly structure — a payslip prorates this by attendance.{data.configured ? '' : ' (Not yet finalised by HR.)'}
+          </p>
+        </div>
+        <div className="text-right">
+          <p className="text-xs text-secondary">Monthly CTC</p>
+          <p className="text-lg font-bold text-foreground">{formatINR(b.ctc)}</p>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-px bg-border">
+        <div className="bg-card p-5">
+          <p className="text-xs font-semibold text-secondary uppercase mb-2.5">Earnings</p>
+          <div className="space-y-1.5 text-sm">
+            {earnings.map((l: any) => <SalRow key={l.name} label={l.name} value={l.amount} />)}
+          </div>
+          <div className="flex items-center justify-between text-sm font-semibold border-t border-border mt-2.5 pt-2.5">
+            <span>Gross</span><span>{formatINR(b.gross_earnings)}</span>
+          </div>
+        </div>
+        <div className="bg-card p-5">
+          <p className="text-xs font-semibold text-secondary uppercase mb-2.5">Deductions</p>
+          <div className="space-y-1.5 text-sm">
+            {statutory.map(([label, v]) => <SalRow key={label} label={label} value={v} />)}
+            {componentDeductions.map((l: any) => <SalRow key={l.name} label={l.name} value={l.amount} />)}
+            {!hasDeductions && <p className="text-xs text-secondary">No deductions.</p>}
+          </div>
+          <div className="flex items-center justify-between text-sm font-semibold border-t border-border mt-2.5 pt-2.5">
+            <span>Net (full month)</span><span className="text-green-700">{formatINR(b.net_pay)}</span>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
