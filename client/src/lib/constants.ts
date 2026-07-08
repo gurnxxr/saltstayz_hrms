@@ -85,10 +85,8 @@ export const NAVIGATION: NavItem[] = [
     children: [
       // Roster: build + publish the weekly plan. Property managers roster their own site.
       { label: 'Roster', href: '/shifts/roster', icon: 'CalendarDays', roles: ['admin', 'chro', 'hr', 'property_manager'] },
-      // Shift-type/schedule/location config (the old "Shift Setup", admin/CHRO/HR).
+      // Shift-type definitions (the old "Shift Setup", admin/CHRO/HR).
       { label: 'Shift Types', href: '/shift-setup/type', icon: 'Tag', roles: ['admin', 'chro', 'hr'] },
-      { label: 'Shift Schedule', href: '/shift-setup/schedule', icon: 'CalendarClock', roles: ['admin', 'chro', 'hr'] },
-      { label: 'Shift Location', href: '/shift-setup/location', icon: 'MapPin', roles: ['admin', 'chro', 'hr'] },
     ],
   },
   {

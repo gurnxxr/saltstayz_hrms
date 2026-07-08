@@ -48,65 +48,6 @@ export async function listHolidayLists(_req: AuthRequest, res: Response, next: N
   } catch (err) { next(err); }
 }
 
-// ─── Shift Locations ───
-
-export async function listShiftLocations(_req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    res.json(await shiftService.listShiftLocations());
-  } catch (err) { next(err); }
-}
-
-export async function createShiftLocation(req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    res.status(201).json(await shiftService.createShiftLocation(req.body));
-  } catch (err) { next(err); }
-}
-
-export async function updateShiftLocation(req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    res.json(await shiftService.updateShiftLocation(Number(req.params.id), req.body));
-  } catch (err) { next(err); }
-}
-
-export async function deleteShiftLocation(req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    res.json(await shiftService.deleteShiftLocation(Number(req.params.id)));
-  } catch (err) { next(err); }
-}
-
-// ─── Shift Schedules ───
-
-export async function listShiftSchedules(req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    const shiftTypeId = req.query.shift_type_id ? Number(req.query.shift_type_id) : undefined;
-    res.json(await shiftService.listShiftSchedules(shiftTypeId));
-  } catch (err) { next(err); }
-}
-
-export async function getShiftSchedule(req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    res.json(await shiftService.getShiftSchedule(Number(req.params.id)));
-  } catch (err) { next(err); }
-}
-
-export async function createShiftSchedule(req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    res.status(201).json(await shiftService.createShiftSchedule(req.body));
-  } catch (err) { next(err); }
-}
-
-export async function updateShiftSchedule(req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    res.json(await shiftService.updateShiftSchedule(Number(req.params.id), req.body));
-  } catch (err) { next(err); }
-}
-
-export async function deleteShiftSchedule(req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    res.json(await shiftService.deleteShiftSchedule(Number(req.params.id)));
-  } catch (err) { next(err); }
-}
-
 // ─── Roster ───
 
 export async function getWeeklyRoster(req: AuthRequest, res: Response, next: NextFunction) {

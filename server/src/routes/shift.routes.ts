@@ -22,19 +22,6 @@ router.post('/types', SHIFT_TYPE_MANAGE, ctrl.createShiftType);
 router.put('/types/:id', SHIFT_TYPE_MANAGE, ctrl.updateShiftType);
 router.delete('/types/:id', SHIFT_TYPE_MANAGE, ctrl.deleteShiftType);
 
-// Shift locations (Shift Setup) — read for shifts, management admin/CHRO/HR
-router.get('/locations', authorize('shifts', 'read'), ctrl.listShiftLocations);
-router.post('/locations', SHIFT_TYPE_MANAGE, ctrl.createShiftLocation);
-router.put('/locations/:id', SHIFT_TYPE_MANAGE, ctrl.updateShiftLocation);
-router.delete('/locations/:id', SHIFT_TYPE_MANAGE, ctrl.deleteShiftLocation);
-
-// Shift schedules (Shift Setup) — recurring shift-type × weekday patterns
-router.get('/schedules', authorize('shifts', 'read'), ctrl.listShiftSchedules);
-router.get('/schedules/:id', authorize('shifts', 'read'), ctrl.getShiftSchedule);
-router.post('/schedules', SHIFT_TYPE_MANAGE, ctrl.createShiftSchedule);
-router.put('/schedules/:id', SHIFT_TYPE_MANAGE, ctrl.updateShiftSchedule);
-router.delete('/schedules/:id', SHIFT_TYPE_MANAGE, ctrl.deleteShiftSchedule);
-
 // Roster — read + build/publish. Writes are gated by BOTH shifts:create and the
 // SHIFT_STAFF role (admin/CHRO/HR/property manager), so a write is never less
 // protected than a read.
