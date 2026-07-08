@@ -25,6 +25,13 @@ export const NAVIGATION: NavItem[] = [
     module: 'attendance',
   },
   {
+    label: 'Regularisation',
+    href: '/attendance/regularisation',
+    icon: 'ClipboardList',
+    roles: ['admin', 'chro', 'hr', 'property_manager', 'employee'],
+    module: 'attendance',
+  },
+  {
     label: 'Leaves',
     href: '/leaves/application',
     icon: 'CalendarDays',

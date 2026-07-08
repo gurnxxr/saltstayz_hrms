@@ -19,6 +19,7 @@ import payScheduleRoutes from './paySchedule.routes';
 import statutoryRoutes from './statutory.routes';
 import salaryComponentRoutes from './salaryComponent.routes';
 import employeeLifecycleRoutes from './employeeLifecycle.routes';
+import regularisationRoutes from './regularisation.routes';
 
 const router = Router();
 
@@ -42,5 +43,6 @@ router.use('/pay-schedule', payScheduleRoutes);
 router.use('/statutory', statutoryRoutes);
 router.use('/salary-components', salaryComponentRoutes);
 router.use('/employee-lifecycle', employeeLifecycleRoutes);
+router.use('/regularisation', regularisationRoutes);
 
 export default router;
