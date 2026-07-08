@@ -219,12 +219,46 @@ export async function computeForEmployee(
   };
 }
 
+/** The stored snapshot for a locked month, or null when the month isn't locked. */
+async function lockedSnapshot(employeeId: number, month: number, year: number): Promise<ComputedPayslip | null> {
+  const run = await getRun(month, year);
+  if (run?.status !== 'locked') return null;
+  const row = await db('payslip_history').where({ employee_id: employeeId, month, year }).first();
+  return row ? parseSnapshot(row.snapshot) : null;
+}
+
+/**
+ * Staff view: a locked month serves the byte-identical stored snapshot; a draft
+ * month computes live (so the review reflects the latest inputs).
+ */
+export async function getPayslipForStaff(employeeId: number, month: number, year: number): Promise<ComputedPayslip> {
+  return (await lockedSnapshot(employeeId, month, year)) ?? computeForEmployee(employeeId, month, year);
+}
+
+/**
+ * Self-service view: an employee only ever sees a LOCKED month, and only the
+ * stored snapshot. A draft (or un-run) month is not yet published to them.
+ */
+export async function getSelfServicePayslip(employeeId: number, month: number, year: number): Promise<ComputedPayslip> {
+  assertValidPeriod(month, year);
+  const snap = await lockedSnapshot(employeeId, month, year);
+  if (!snap) throw new AppError('Your payslip for this month is not published yet.', 404);
+  return snap;
+}
+
 // ─── Generation + history ───
 
 /** Upserts a payslip_history row from a computed payslip. Returns the row id. */
 async function writePayslipRecord(
   computed: ComputedPayslip, runId: number | null, generatedBy?: number | null,
 ): Promise<number> {
+  // Locked months are immutable — re-check right before the write so a run that
+  // started before a concurrent lock cannot overwrite a finalized payslip.
+  const lockCheck = await getRun(computed.month, computed.year);
+  if (lockCheck?.status === 'locked') {
+    throw new AppError('Payroll for this month is locked — payslips are immutable.', 409);
+  }
+
   const b = computed.breakdown;
   const record = {
     employee_id: computed.employee.id,
@@ -277,11 +311,14 @@ export async function generatePayslip(
 }
 
 export async function listPayslipHistory(employeeId: number) {
-  return db('payslip_history')
-    .where('employee_id', employeeId)
-    .select('id', 'month', 'year', 'pay_date', 'gross_earnings',
-      'total_deduction', 'net_pay', 'ctc', 'created_at')
-    .orderBy([{ column: 'year', order: 'desc' }, { column: 'month', order: 'desc' }]);
+  // Employees only see months whose payroll has been locked (published).
+  return db('payslip_history as ph')
+    .join('payroll_runs as r', function (this: any) { this.on('r.month', 'ph.month').andOn('r.year', 'ph.year'); })
+    .where('ph.employee_id', employeeId)
+    .where('r.status', 'locked')
+    .select('ph.id', 'ph.month', 'ph.year', 'ph.pay_date', 'ph.gross_earnings',
+      'ph.total_deduction', 'ph.net_pay', 'ph.ctc', 'ph.created_at')
+    .orderBy([{ column: 'ph.year', order: 'desc' }, { column: 'ph.month', order: 'desc' }]);
 }
 
 /** Safely parses a stored payslip snapshot, failing with a clean error if corrupt. */
@@ -296,12 +333,19 @@ function parseSnapshot(raw: unknown): ComputedPayslip {
   }
 }
 
-/** Returns the stored snapshot for a history row (for exact re-download). */
-export async function getPayslipSnapshot(id: number, employeeId?: number): Promise<ComputedPayslip & { id: number }> {
+/**
+ * Returns the stored snapshot for a history row (for exact re-download).
+ * requireLocked (self-service) only serves rows whose month's run is locked.
+ */
+export async function getPayslipSnapshot(id: number, employeeId?: number, requireLocked = false): Promise<ComputedPayslip & { id: number }> {
   const q = db('payslip_history').where('id', id);
   if (employeeId !== undefined) q.andWhere('employee_id', employeeId);
   const row = await q.first();
   if (!row) throw new NotFoundError('Payslip');
+  if (requireLocked) {
+    const run = await getRun(row.month, row.year);
+    if (run?.status !== 'locked') throw new AppError('Your payslip for this month is not published yet.', 404);
+  }
   return { id: row.id, ...parseSnapshot(row.snapshot) };
 }
 
@@ -352,23 +396,26 @@ export async function runPayroll(month: number, year: number, userId?: number | 
   let totalNet = 0;
   let totalCtc = 0;
   const skipped: Array<{ employee_code: string; name: string; reason: string }> = [];
+  const failed: Array<{ employee_code: string; name: string; reason: string }> = [];
   for (const emp of employees) {
-    let breakdown: PayslipBreakdown | null = null;
-    let reason = 'No salary structure assigned';
+    const who = { employee_code: emp.employee_code, name: `${emp.first_name} ${emp.last_name}` };
     try {
-      breakdown = await getMonthlyBreakdown(emp.id);
+      // Period-aware compute so hourly-rated employees are included (a period-less
+      // pre-check used to throw for them and silently skip every one).
+      const computed = await computeForEmployee(emp.id, month, year);
+      await writePayslipRecord(computed, run.id, userId);
+      generated += 1;
+      totalNet += computed.breakdown.net_pay;
+      totalCtc += computed.breakdown.ctc;
     } catch (err: any) {
-      reason = err?.message || reason;
+      // A month locked mid-run stops the run; anything else is isolated so one bad
+      // record cannot 500 the whole batch.
+      if (err?.statusCode === 409) throw err;
+      const reason = err?.message || 'Could not compute payslip';
+      // 422 = salary not configured (an expected skip); everything else is a failure.
+      if (err?.statusCode === 422) skipped.push({ ...who, reason });
+      else failed.push({ ...who, reason });
     }
-    if (!breakdown) {
-      skipped.push({ employee_code: emp.employee_code, name: `${emp.first_name} ${emp.last_name}`, reason });
-      continue;
-    }
-    const computed = await computeForEmployee(emp.id, month, year);
-    await writePayslipRecord(computed, run.id, userId);
-    generated += 1;
-    totalNet += computed.breakdown.net_pay;
-    totalCtc += computed.breakdown.ctc;
   }
 
   await db('payroll_runs').where('id', run.id).update({
@@ -376,6 +423,7 @@ export async function runPayroll(month: number, year: number, userId?: number | 
     total_net: totalNet,
     total_ctc: totalCtc,
     generated_by: userId ?? run.generated_by ?? null,
+    failure_report: failed.length ? JSON.stringify(failed) : null,
     updated_at: db.fn.now(),
   });
 
@@ -385,6 +433,7 @@ export async function runPayroll(month: number, year: number, userId?: number | 
     year,
     generated,
     skipped,
+    failed,
     total_net: totalNet,
     total_ctc: totalCtc,
   };
@@ -589,6 +638,11 @@ const csvCell = (v: any) => {
  * days, net pay, and bank account details where available.
  */
 export async function getSalaryRegister(month: number, year: number): Promise<string> {
+  // A locked month serves the register snapshotted at lock, so the hand-off file
+  // is reproducible even after structures or rates change.
+  const lockedRun = await getRun(month, year);
+  if (lockedRun?.status === 'locked' && lockedRun.register_snapshot) return lockedRun.register_snapshot;
+
   const { slips } = await getRunDetails(month, year);
   const bank = await db('employee_bank_details').select(
     'employee_id', 'account_name', 'bank_account_number', 'ifsc_code', 'payment_mode',
@@ -635,22 +689,30 @@ export async function lockRun(month: number, year: number, userId?: number | nul
     );
   }
 
+  // Snapshot the salary register onto the run while it's still draft (computed
+  // live), so the locked month's hand-off file survives later input changes.
+  const register = await getSalaryRegister(month, year);
+
   await db('payroll_runs').where('id', run.id).update({
     status: 'locked',
     locked_by: userId ?? null,
     locked_at: db.fn.now(),
+    register_snapshot: register,
     updated_at: db.fn.now(),
   });
   return getRun(month, year);
 }
 
-export async function unlockRun(month: number, year: number) {
+export async function unlockRun(month: number, year: number, userId?: number | null, reason?: string) {
+  if (!reason || !reason.trim()) throw new AppError('An unlock reason is required.', 400);
   const run = await getRun(month, year);
   if (!run) throw new NotFoundError('Payroll run');
+  // Preserve lock provenance (locked_by / locked_at) — record who unlocked and why.
   await db('payroll_runs').where('id', run.id).update({
     status: 'draft',
-    locked_by: null,
-    locked_at: null,
+    unlocked_by: userId ?? null,
+    unlocked_at: db.fn.now(),
+    unlock_reason: reason.trim(),
     updated_at: db.fn.now(),
   });
   return getRun(month, year);

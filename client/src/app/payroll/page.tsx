@@ -54,16 +54,14 @@ export default function PayrollPage() {
     onError: (err: any) => { setBulkResult(null); toast.error(err.response?.data?.error || 'Bulk generation failed'); },
   });
 
-  const generateMutation = useMutation({
-    mutationFn: () => api.post('/payroll/me/payslip', { month, year }).then(r => r.data),
-    onSuccess: (data) => {
-      setResult(data);
-      queryClient.invalidateQueries({ queryKey: ['my-payslip-history'] });
-      toast.success('Payslip generated');
-    },
+  // Employees view their own payslip only after the month's payroll is locked
+  // (published) — a pure read of the stored snapshot, no self-generation.
+  const viewMutation = useMutation({
+    mutationFn: () => api.get(`/payroll/me/payslip?month=${month}&year=${year}`).then(r => r.data),
+    onSuccess: (data) => { setResult(data); },
     onError: (err: any) => {
       setResult(null);
-      toast.error(err.response?.data?.error || 'Failed to generate payslip');
+      toast.error(err.response?.data?.error || 'Payslip not available for this month yet.');
     },
   });
 
@@ -159,11 +157,12 @@ export default function PayrollPage() {
 
         {hasProfile && (<>
 
-        {/* Generator */}
+        {/* Viewer — published (locked) months only */}
         <div className="bg-card rounded-xl border border-border p-6">
-          <h2 className="text-sm font-semibold text-foreground flex items-center gap-2 mb-4">
-            <Wallet size={16} className="text-primary" /> Generate Payslip
+          <h2 className="text-sm font-semibold text-foreground flex items-center gap-2 mb-1">
+            <Wallet size={16} className="text-primary" /> View Payslip
           </h2>
+          <p className="text-xs text-secondary mb-4">Your payslip becomes available once HR finalises (locks) that month&apos;s payroll.</p>
           <div className="flex flex-wrap items-end gap-3">
             <div>
               <label className="block text-xs font-medium text-secondary mb-1">Month</label>
@@ -188,17 +187,17 @@ export default function PayrollPage() {
               </select>
             </div>
             <button
-              onClick={() => generateMutation.mutate()}
-              disabled={generateMutation.isPending || selectedIsFuture}
+              onClick={() => viewMutation.mutate()}
+              disabled={viewMutation.isPending || selectedIsFuture}
               className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
             >
-              {generateMutation.isPending ? <Loader2 size={15} className="animate-spin" /> : <FileText size={15} />}
-              Generate Payslip
+              {viewMutation.isPending ? <Loader2 size={15} className="animate-spin" /> : <FileText size={15} />}
+              View Payslip
             </button>
           </div>
           {selectedIsFuture && (
             <p className="text-xs text-amber-600 mt-3 flex items-center gap-1">
-              <AlertTriangle size={13} /> You can't generate a payslip for a future month.
+              <AlertTriangle size={13} /> A payslip for a future month isn&apos;t available.
             </p>
           )}
         </div>

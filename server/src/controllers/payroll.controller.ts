@@ -51,26 +51,17 @@ export async function getMySetup(req: AuthRequest, res: Response, next: NextFunc
 export async function computeMyPayslip(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     const employeeId = requireEmployeeId(req);
-    res.json(await payslip.computeForEmployee(
+    // Self-service is read-only and only serves a LOCKED (published) month's snapshot.
+    res.json(await payslip.getSelfServicePayslip(
       employeeId, Number(req.query.month), Number(req.query.year),
     ));
-  } catch (err) { next(err); }
-}
-
-export async function generateMyPayslip(req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    const employeeId = requireEmployeeId(req);
-    const result = await payslip.generatePayslip(
-      employeeId, Number(req.body.month), Number(req.body.year), req.user?.userId ?? null,
-    );
-    res.status(201).json(result);
   } catch (err) { next(err); }
 }
 
 export async function downloadMyPayslip(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     const employeeId = requireEmployeeId(req);
-    const computed = await payslip.computeForEmployee(
+    const computed = await payslip.getSelfServicePayslip(
       employeeId, Number(req.query.month), Number(req.query.year),
     );
     await sendPdf(res, computed);
@@ -86,7 +77,8 @@ export async function listMyHistory(req: AuthRequest, res: Response, next: NextF
 export async function downloadMyHistoryPdf(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     const employeeId = requireEmployeeId(req);
-    const computed = await payslip.getPayslipSnapshot(Number(req.params.id), employeeId);
+    // requireLocked: employees can only download a published (locked) month.
+    const computed = await payslip.getPayslipSnapshot(Number(req.params.id), employeeId, true);
     await sendPdf(res, computed);
   } catch (err) { next(err); }
 }
@@ -119,7 +111,8 @@ export async function removeAssignment(req: AuthRequest, res: Response, next: Ne
 
 export async function computeEmployeePayslip(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    res.json(await payslip.computeForEmployee(
+    // Locked month → byte-identical stored snapshot; draft → live compute.
+    res.json(await payslip.getPayslipForStaff(
       Number(req.params.employeeId), Number(req.query.month), Number(req.query.year),
     ));
   } catch (err) { next(err); }
@@ -127,7 +120,7 @@ export async function computeEmployeePayslip(req: AuthRequest, res: Response, ne
 
 export async function downloadEmployeePayslip(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    const computed = await payslip.computeForEmployee(
+    const computed = await payslip.getPayslipForStaff(
       Number(req.params.employeeId), Number(req.query.month), Number(req.query.year),
     );
     await sendPdf(res, computed);
@@ -196,6 +189,8 @@ export async function lockRun(req: AuthRequest, res: Response, next: NextFunctio
 
 export async function unlockRun(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    res.json(await payslip.unlockRun(Number(req.body.month), Number(req.body.year)));
+    res.json(await payslip.unlockRun(
+      Number(req.body.month), Number(req.body.year), req.user?.userId ?? null, req.body.reason,
+    ));
   } catch (err) { next(err); }
 }

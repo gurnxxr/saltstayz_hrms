@@ -66,8 +66,8 @@ export default function PayrollRunsPage() {
   });
 
   const lockMutation = useMutation({
-    mutationFn: (vars: { month: number; year: number; lock: boolean; confirm?: boolean }) =>
-      api.post(`/payroll/runs/${vars.lock ? 'lock' : 'unlock'}`, { month: vars.month, year: vars.year, confirm: vars.confirm === true }).then(r => r.data),
+    mutationFn: (vars: { month: number; year: number; lock: boolean; confirm?: boolean; reason?: string }) =>
+      api.post(`/payroll/runs/${vars.lock ? 'lock' : 'unlock'}`, { month: vars.month, year: vars.year, confirm: vars.confirm === true, reason: vars.reason }).then(r => r.data),
     onSuccess: (_d, vars) => {
       queryClient.invalidateQueries({ queryKey: ['payroll-runs'] });
       queryClient.invalidateQueries({ queryKey: ['run-details'] });
@@ -194,6 +194,13 @@ export default function PayrollRunsPage() {
                   Skipped {lastRun.skipped.length} employee(s) without a salary structure assignment:{' '}
                   {lastRun.skipped.slice(0, 5).map((s: any) => s.employee_code).join(', ')}
                   {lastRun.skipped.length > 5 ? '…' : ''}
+                </p>
+              )}
+              {lastRun.failed?.length > 0 && (
+                <p className="text-xs text-red-600 mt-2">
+                  {lastRun.failed.length} employee(s) failed and were reported (the run continued):{' '}
+                  {lastRun.failed.slice(0, 5).map((s: any) => `${s.employee_code} (${s.reason})`).join('; ')}
+                  {lastRun.failed.length > 5 ? '…' : ''}
                 </p>
               )}
             </div>
@@ -379,8 +386,9 @@ export default function PayrollRunsPage() {
                             canUnlock ? (
                               <button
                                 onClick={() => {
-                                  if (confirm(`Unlock payroll for ${MONTHS[r.month - 1]} ${r.year}? This allows regeneration.`))
-                                    lockMutation.mutate({ month: r.month, year: r.year, lock: false });
+                                  const reason = window.prompt(`Unlock payroll for ${MONTHS[r.month - 1]} ${r.year}? This re-opens a finalised month.\n\nEnter a reason (required):`);
+                                  if (reason && reason.trim())
+                                    lockMutation.mutate({ month: r.month, year: r.year, lock: false, reason: reason.trim() });
                                 }}
                                 disabled={lockMutation.isPending}
                                 className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-secondary hover:bg-muted rounded-lg transition-colors"
