@@ -78,14 +78,19 @@ export const NAVIGATION: NavItem[] = [
     ],
   },
   {
-    label: 'Shift Setup',
-    href: '/shift-setup/type',
+    label: 'Shift Management',
+    href: '/shifts',
     icon: 'Clock',
     roles: ['admin', 'chro', 'hr'],
     children: [
-      { label: 'Shift Type', href: '/shift-setup/type', icon: 'Tag', roles: ['admin', 'chro', 'hr'] },
-      { label: 'Shift Location', href: '/shift-setup/location', icon: 'MapPin', roles: ['admin', 'chro', 'hr'] },
+      // Employee assignment + change-request approvals live on /shifts and were
+      // previously admin-only (the Admin dashboard card), so keep them admin-only.
+      { label: 'Employee Shifts', href: '/shifts', icon: 'Users', roles: ['admin'] },
+      // Shift-type/schedule/location config was the old "Shift Setup" (admin/CHRO/HR).
+      { label: 'Shift Types', href: '/shift-setup/type', icon: 'Tag', roles: ['admin', 'chro', 'hr'] },
       { label: 'Shift Schedule', href: '/shift-setup/schedule', icon: 'CalendarClock', roles: ['admin', 'chro', 'hr'] },
+      { label: 'Shift Location', href: '/shift-setup/location', icon: 'MapPin', roles: ['admin', 'chro', 'hr'] },
+      { label: 'Change Requests', href: '/shifts?tab=requests', icon: 'ClipboardList', roles: ['admin'] },
     ],
   },
   {

@@ -271,7 +271,7 @@ export default function ShiftTypePage() {
   return (
     <AppShell>
       <div className="space-y-6 max-w-4xl">
-        <Breadcrumb items={[{ label: 'Shift Setup' }, { label: 'Shift Type' }]} />
+        <Breadcrumb items={[{ label: 'Shift Management' }, { label: 'Shift Type' }]} />
 
         {mode === 'list' ? (
           <>

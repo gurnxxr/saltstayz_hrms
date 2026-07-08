@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
@@ -9,11 +10,13 @@ import LoadError from '@/components/ui/LoadError';
 import api from '@/lib/api';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useAuth } from '@/lib/auth';
-import { Plus, Clock, Check, X, Search, User } from 'lucide-react';
+import { Clock, Check, X, Search, User } from 'lucide-react';
 
 const fmt = (t?: string) => (t ? t.slice(0, 5) : '');
 
-type Tab = 'employees' | 'types' | 'requests';
+// Shift-type definitions live under Shift Management → Shift Types (/shift-setup/type);
+// this page handles per-employee assignment and change-request approvals.
+type Tab = 'employees' | 'requests';
 
 export default function ShiftsPage() {
   const queryClient = useQueryClient();
@@ -24,12 +27,10 @@ export default function ShiftsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const rawTab = searchParams.get('tab');
-  const tab: Tab = (['employees', 'types', 'requests'].includes(rawTab || '') ? rawTab : 'employees') as Tab;
+  const tab: Tab = (['employees', 'requests'].includes(rawTab || '') ? rawTab : 'employees') as Tab;
   const setTab = (t: Tab) => router.replace(`/shifts?tab=${t}`, { scroll: false });
 
-  // Shift Types form + Employee search state
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ name: '', start_time: '', end_time: '' });
+  // Employee search state
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search, 300);
 
@@ -49,22 +50,6 @@ export default function ShiftsPage() {
     queryKey: ['change-requests'],
     queryFn: () => api.get('/shifts/change-requests').then(r => r.data),
     enabled: tab === 'requests',
-  });
-
-  const createTypeMutation = useMutation({
-    mutationFn: (data: typeof form) => api.post('/shifts/types', data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['all-shift-types'] });
-      toast.success('Shift type created');
-      setShowForm(false);
-      setForm({ name: '', start_time: '', end_time: '' });
-    },
-    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to create shift type'),
-  });
-
-  const toggleTypeMutation = useMutation({
-    mutationFn: ({ id, is_active }: { id: number; is_active: boolean }) => api.put(`/shifts/types/${id}`, { is_active }),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['all-shift-types'] }); toast.success('Shift type updated'); },
   });
 
   const assignEmpMutation = useMutation({
@@ -91,7 +76,6 @@ export default function ShiftsPage() {
 
   const TABS: { key: Tab; label: string }[] = [
     { key: 'employees', label: 'Employee Shifts' },
-    { key: 'types', label: 'Shift Types' },
     { key: 'requests', label: 'Change Requests' },
   ];
 
@@ -100,7 +84,7 @@ export default function ShiftsPage() {
       <div className="space-y-6">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Shift Management</h1>
-          <p className="text-secondary mt-1">Per-employee shifts, shift types, and change requests</p>
+          <p className="text-secondary mt-1">Per-employee shift assignment and change requests</p>
         </div>
 
         <div className="flex gap-1 bg-muted p-1 rounded-lg w-fit">
@@ -127,7 +111,7 @@ export default function ShiftsPage() {
 
             {activeShifts.length === 0 && (
               <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">
-                No shift types yet. Add one under the <button onClick={() => setTab('types')} className="underline font-medium">Shift Types</button> tab first.
+                No shift types yet. Create one under <Link href="/shift-setup/type" className="underline font-medium">Shift Types</Link> first.
               </p>
             )}
 
@@ -183,90 +167,6 @@ export default function ShiftsPage() {
                     </tbody>
                   </table>
                 </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* ─── Shift Types ─── */}
-        {tab === 'types' && (
-          <div className="space-y-4">
-            <div className="flex justify-end">
-              <button onClick={() => setShowForm(!showForm)} className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors">
-                <Plus size={16} /> Add Shift Type
-              </button>
-            </div>
-
-            {showForm && (
-              <form
-                onSubmit={(e) => { e.preventDefault(); if (!form.name || !form.start_time || !form.end_time) { toast.error('Fill all fields'); return; } createTypeMutation.mutate(form); }}
-                className="bg-card rounded-xl border border-border p-6 grid grid-cols-1 sm:grid-cols-3 gap-4"
-              >
-                <div>
-                  <label className="block text-sm font-medium mb-1">Name <span className="text-red-600">*</span></label>
-                  <input value={form.name} onChange={(e) => setForm(p => ({ ...p, name: e.target.value }))} placeholder="e.g. Morning, Night"
-                    className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Start Time <span className="text-red-600">*</span></label>
-                  <input type="time" value={form.start_time} onChange={(e) => setForm(p => ({ ...p, start_time: e.target.value }))}
-                    className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">End Time <span className="text-red-600">*</span></label>
-                  <input type="time" value={form.end_time} onChange={(e) => setForm(p => ({ ...p, end_time: e.target.value }))}
-                    className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
-                </div>
-                <div className="sm:col-span-3 flex gap-2">
-                  <button type="submit" disabled={createTypeMutation.isPending} className="px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium disabled:opacity-50">
-                    {createTypeMutation.isPending ? 'Creating...' : 'Create'}
-                  </button>
-                  <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 border border-border rounded-lg text-sm">Cancel</button>
-                </div>
-              </form>
-            )}
-
-            <div className="bg-card rounded-xl border border-border overflow-hidden">
-              {shiftTypes.length === 0 ? (
-                <div className="p-10 text-center">
-                  <Clock size={32} className="mx-auto text-secondary/40 mb-2" />
-                  <p className="text-sm font-medium text-foreground">No shift types yet</p>
-                  <p className="text-sm text-secondary mt-1">Create your first shift (e.g. Morning, Night) to start assigning employees.</p>
-                  {!showForm && (
-                    <button onClick={() => setShowForm(true)} className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors">
-                      <Plus size={15} /> Add shift type
-                    </button>
-                  )}
-                </div>
-              ) : (
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b border-border bg-muted/50">
-                      <th className="text-left px-4 py-3 text-xs font-medium text-secondary uppercase">Name</th>
-                      <th className="text-left px-4 py-3 text-xs font-medium text-secondary uppercase">Timing</th>
-                      <th className="text-left px-4 py-3 text-xs font-medium text-secondary uppercase">Status</th>
-                      <th className="text-right px-4 py-3 text-xs font-medium text-secondary uppercase">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {shiftTypes.map((st: any) => (
-                      <tr key={st.id} className="hover:bg-muted/30">
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2"><Clock size={14} className="text-secondary" /><span className="text-sm font-medium text-foreground">{st.name}</span></div>
-                        </td>
-                        <td className="px-4 py-3 text-sm text-foreground">{fmt(st.start_time)} – {fmt(st.end_time)}</td>
-                        <td className="px-4 py-3">
-                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${st.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>{st.is_active ? 'Active' : 'Inactive'}</span>
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          <button onClick={() => toggleTypeMutation.mutate({ id: st.id, is_active: !st.is_active })} className="text-xs px-3 py-1 border border-border rounded-lg hover:bg-muted transition-colors">
-                            {st.is_active ? 'Deactivate' : 'Activate'}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
               )}
             </div>
           </div>

@@ -144,7 +144,7 @@ export default function ShiftSchedulePage() {
   return (
     <AppShell>
       <div className="space-y-6 max-w-3xl">
-        <Breadcrumb items={[{ label: 'Shift Setup' }, { label: 'Shift Schedule' }]} />
+        <Breadcrumb items={[{ label: 'Shift Management' }, { label: 'Shift Schedule' }]} />
 
         {mode === 'list' ? (
           <>

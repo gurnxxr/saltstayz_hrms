@@ -68,7 +68,7 @@ export default function ShiftLocationPage() {
   return (
     <AppShell>
       <div className="space-y-6 max-w-3xl">
-        <Breadcrumb items={[{ label: 'Shift Setup' }, { label: 'Shift Location' }]} />
+        <Breadcrumb items={[{ label: 'Shift Management' }, { label: 'Shift Location' }]} />
 
         <div className="flex items-center justify-between gap-4">
           <div>
