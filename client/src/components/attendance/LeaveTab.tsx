@@ -60,7 +60,7 @@ export default function LeaveTab({ isAdmin }: { isAdmin: boolean }) {
       {/* Action Buttons */}
       <div className="flex justify-end gap-3">
         <button
-          onClick={() => router.push('/attendance/leave/apply')}
+          onClick={() => router.push('/leaves/apply')}
           className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
         >
           <Plus size={16} />

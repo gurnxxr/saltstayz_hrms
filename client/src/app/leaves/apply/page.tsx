@@ -33,7 +33,7 @@ export default function ApplyLeavePage() {
       api.post('/leave/apply', { ...data, leave_type_id: Number(data.leave_type_id) }),
     onSuccess: () => {
       toast.success('Leave request submitted');
-      router.push('/attendance/leave');
+      router.push('/leaves/my');
     },
     onError: (err: any) => toast.error(err.response?.data?.error || 'Failed to apply'),
   });
@@ -61,7 +61,7 @@ export default function ApplyLeavePage() {
     <AppShell>
       <div className="max-w-2xl space-y-6">
         <button
-          onClick={() => router.push('/attendance/leave')}
+          onClick={() => router.push('/leaves/my')}
           className="flex items-center gap-2 text-secondary hover:text-foreground text-sm transition-colors"
         >
           <ArrowLeft size={16} />
@@ -159,7 +159,7 @@ export default function ApplyLeavePage() {
             </button>
             <button
               type="button"
-              onClick={() => router.push('/attendance/leave')}
+              onClick={() => router.push('/leaves/my')}
               className="px-6 py-2.5 border border-border rounded-lg text-sm font-medium hover:bg-muted transition-colors"
             >
               Cancel

@@ -18,7 +18,7 @@ export const NAVIGATION: NavItem[] = [
     ],
   },
   {
-    label: 'Leave & Attendance',
+    label: 'Attendance',
     href: '/attendance',
     icon: 'CalendarCheck',
     roles: ['admin', 'chro', 'hr', 'property_manager', 'employee'],
@@ -33,10 +33,13 @@ export const NAVIGATION: NavItem[] = [
   },
   {
     label: 'Leaves',
-    href: '/leaves/application',
+    href: '/leaves/my',
     icon: 'CalendarDays',
-    roles: ['admin', 'chro', 'hr'],
+    // Employees & property managers get self-service ("My Leave"); admin/CHRO/HR
+    // also get the management pages below.
+    roles: ['admin', 'chro', 'hr', 'property_manager', 'employee'],
     children: [
+      { label: 'My Leave', href: '/leaves/my', icon: 'CalendarCheck', roles: ['admin', 'chro', 'hr', 'property_manager', 'employee'] },
       { label: 'Application', href: '/leaves/application', icon: 'FileText', roles: ['admin', 'chro', 'hr'] },
       { label: 'Encashment', href: '/leaves/encashment', icon: 'Coins', roles: ['admin', 'chro', 'hr'] },
       { label: 'Control Panel', href: '/leaves/control-panel', icon: 'SlidersHorizontal', roles: ['admin', 'chro', 'hr'] },
