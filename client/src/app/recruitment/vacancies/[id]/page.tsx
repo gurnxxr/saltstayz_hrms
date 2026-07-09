@@ -302,7 +302,7 @@ export default function VacancyDetailPage({ params }: { params: Promise<{ id: st
                 ) : (
                   <div className="w-full px-3 py-2 border border-amber-300 rounded-lg bg-amber-50 text-sm text-amber-800">
                     No salary structure for this designation. Set it in{' '}
-                    <a href="/admin/salary-structure" className="underline">Admin → Salary Structure</a>.
+                    <a href="/setup/salary-structure" className="underline">Payroll → Salary Structures</a>.
                   </div>
                 )}
               </div>

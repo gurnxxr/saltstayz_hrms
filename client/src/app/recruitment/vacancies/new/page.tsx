@@ -183,7 +183,7 @@ export default function NewVacancyPage() {
               <p className="mt-2 flex items-center gap-1.5 text-xs text-secondary">
                 <AlertCircle size={13} className="shrink-0" />
                 Some designations are greyed out until their salary structure is set in{' '}
-                <a href="/admin/salary-structure" className="text-primary hover:underline">Admin → Salary Structure</a>.
+                <a href="/setup/salary-structure" className="text-primary hover:underline">Payroll → Salary Structures</a>.
               </p>
             )}
           </div>

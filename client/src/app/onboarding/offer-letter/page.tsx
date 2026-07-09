@@ -450,7 +450,7 @@ function EmployeeOfferEditor({ employeeId }: { employeeId: string }) {
 
         {def && !def.configured ? (
           <div className="bg-amber-50 border border-amber-300 text-amber-800 rounded-xl p-4 text-sm">
-            No salary structure for this designation. Set it up in <a href="/admin/salary-structure" className="underline">Admin → Salary Structure</a> first.
+            No salary structure for this designation. Set it up in <a href="/setup/salary-structure" className="underline">Payroll → Salary Structures</a> first.
           </div>
         ) : def?.already_issued ? (
           <div className="bg-amber-50 border border-amber-300 text-amber-800 rounded-xl p-4 text-sm">
