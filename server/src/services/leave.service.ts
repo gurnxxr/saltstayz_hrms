@@ -36,15 +36,77 @@ async function markLeaveDaysOnAttendance(
   }
 }
 
-// ─── Leave Types ───
+// ─── Leave Types + policy ───
+
+const LT_BOOL_COLS = ['is_paid', 'is_active', 'is_encashable', 'half_day_allowed', 'after_probation_only', 'count_sandwich_days'];
+const ELIGIBILITY_OPTS = ['any', 'female', 'male'];
+const truthy = (v: any) => v === true || v === 1 || v === '1' || v === 'true';
+
+// SQLite stores booleans as 0/1 — hand the client real booleans for form hydration.
+function mapLeaveType(row: any) {
+  if (!row) return row;
+  const out: any = { ...row };
+  for (const c of LT_BOOL_COLS) if (c in out && out[c] !== null && out[c] !== undefined) out[c] = !!out[c];
+  return out;
+}
+
+/** Positive int, else null (blank/0 = no restriction). */
+function policyInt(v: any): number | null {
+  if (v === '' || v === null || v === undefined) return null;
+  const n = Math.trunc(Number(v));
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/** Editable policy columns present in `data` (partial-safe — absent keys unchanged). */
+function collectPolicy(data: any): Record<string, any> {
+  const out: Record<string, any> = {};
+  if ('min_days_per_request' in data) out.min_days_per_request = policyInt(data.min_days_per_request);
+  if ('max_days_per_request' in data) out.max_days_per_request = policyInt(data.max_days_per_request);
+  if ('advance_notice_days' in data) out.advance_notice_days = policyInt(data.advance_notice_days);
+  if ('document_required_after_days' in data) out.document_required_after_days = policyInt(data.document_required_after_days);
+  if ('half_day_allowed' in data) out.half_day_allowed = truthy(data.half_day_allowed);
+  if ('after_probation_only' in data) out.after_probation_only = truthy(data.after_probation_only);
+  if ('count_sandwich_days' in data) out.count_sandwich_days = truthy(data.count_sandwich_days);
+  if ('eligibility' in data) out.eligibility = ELIGIBILITY_OPTS.includes(data.eligibility) ? data.eligibility : 'any';
+  return out;
+}
+
+/**
+ * Replace a type's conflict set, keeping the matrix symmetric: every pair touching
+ * this type (either direction) is removed, then each chosen type is linked both
+ * ways — so "Casual blocks Privilege" ⇒ "Privilege blocks Casual".
+ */
+async function setConflicts(trx: Knex.Transaction, typeId: number, rawIds: any[]) {
+  const ids = [...new Set((rawIds || []).map(Number).filter((n) => Number.isInteger(n) && n > 0 && n !== typeId))];
+  const valid: number[] = ids.length ? await trx('leave_types').whereIn('id', ids).pluck('id') : [];
+  await trx('leave_type_conflicts').where('leave_type_id', typeId).orWhere('conflict_leave_type_id', typeId).del();
+  const rows = valid.flatMap((other) => [
+    { leave_type_id: typeId, conflict_leave_type_id: other },
+    { leave_type_id: other, conflict_leave_type_id: typeId },
+  ]);
+  if (rows.length) await trx('leave_type_conflicts').insert(rows).onConflict(['leave_type_id', 'conflict_leave_type_id']).ignore();
+}
+
+/** Attach each type's `cannot_club_with` id list (one query, grouped) + map booleans. */
+async function withConflicts(types: any[]): Promise<any[]> {
+  if (!types.length) return types;
+  const all = await db('leave_type_conflicts').select('leave_type_id', 'conflict_leave_type_id');
+  const byType = new Map<number, number[]>();
+  for (const r of all) {
+    const list = byType.get(r.leave_type_id) ?? [];
+    list.push(r.conflict_leave_type_id);
+    byType.set(r.leave_type_id, list);
+  }
+  return types.map((t) => ({ ...mapLeaveType(t), cannot_club_with: byType.get(t.id) ?? [] }));
+}
 
 export async function getLeaveTypes() {
-  return db('leave_types').where('is_active', true).orderBy('name');
+  return withConflicts(await db('leave_types').where('is_active', true).orderBy('name'));
 }
 
 /** All leave types incl. inactive — for the Control Panel. */
 export async function getAllLeaveTypes() {
-  return db('leave_types').orderBy('name');
+  return withConflicts(await db('leave_types').orderBy('name'));
 }
 
 export async function createLeaveType(data: {
@@ -58,13 +120,18 @@ export async function createLeaveType(data: {
   if (!Number.isFinite(defaultDays) || defaultDays < 0 || defaultDays > 366) {
     throw new ValidationError('Default days must be between 0 and 366');
   }
-  const [id] = await db('leave_types').insert({
-    name, default_days: defaultDays,
-    is_paid: data.is_paid === undefined ? true : !!data.is_paid,
-    is_encashable: !!data.is_encashable,
-    is_active: true,
+  const id = await db.transaction(async (trx) => {
+    const [newId] = await trx('leave_types').insert({
+      name, default_days: defaultDays,
+      is_paid: data.is_paid === undefined ? true : !!data.is_paid,
+      is_encashable: !!data.is_encashable,
+      is_active: true,
+      ...collectPolicy(data),
+    });
+    if ('cannot_club_with' in data) await setConflicts(trx, newId, (data as any).cannot_club_with);
+    return newId;
   });
-  return db('leave_types').where('id', id).first();
+  return (await getAllLeaveTypes()).find((t: any) => t.id === id);
 }
 
 export async function updateLeaveType(id: number, data: any) {
@@ -86,8 +153,13 @@ export async function updateLeaveType(id: number, data: any) {
   if ('is_paid' in data) patch.is_paid = !!data.is_paid;
   if ('is_encashable' in data) patch.is_encashable = !!data.is_encashable;
   if ('is_active' in data) patch.is_active = !!data.is_active;
-  await db('leave_types').where('id', id).update({ ...patch, updated_at: db.fn.now() });
-  return db('leave_types').where('id', id).first();
+  Object.assign(patch, collectPolicy(data));
+
+  await db.transaction(async (trx) => {
+    await trx('leave_types').where('id', id).update({ ...patch, updated_at: trx.fn.now() });
+    if ('cannot_club_with' in data) await setConflicts(trx, id, data.cannot_club_with);
+  });
+  return (await getAllLeaveTypes()).find((t: any) => t.id === id);
 }
 
 /**
@@ -295,6 +367,70 @@ export async function getMyLeaves(employeeId: number, filters: { status?: string
   return query;
 }
 
+/** Whole days from today to a start date (negative if in the past). */
+function daysUntilStart(startDate: string): number {
+  const t = new Date();
+  const t0 = Date.UTC(t.getFullYear(), t.getMonth(), t.getDate());
+  const [y, m, d] = startDate.split('-').map(Number);
+  return Math.round((Date.UTC(y, m - 1, d) - t0) / 86400000);
+}
+function shiftDate(date: string, n: number): string {
+  const [y, m, d] = date.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+}
+
+/**
+ * Enforces the admin-configured policy rules for a leave type on one request.
+ * Throws a specific ValidationError on the first rule that fails; returns any
+ * non-blocking warnings. Runs for both employee-apply and HR apply-on-behalf.
+ */
+async function checkLeavePolicy(
+  employeeId: number, employee: any, leaveType: any, start: string, end: string, days: number,
+): Promise<string[]> {
+  const warnings: string[] = [];
+  const name = leaveType.name;
+
+  if (leaveType.min_days_per_request && days < leaveType.min_days_per_request) {
+    throw new ValidationError(`${name} must be a continuous block of at least ${leaveType.min_days_per_request} day(s).`);
+  }
+  if (leaveType.max_days_per_request && days > leaveType.max_days_per_request) {
+    throw new ValidationError(`${name} can be at most ${leaveType.max_days_per_request} day(s) per request.`);
+  }
+  if (leaveType.advance_notice_days && daysUntilStart(start) < leaveType.advance_notice_days) {
+    throw new ValidationError(`${name} must be applied at least ${leaveType.advance_notice_days} day(s) before it starts.`);
+  }
+  if (!truthy(leaveType.half_day_allowed) && !Number.isInteger(days)) {
+    throw new ValidationError(`Half-day ${name} is not allowed.`);
+  }
+  // Eligibility / probation are enforced only when that employee data is known.
+  if (leaveType.eligibility && leaveType.eligibility !== 'any' && employee?.gender && employee.gender !== leaveType.eligibility) {
+    throw new ValidationError(`${name} can only be taken by ${leaveType.eligibility} employees.`);
+  }
+  if (truthy(leaveType.after_probation_only) && employee?.probation_end_date
+    && new Date().toISOString().slice(0, 10) < String(employee.probation_end_date).slice(0, 10)) {
+    throw new ValidationError(`${name} is available only after your probation period ends.`);
+  }
+  // Cannot be clubbed with — adjacent (±1 day) or overlapping request of a conflicting type.
+  const conflicts: number[] = await db('leave_type_conflicts').where('leave_type_id', leaveType.id).pluck('conflict_leave_type_id');
+  if (conflicts.length) {
+    const clash = await db('leave_requests as lr')
+      .join('leave_types as lt', 'lt.id', 'lr.leave_type_id')
+      .where('lr.employee_id', employeeId)
+      .whereIn('lr.status', ['pending', 'approved'])
+      .whereIn('lr.leave_type_id', conflicts)
+      .where('lr.start_date', '<=', shiftDate(end, 1))
+      .where('lr.end_date', '>=', shiftDate(start, -1))
+      .select('lt.name').first();
+    if (clash) {
+      throw new ValidationError(`${name} can't be combined with ${clash.name} (you have ${clash.name} on an adjacent or overlapping day).`);
+    }
+  }
+  if (leaveType.document_required_after_days && days > leaveType.document_required_after_days) {
+    warnings.push(`${name} beyond ${leaveType.document_required_after_days} day(s) needs a supporting document — please keep it ready.`);
+  }
+  return warnings;
+}
+
 export async function applyLeave(employeeId: number, data: {
   leave_type_id: number;
   start_date: string;
@@ -310,21 +446,37 @@ export async function applyLeave(employeeId: number, data: {
   const leaveType = await db('leave_types').where('id', leave_type_id).first();
   if (!leaveType) throw new NotFoundError('Leave type');
 
-  // One calendar everywhere (Phase 3): count leave days on the employee's own
-  // roster/work-week calendar, so leave balance and payroll LOP agree.
-  const days = await countWorkingDaysInRange(employeeId, start_date, end_date);
-  if (days <= 0) throw new ValidationError('Leave must be at least 1 working day for this employee');
+  // Sandwich policy: when ON, holidays/weekly-offs between leave days count too
+  // (all calendar days); default OFF counts only the employee's working days (one
+  // calendar everywhere — so leave balance and payroll LOP agree).
+  const days = truthy(leaveType.count_sandwich_days)
+    ? enumerateDates(start_date, end_date).length
+    : await countWorkingDaysInRange(employeeId, start_date, end_date);
+  if (days <= 0) throw new ValidationError('Leave must be at least 1 day for this employee');
 
   const period = await getCurrentPeriod();
+  const employee = await db('employees').where('id', employeeId)
+    .select('first_name', 'last_name', 'reporting_manager_id', 'gender', 'probation_end_date').first();
+  if (!employee) throw new NotFoundError('Employee');
+
+  // Balance (rule 1): an explicit allocation wins; otherwise the leave type's
+  // "Default days per year" is the balance, less what's already taken this period.
   const entitlement = await db('leave_entitlements')
     .where({ employee_id: employeeId, leave_type_id, leave_period_id: period.id })
     .first();
-
+  let available: number;
   if (entitlement) {
-    const remaining = entitlement.total_days - entitlement.used_days;
-    if (days > remaining) {
-      throw new ValidationError(`Insufficient ${leaveType.name} balance. Available: ${remaining} days, Requested: ${days} days`);
-    }
+    available = Number(entitlement.total_days) - Number(entitlement.used_days);
+  } else {
+    const takenRow = await db('leave_requests')
+      .where({ employee_id: employeeId, leave_type_id })
+      .whereIn('status', ['pending', 'approved'])
+      .whereBetween('start_date', [period.start_date, period.end_date])
+      .sum({ t: 'days' }).first();
+    available = Number(leaveType.default_days || 0) - Number((takenRow as any)?.t || 0);
+  }
+  if (days > available) {
+    throw new ValidationError(`Insufficient ${leaveType.name} balance. Available: ${available} day(s), requested: ${days} day(s).`);
   }
 
   const overlap = await db('leave_requests')
@@ -334,8 +486,10 @@ export async function applyLeave(employeeId: number, data: {
       this.where('start_date', '<=', end_date).andWhere('end_date', '>=', start_date);
     })
     .first();
-
   if (overlap) throw new ValidationError('You already have a leave request overlapping these dates');
+
+  // Configurable policy rules (min/max/notice/half-day/eligibility/probation/clubbing).
+  const policyWarnings = await checkLeavePolicy(employeeId, employee, leaveType, start_date, end_date, days);
 
   const [id] = await db('leave_requests').insert({
     employee_id: employeeId,
@@ -348,22 +502,21 @@ export async function applyLeave(employeeId: number, data: {
   });
 
   // Alert the approver (reporting manager) that a request awaits action.
-  const emp = await db('employees').where('id', employeeId)
-    .select('first_name', 'last_name', 'reporting_manager_id').first();
-  if (emp?.reporting_manager_id) {
-    await notifyEmployee(emp.reporting_manager_id, {
+  if (employee.reporting_manager_id) {
+    await notifyEmployee(employee.reporting_manager_id, {
       type: 'leave_requested',
       title: 'Leave request to review',
-      message: `${emp.first_name} ${emp.last_name} requested ${days} day(s) leave (${start_date} to ${end_date}).`,
+      message: `${employee.first_name} ${employee.last_name} requested ${days} day(s) leave (${start_date} to ${end_date}).`,
       link: '/attendance/leave/approvals',
     });
   }
 
-  return db('leave_requests')
+  const created = await db('leave_requests')
     .join('leave_types', 'leave_types.id', 'leave_requests.leave_type_id')
     .where('leave_requests.id', id)
     .select('leave_requests.*', 'leave_types.name as leave_type')
     .first();
+  return { ...created, warnings: policyWarnings };
 }
 
 export async function cancelLeave(requestId: number, employeeId: number) {

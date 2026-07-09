@@ -31,8 +31,10 @@ export default function ApplyLeavePage() {
   const applyMutation = useMutation({
     mutationFn: (data: typeof form) =>
       api.post('/leave/apply', { ...data, leave_type_id: Number(data.leave_type_id) }),
-    onSuccess: () => {
+    onSuccess: (res: any) => {
       toast.success('Leave request submitted');
+      // Non-blocking policy notes (e.g. a document is required for a long request).
+      (res?.data?.warnings || []).forEach((w: string) => toast(w));
       router.push('/leaves/my');
     },
     onError: (err: any) => toast.error(err.response?.data?.error || 'Failed to apply'),
@@ -40,6 +42,25 @@ export default function ApplyLeavePage() {
 
   const selectedBalance = balances.find((b: any) => String(b.leave_type_id) === form.leave_type_id);
   const remaining = selectedBalance ? selectedBalance.total_days - selectedBalance.used_days : null;
+
+  // The selected type's admin-configured rules, shown as a hint (server enforces them).
+  const selectedType = leaveTypes.find((lt: any) => String(lt.id) === form.leave_type_id);
+  const rules: string[] = [];
+  if (selectedType) {
+    const t = selectedType;
+    if (t.min_days_per_request) rules.push(`Must be a continuous block of at least ${t.min_days_per_request} day(s)`);
+    if (t.max_days_per_request) rules.push(`At most ${t.max_days_per_request} day(s) per request`);
+    if (t.advance_notice_days) rules.push(`Apply at least ${t.advance_notice_days} day(s) in advance`);
+    if (t.eligibility && t.eligibility !== 'any') rules.push(`${t.eligibility === 'female' ? 'Female' : 'Male'} employees only`);
+    if (t.after_probation_only) rules.push('Available only after probation ends');
+    if (t.half_day_allowed === false) rules.push('Half-days not allowed');
+    if (t.count_sandwich_days) rules.push('Holidays / weekly-offs in between also count as leave');
+    if (t.document_required_after_days) rules.push(`A supporting document is needed beyond ${t.document_required_after_days} day(s)`);
+    if (Array.isArray(t.cannot_club_with) && t.cannot_club_with.length) {
+      const names = t.cannot_club_with.map((id: number) => leaveTypes.find((x: any) => x.id === id)?.name).filter(Boolean);
+      if (names.length) rules.push(`Can't be combined with ${names.join(', ')}`);
+    }
+  }
 
   // Mirrors the server's calculateLeaveDays (excludes Sundays only), so the applicant
   // and approver always see the same number.
@@ -99,6 +120,14 @@ export default function ApplyLeavePage() {
               <p className={`text-xs mt-1.5 ${remaining <= 0 ? 'text-red-600' : 'text-secondary'}`}>
                 Balance: {remaining} day{remaining !== 1 ? 's' : ''} remaining
               </p>
+            )}
+            {rules.length > 0 && (
+              <div className="mt-2 rounded-lg bg-blue-50 border border-blue-200 px-3 py-2">
+                <p className="text-xs font-medium text-blue-800 mb-1">Rules for {selectedType.name}</p>
+                <ul className="list-disc pl-4 space-y-0.5 text-xs text-blue-700">
+                  {rules.map((r) => <li key={r}>{r}</li>)}
+                </ul>
+              </div>
             )}
           </div>
 
