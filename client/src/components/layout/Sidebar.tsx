@@ -37,7 +37,18 @@ export default function Sidebar({ collapsed, onToggle }: { collapsed: boolean; o
     if (denied.includes(item.module)) return false;
     return roleAllowed || granted.includes(item.module);
   };
-  const isActive = (href: string) => pathname === href || pathname.startsWith(href + '/');
+  // Active-highlight by longest-prefix match: when several nav hrefs match the
+  // current path (e.g. Calendar "/attendance" and Regularisation
+  // "/attendance/regularisation" both match on the regularisation page), only the
+  // most specific one lights up — so a parent/index link never co-activates with
+  // its nested sibling.
+  const navHrefs = NAVIGATION.flatMap((item) =>
+    item.children?.length ? item.children.map((c) => c.href) : [item.href]
+  );
+  const activeHref = navHrefs
+    .filter((h) => pathname === h || pathname.startsWith(h + '/'))
+    .sort((a, b) => b.length - a.length)[0] ?? null;
+  const isActive = (href: string) => href === activeHref;
   const filteredNav = NAVIGATION.filter(visible);
 
   return (
