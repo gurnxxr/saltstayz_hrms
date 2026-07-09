@@ -57,7 +57,7 @@ export async function getMyCalendar(employeeId: number, month: string) {
   const records = await db('attendance_records')
     .where('employee_id', employeeId)
     .whereBetween('date', [startDate, endDate])
-    .select('id', 'date', 'status', 'check_in', 'check_out', 'working_hours')
+    .select('id', 'date', 'status', 'check_in', 'check_out', 'working_hours', 'is_regularised')
     .orderBy('date', 'asc');
 
   // Also fetch approved leaves for this month

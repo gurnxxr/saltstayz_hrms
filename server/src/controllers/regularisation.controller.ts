@@ -20,6 +20,12 @@ export async function getPendingRegularisations(req: AuthRequest, res: Response,
   } catch (err) { next(err); }
 }
 
+export async function getRegularisationLog(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json(await service.getRegularisationLog(req.user!.employeeId!, req.user!.roleName));
+  } catch (err) { next(err); }
+}
+
 export async function approveRegularisation(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     res.json(await service.approveRegularisation(Number(req.params.id), req.user!.employeeId!, req.user!.roleName));

@@ -14,6 +14,8 @@ router.get('/me', authorize('attendance', 'read'), ctrl.getMyRegularisations);
 // an employee-role user, so we gate on plain attendance access and enforce the
 // "reporting manager or HR" rule inside the service (mirrors leave approvals).
 router.get('/pending', authorize('attendance', 'read'), ctrl.getPendingRegularisations);
+// Regularisation log (history) — decided requests, scoped to the manager's reports / all for HR.
+router.get('/log', authorize('attendance', 'read'), ctrl.getRegularisationLog);
 router.post('/:id/approve', authorize('attendance', 'read'), ctrl.approveRegularisation);
 router.post('/:id/reject', authorize('attendance', 'read'), ctrl.rejectRegularisation);
 

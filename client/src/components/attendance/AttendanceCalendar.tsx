@@ -21,10 +21,10 @@ export default function AttendanceCalendar() {
   });
 
   const attendanceMap = useMemo(() => {
-    const map: Record<string, { status: string; checkIn?: string; checkOut?: string; hours?: number }> = {};
+    const map: Record<string, { status: string; checkIn?: string; checkOut?: string; hours?: number; isRegularised?: boolean }> = {};
     if (calendarData?.records) {
       for (const r of calendarData.records) {
-        map[r.date] = { status: r.status, checkIn: r.check_in, checkOut: r.check_out, hours: r.working_hours };
+        map[r.date] = { status: r.status, checkIn: r.check_in, checkOut: r.check_out, hours: r.working_hours, isRegularised: !!r.is_regularised };
       }
     }
     return map;
@@ -179,6 +179,11 @@ export default function AttendanceCalendar() {
                     } else if (record.status === 'on_leave') {
                       badge = 'L'; badgeBg = 'bg-blue-100'; badgeText = 'text-blue-700'; tooltip = 'On Leave';
                     }
+                    // A regularised day is shown as "R" (the underlying status stays in the tooltip).
+                    if (record.isRegularised) {
+                      tooltip = `Regularised — ${tooltip || record.status}`;
+                      badge = 'R'; badgeBg = 'bg-indigo-100'; badgeText = 'text-indigo-700';
+                    }
                   } else if (isWeekend && !isFuture) {
                     badge = 'WO'; badgeBg = 'bg-gray-100'; badgeText = 'text-gray-500'; tooltip = 'Weekly Off';
                   }
@@ -225,6 +230,7 @@ export default function AttendanceCalendar() {
                 { badge: 'SP', bg: 'bg-amber-100', text: 'text-amber-700', label: 'Short Punch' },
                 { badge: 'MP', bg: 'bg-orange-100', text: 'text-orange-700', label: 'Miss Punch' },
                 { badge: 'L', bg: 'bg-blue-100', text: 'text-blue-700', label: 'On Leave' },
+                { badge: 'R', bg: 'bg-indigo-100', text: 'text-indigo-700', label: 'Regularised' },
                 { badge: 'H', bg: 'bg-orange-100', text: 'text-orange-700', label: 'Holiday' },
                 { badge: 'WO', bg: 'bg-gray-100', text: 'text-gray-500', label: 'Weekly Off' },
               ].map(item => (
