@@ -90,6 +90,29 @@ export async function updateLeaveType(id: number, data: any) {
   return db('leave_types').where('id', id).first();
 }
 
+/**
+ * Hard-delete a leave type. Blocked when it has any history (leave requests,
+ * allocations, or encashments) — deleting it would orphan those records — so the
+ * caller is told to deactivate it instead.
+ */
+export async function deleteLeaveType(id: number) {
+  const existing = await db('leave_types').where('id', id).first();
+  if (!existing) throw new NotFoundError('Leave type');
+
+  const [reqs, ents, enc] = await Promise.all([
+    db('leave_requests').where('leave_type_id', id).count({ c: '*' }).first(),
+    db('leave_entitlements').where('leave_type_id', id).count({ c: '*' }).first(),
+    db('leave_encashments').where('leave_type_id', id).count({ c: '*' }).first(),
+  ]);
+  const inUse = Number((reqs as any)?.c || 0) + Number((ents as any)?.c || 0) + Number((enc as any)?.c || 0);
+  if (inUse > 0) {
+    throw new ValidationError('This leave type is in use (it has leave requests, allocations or encashments). Deactivate it instead of deleting.');
+  }
+
+  await db('leave_types').where('id', id).del();
+  return { id };
+}
+
 // ─── Leave Periods ───
 
 export async function getLeavePeriods() {

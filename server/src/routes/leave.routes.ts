@@ -38,10 +38,11 @@ const LEAVE_ADMIN = authorizeRoles('admin', 'chro', 'hr');
 // Apply on behalf of an employee (reuses the standard apply validations)
 router.post('/apply-for/:employeeId', authorize('leave', 'create'), LEAVE_ADMIN, ctrl.applyLeaveFor);
 
-// Control Panel: leave types (deactivate instead of delete) + periods
+// Control Panel: leave types (delete when unused, else deactivate) + periods
 router.get('/types/all', authorize('leave', 'read'), LEAVE_ADMIN, ctrl.getAllLeaveTypes);
 router.post('/types', authorize('leave', 'create'), LEAVE_ADMIN, ctrl.createLeaveType);
 router.put('/types/:id', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.updateLeaveType);
+router.delete('/types/:id', authorize('leave', 'delete'), LEAVE_ADMIN, ctrl.deleteLeaveType);
 router.post('/periods', authorize('leave', 'create'), LEAVE_ADMIN, ctrl.createLeavePeriod);
 router.put('/periods/:id/current', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.setCurrentPeriod);
 

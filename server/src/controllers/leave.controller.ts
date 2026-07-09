@@ -88,6 +88,10 @@ export async function updateLeaveType(req: AuthRequest, res: Response, next: Nex
   try { res.json(await leaveService.updateLeaveType(Number(req.params.id), req.body)); } catch (err) { next(err); }
 }
 
+export async function deleteLeaveType(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await leaveService.deleteLeaveType(Number(req.params.id))); } catch (err) { next(err); }
+}
+
 export async function createLeavePeriod(req: AuthRequest, res: Response, next: NextFunction) {
   try { res.status(201).json(await leaveService.createLeavePeriod(req.body)); } catch (err) { next(err); }
 }
