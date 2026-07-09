@@ -145,6 +145,12 @@ export async function getPayableDays(req: AuthRequest, res: Response, next: Next
 
 // ─── Payroll runs (bulk + review + lock) ───
 
+export async function listPayrollEmployees(_req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json(await payslip.listPayrollEmployees());
+  } catch (err) { next(err); }
+}
+
 export async function listRuns(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     res.json(await payslip.listRuns());

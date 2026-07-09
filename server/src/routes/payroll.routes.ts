@@ -26,6 +26,8 @@ router.put('/assignments/:employeeId', authorize('payroll', 'update'), ADMIN_ONL
 router.delete('/assignments/:employeeId', authorize('payroll', 'update'), ADMIN_ONLY, ctrl.removeAssignment);
 
 // ─── Generate payslip for any employee (HR / Finance / Admin) ───
+// Minimal employee list for the "generate individual slip" dropdown.
+router.get('/employees', authorize('payroll', 'read'), PAYROLL_STAFF, ctrl.listPayrollEmployees);
 router.get('/employees/:employeeId/payslip', authorize('payroll', 'read'), PAYROLL_STAFF, ctrl.computeEmployeePayslip);
 router.get('/employees/:employeeId/payslip/pdf', authorize('payroll', 'read'), PAYROLL_STAFF, ctrl.downloadEmployeePayslip);
 router.get('/employees/:employeeId/payable-days', authorize('payroll', 'read'), PAYROLL_STAFF, ctrl.getPayableDays);

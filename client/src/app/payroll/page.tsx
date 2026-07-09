@@ -37,6 +37,12 @@ export default function PayrollPage() {
   const [bulkYear, setBulkYear] = useState(now.getFullYear());
   const [bulkResult, setBulkResult] = useState<any>(null);
 
+  // Individual salary slip (payroll staff): pick an employee + month, generate + print.
+  const [indivEmpId, setIndivEmpId] = useState<number | ''>('');
+  const [indivMonth, setIndivMonth] = useState(now.getMonth() + 1);
+  const [indivYear, setIndivYear] = useState(now.getFullYear());
+  const [indivResult, setIndivResult] = useState<any>(null);
+
   const years = Array.from({ length: 5 }, (_, i) => now.getFullYear() - i);
   const isFutureMonth = (m: number, y: number) =>
     y > now.getFullYear() || (y === now.getFullYear() && m > now.getMonth() + 1);
@@ -58,6 +64,19 @@ export default function PayrollPage() {
     mutationFn: () => api.post('/payroll/runs', { month: bulkMonth, year: bulkYear }).then(r => r.data),
     onSuccess: (data) => { setBulkResult(data); toast.success(`${data.generated} payslip(s) generated`); },
     onError: (err: any) => { setBulkResult(null); toast.error(err.response?.data?.error || 'Bulk generation failed'); },
+  });
+
+  // Employee list for the individual-slip dropdown (payroll staff only).
+  const { data: staffEmployees = [] } = useQuery({
+    queryKey: ['payroll-employees'],
+    queryFn: () => api.get('/payroll/employees').then(r => r.data),
+    enabled: isPayrollStaff,
+  });
+
+  const indivMutation = useMutation({
+    mutationFn: () => api.get(`/payroll/employees/${indivEmpId}/payslip?month=${indivMonth}&year=${indivYear}`).then(r => r.data),
+    onSuccess: (data) => setIndivResult(data),
+    onError: (err: any) => { setIndivResult(null); toast.error(err.response?.data?.error || "Could not generate this employee's payslip"); },
   });
 
   // Employees view their own payslip only after the month's payroll is locked
@@ -84,8 +103,6 @@ export default function PayrollPage() {
       toast.error('Failed to download PDF');
     }
   }
-
-  const b = result?.breakdown;
 
   return (
     <AppShell>
@@ -158,6 +175,59 @@ export default function PayrollPage() {
           </div>
         )}
 
+        {/* Generate an individual salary slip — payroll staff */}
+        {isPayrollStaff && (
+          <div className="bg-card rounded-xl border border-border p-6">
+            <h2 className="text-sm font-semibold text-foreground flex items-center gap-2 mb-1">
+              <FileText size={16} className="text-primary" /> Generate Individual Salary Slip
+            </h2>
+            <p className="text-xs text-secondary mb-4">Select an employee and month to generate, preview and download their salary slip.</p>
+            <div className="flex flex-wrap items-end gap-3">
+              <div>
+                <label className="block text-xs font-medium text-secondary mb-1">Employee</label>
+                <select value={indivEmpId} onChange={(e) => { setIndivEmpId(e.target.value ? Number(e.target.value) : ''); setIndivResult(null); }}
+                  className="px-3 py-2.5 border border-border rounded-lg bg-background text-sm min-w-[260px] focus:outline-none focus:ring-2 focus:ring-primary/50">
+                  <option value="">Select an employee…</option>
+                  {staffEmployees.map((e: any) => (
+                    <option key={e.id} value={e.id}>{e.employee_code} — {e.first_name} {e.last_name}{e.designation ? ` (${e.designation})` : ''}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-secondary mb-1">Month</label>
+                <select value={indivMonth} onChange={(e) => { setIndivMonth(Number(e.target.value)); setIndivResult(null); }}
+                  className="px-3 py-2.5 border border-border rounded-lg bg-background text-sm min-w-[140px] focus:outline-none focus:ring-2 focus:ring-primary/50">
+                  {MONTHS.map((m, i) => <option key={m} value={i + 1} disabled={isFutureMonth(i + 1, indivYear)}>{m}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-secondary mb-1">Year</label>
+                <select value={indivYear} onChange={(e) => { setIndivYear(Number(e.target.value)); setIndivResult(null); }}
+                  className="px-3 py-2.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50">
+                  {years.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </div>
+              <button onClick={() => indivMutation.mutate()} disabled={indivMutation.isPending || !indivEmpId || isFutureMonth(indivMonth, indivYear)}
+                className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors">
+                {indivMutation.isPending ? <Loader2 size={15} className="animate-spin" /> : <FileText size={15} />}
+                Generate
+              </button>
+            </div>
+            {isFutureMonth(indivMonth, indivYear) && (
+              <p className="text-xs text-amber-600 mt-3 flex items-center gap-1"><AlertTriangle size={13} /> A payslip for a future month isn&apos;t available.</p>
+            )}
+            {indivResult && indivResult.breakdown && (
+              <div className="mt-5">
+                <PayslipPreview
+                  result={indivResult}
+                  downloadHref={`/payroll/employees/${indivEmpId}/payslip/pdf?month=${indivResult.month}&year=${indivResult.year}`}
+                  download={download}
+                />
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Staff account with no linked employee — no personal payslip */}
         {!hasProfile && isPayrollStaff && (
           <div className="bg-card rounded-xl border border-border p-8 text-center">
@@ -217,91 +287,13 @@ export default function PayrollPage() {
           )}
         </div>
 
-        {/* Result preview */}
-        {result && b && (
-          <div className="bg-card rounded-xl border border-border overflow-hidden">
-            {/* Banner */}
-            <div className="bg-primary px-6 py-5 flex items-center justify-between">
-              <div>
-                <p className="text-white font-semibold text-lg">{result.employee.name}</p>
-                <p className="text-blue-200 text-xs mt-0.5">
-                  {result.employee.employee_code} · {result.employee.designation}
-                </p>
-              </div>
-              <div className="text-right">
-                <p className="text-blue-200 text-xs flex items-center gap-1 justify-end">
-                  <Calendar size={12} /> {result.monthLabel}
-                </p>
-                <button
-                  onClick={() => download(
-                    `/payroll/me/payslip/pdf?month=${result.month}&year=${result.year}`,
-                    `${result.employee.name.replace(/\s+/g, '_')}_${result.monthLabel.replace(/\s+/g, '_')}`,
-                  )}
-                  className="mt-2 flex items-center gap-2 px-3 py-1.5 bg-white text-primary rounded-lg text-xs font-semibold hover:bg-blue-50 transition-colors ml-auto"
-                >
-                  <Download size={13} /> Download PDF
-                </button>
-              </div>
-            </div>
-
-            {/* Attendance-driven days strip */}
-            {b.days && (
-              <div className="px-6 py-3 bg-muted/40 border-b border-border flex flex-wrap gap-x-6 gap-y-1 text-xs">
-                <span className="text-secondary">Working days <span className="font-semibold text-foreground">{b.days.working_days}</span></span>
-                <span className="text-secondary">Loss of pay <span className={`font-semibold ${b.days.lop_days > 0 ? 'text-red-600' : 'text-foreground'}`}>{b.days.lop_days}</span></span>
-                {b.days.hours != null
-                  ? <span className="text-secondary">Hours paid <span className="font-semibold text-foreground">{b.days.hours}</span></span>
-                  : <span className="text-secondary">Days paid <span className="font-semibold text-foreground">{b.days.payment_days}</span></span>}
-              </div>
-            )}
-
-            {/* Earnings + Deductions — component lines from the salary structure */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-px bg-border">
-              <Section title="Earnings" rows={(b.earnings ?? []).map((l: any) => [l.name, l.amount] as [string, number])}
-                total={['Gross Earnings', b.gross_earnings]} />
-              <Section title="Deductions" rows={[
-                ['Employee PF', b.employee_pf] as [string, number],
-                ['ESI', b.esi] as [string, number],
-                ['LWF', b.lwf] as [string, number],
-                // PT only where the state levies it
-                ...((b.pt ?? 0) > 0 ? [['Professional Tax', b.pt] as [string, number]] : []),
-                ...(b.other_deductions ?? []).map((l: any) => [l.name, l.amount] as [string, number]),
-              ]} total={['Total Deduction', b.total_deduction]} />
-            </div>
-
-            {/* Net pay */}
-            <div className="bg-green-50 px-6 py-4 flex items-center justify-between border-t border-border">
-              <div>
-                <p className="text-sm font-semibold text-green-800 flex items-center gap-1.5">
-                  <IndianRupee size={15} /> Net Pay
-                </p>
-                <p className="text-xs text-green-700/70 mt-0.5">Gross Earnings − Total Deduction</p>
-              </div>
-              <p className="text-2xl font-bold text-green-700">{formatINR(b.net_pay)}</p>
-            </div>
-
-            {/* CTC breakdown */}
-            <div className="px-6 py-5 border-t border-border">
-              <p className="text-sm font-semibold text-foreground mb-3">Cost to Company (CTC)</p>
-              <div className="space-y-1.5 text-sm">
-                <CtcLine label="Gross Earnings" value={b.gross_earnings} bold />
-                <CtcLine label="Employer Statutory Contributions" value={b.employer_pf + b.employer_esi + b.employer_lwf} bold />
-                <CtcLine label="Employer PF" value={b.employer_pf} indent />
-                <CtcLine label="Employer ESI / Medical Benefit" value={b.employer_esi} indent />
-                <CtcLine label="Employer LWF" value={b.employer_lwf} indent />
-                {(b.employer_costs ?? []).length > 0 && (
-                  <CtcLine label="Employer Benefits" value={b.employer_costs_total} bold />
-                )}
-                {(b.employer_costs ?? []).map((l: any) => (
-                  <CtcLine key={l.name} label={l.name} value={l.amount} indent />
-                ))}
-              </div>
-              <div className="mt-3 pt-3 border-t border-border flex items-center justify-between">
-                <p className="text-sm font-bold text-primary">Total CTC</p>
-                <p className="text-lg font-bold text-primary">{formatINR(b.ctc)}</p>
-              </div>
-            </div>
-          </div>
+        {/* Result preview (my own payslip) */}
+        {result && result.breakdown && (
+          <PayslipPreview
+            result={result}
+            downloadHref={`/payroll/me/payslip/pdf?month=${result.month}&year=${result.year}`}
+            download={download}
+          />
         )}
 
         {/* History */}
@@ -357,6 +349,96 @@ export default function PayrollPage() {
         </>)}
       </div>
     </AppShell>
+  );
+}
+
+// Full payslip preview card (banner + days + earnings/deductions + net + CTC).
+// Reused by the employee's own "View Payslip" and payroll staff's individual generation.
+function PayslipPreview({ result, downloadHref, download }: {
+  result: any; downloadHref: string; download: (url: string, label: string) => void;
+}) {
+  const b = result.breakdown;
+  const pdfLabel = `${String(result.employee?.name || 'Payslip').replace(/\s+/g, '_')}_${String(result.monthLabel || '').replace(/\s+/g, '_')}`;
+  return (
+    <div className="bg-card rounded-xl border border-border overflow-hidden">
+      {/* Banner */}
+      <div className="bg-primary px-6 py-5 flex items-center justify-between">
+        <div>
+          <p className="text-white font-semibold text-lg">{result.employee.name}</p>
+          <p className="text-blue-200 text-xs mt-0.5">
+            {result.employee.employee_code} · {result.employee.designation}
+          </p>
+        </div>
+        <div className="text-right">
+          <p className="text-blue-200 text-xs flex items-center gap-1 justify-end">
+            <Calendar size={12} /> {result.monthLabel}
+          </p>
+          <button
+            onClick={() => download(downloadHref, pdfLabel)}
+            className="mt-2 flex items-center gap-2 px-3 py-1.5 bg-white text-primary rounded-lg text-xs font-semibold hover:bg-blue-50 transition-colors ml-auto"
+          >
+            <Download size={13} /> Download PDF
+          </button>
+        </div>
+      </div>
+
+      {/* Attendance-driven days strip */}
+      {b.days && (
+        <div className="px-6 py-3 bg-muted/40 border-b border-border flex flex-wrap gap-x-6 gap-y-1 text-xs">
+          <span className="text-secondary">Working days <span className="font-semibold text-foreground">{b.days.working_days}</span></span>
+          <span className="text-secondary">Loss of pay <span className={`font-semibold ${b.days.lop_days > 0 ? 'text-red-600' : 'text-foreground'}`}>{b.days.lop_days}</span></span>
+          {b.days.hours != null
+            ? <span className="text-secondary">Hours paid <span className="font-semibold text-foreground">{b.days.hours}</span></span>
+            : <span className="text-secondary">Days paid <span className="font-semibold text-foreground">{b.days.payment_days}</span></span>}
+        </div>
+      )}
+
+      {/* Earnings + Deductions — component lines from the salary structure */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-px bg-border">
+        <Section title="Earnings" rows={(b.earnings ?? []).map((l: any) => [l.name, l.amount] as [string, number])}
+          total={['Gross Earnings', b.gross_earnings]} />
+        <Section title="Deductions" rows={[
+          ['Employee PF', b.employee_pf] as [string, number],
+          ['ESI', b.esi] as [string, number],
+          ['LWF', b.lwf] as [string, number],
+          ...((b.pt ?? 0) > 0 ? [['Professional Tax', b.pt] as [string, number]] : []),
+          ...(b.other_deductions ?? []).map((l: any) => [l.name, l.amount] as [string, number]),
+        ]} total={['Total Deduction', b.total_deduction]} />
+      </div>
+
+      {/* Net pay */}
+      <div className="bg-green-50 px-6 py-4 flex items-center justify-between border-t border-border">
+        <div>
+          <p className="text-sm font-semibold text-green-800 flex items-center gap-1.5">
+            <IndianRupee size={15} /> Net Pay
+          </p>
+          <p className="text-xs text-green-700/70 mt-0.5">Gross Earnings − Total Deduction</p>
+        </div>
+        <p className="text-2xl font-bold text-green-700">{formatINR(b.net_pay)}</p>
+      </div>
+
+      {/* CTC breakdown */}
+      <div className="px-6 py-5 border-t border-border">
+        <p className="text-sm font-semibold text-foreground mb-3">Cost to Company (CTC)</p>
+        <div className="space-y-1.5 text-sm">
+          <CtcLine label="Gross Earnings" value={b.gross_earnings} bold />
+          <CtcLine label="Employer Statutory Contributions" value={b.employer_pf + b.employer_esi + b.employer_lwf} bold />
+          <CtcLine label="Employer PF" value={b.employer_pf} indent />
+          <CtcLine label="Employer ESI / Medical Benefit" value={b.employer_esi} indent />
+          <CtcLine label="Employer LWF" value={b.employer_lwf} indent />
+          {(b.employer_costs ?? []).length > 0 && (
+            <CtcLine label="Employer Benefits" value={b.employer_costs_total} bold />
+          )}
+          {(b.employer_costs ?? []).map((l: any) => (
+            <CtcLine key={l.name} label={l.name} value={l.amount} indent />
+          ))}
+        </div>
+        <div className="mt-3 pt-3 border-t border-border flex items-center justify-between">
+          <p className="text-sm font-bold text-primary">Total CTC</p>
+          <p className="text-lg font-bold text-primary">{formatINR(b.ctc)}</p>
+        </div>
+      </div>
+    </div>
   );
 }
 

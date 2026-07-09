@@ -382,6 +382,18 @@ export async function getPayslipSnapshot(id: number, employeeId?: number, requir
 
 // ─── Payroll runs (bulk generation + lock) ───
 
+/**
+ * Minimal active-employee list for payroll staff to pick from when generating an
+ * individual salary slip (no PII — just enough to identify the person).
+ */
+export async function listPayrollEmployees() {
+  return db('employees as e')
+    .leftJoin('job_titles as jt', 'jt.id', 'e.job_title_id')
+    .where('e.is_active', true)
+    .select('e.id', 'e.employee_code', 'e.first_name', 'e.last_name', 'jt.title as designation', 'e.branch_name')
+    .orderBy(['e.first_name', 'e.last_name']);
+}
+
 export async function getRun(month: number, year: number) {
   return db('payroll_runs').where({ month, year }).first();
 }
