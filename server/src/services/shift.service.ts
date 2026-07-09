@@ -364,17 +364,38 @@ export async function unpublishRoster(propertyId: number, weekStart: string, wee
   return { unpublished };
 }
 
-/** Copy the previous week's cells into this week as a draft (managers rarely start blank). */
-export async function copyPreviousWeek(propertyId: number, weekStart: string, weekEnd: string, userId: number) {
+/**
+ * Copy the previous week's cells into this week as a draft (managers rarely start
+ * blank). Pass `employeeIds` to copy only those employees' shifts; omit to copy the
+ * whole property.
+ */
+export async function copyPreviousWeek(
+  propertyId: number, weekStart: string, weekEnd: string, userId: number, employeeIds?: number[],
+) {
   assertWeekShape(weekStart, weekEnd);
   await assertWeekEditable(weekStart, weekEnd);
   await assertNotPublished(propertyId, weekStart, weekEnd);
   const empIds = await propertyEmployeeIds(propertyId);
 
-  const prev = await db('shift_rosters')
+  // Optional per-employee scope — each must belong to this property.
+  let scope: number[] | null = null;
+  if (employeeIds && employeeIds.length) {
+    for (const id of employeeIds) {
+      if (!empIds.has(Number(id))) throw new ValidationError('An employee does not belong to this property');
+    }
+    scope = [...new Set(employeeIds.map(Number))];
+  }
+
+  let prevQuery = db('shift_rosters')
     .where('property_id', propertyId)
     .whereBetween('date', [addDaysStr(weekStart, -7), addDaysStr(weekEnd, -7)]);
-  if (prev.length === 0) throw new ValidationError('The previous week has no roster to copy');
+  if (scope) prevQuery = prevQuery.whereIn('employee_id', scope);
+  const prev = await prevQuery;
+  if (prev.length === 0) {
+    throw new ValidationError(scope
+      ? 'The selected employee has no roster in the previous week to copy'
+      : 'The previous week has no roster to copy');
+  }
 
   let copied = 0;
   await db.transaction(async (trx) => {

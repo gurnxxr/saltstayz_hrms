@@ -42,6 +42,7 @@ export default function RosterPage() {
   const [propertyId, setPropertyId] = useState<number | null>(null);
   const [weekStart, setWeekStart] = useState<string>(() => mondayOf(new Date()));
   const [edits, setEdits] = useState<Record<string, Edit>>({}); // `${empId}|${date}` → Edit
+  const [selected, setSelected] = useState<Set<number>>(new Set()); // employees ticked for copy
 
   const weekEnd = addDays(weekStart, 6);
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
@@ -54,9 +55,16 @@ export default function RosterPage() {
   // Default to the first property once loaded.
   const activePropertyId = propertyId ?? properties[0]?.id ?? null;
 
+  // Shared key with the Shift Types page (both read /shifts/types). staleTime 0 +
+  // refetchOnMount 'always' guarantee the dropdown reloads the latest types every
+  // time the roster opens or regains focus — so a shift type added on the Shift
+  // Types tab always shows up here, with no stale-cache gap.
   const { data: shiftTypes = [] } = useQuery({
-    queryKey: ['all-shift-types'],
+    queryKey: ['shift-types'],
     queryFn: () => api.get('/shifts/types').then(r => r.data),
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: true,
   });
   const activeShifts = shiftTypes.filter((s: any) => s.is_active);
 
@@ -71,6 +79,15 @@ export default function RosterPage() {
   // Any published cells (fully or partially) lock editing — you must unpublish first.
   const hasPublished = status === 'published' || status === 'partial';
 
+  // ── Employee selection (for "copy last week" of chosen employees) ──
+  const allSelected = employees.length > 0 && employees.every((e) => selected.has(e.id));
+  const toggleOne = (id: number) => setSelected((prev) => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
+  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(employees.map((e) => e.id)));
+
   function guardDiscard(): boolean {
     if (!dirty) return true;
     if (confirm('You have unsaved changes. Discard them?')) { setEdits({}); return true; }
@@ -78,7 +95,8 @@ export default function RosterPage() {
   }
 
   const changeWeek = (delta: number) => { if (guardDiscard()) setWeekStart(addDays(weekStart, delta * 7)); };
-  const changeProperty = (id: number) => { if (guardDiscard()) setPropertyId(id); };
+  const changeProperty = (id: number) => { if (guardDiscard()) { setPropertyId(id); setSelected(new Set()); } };
+  const copySelected = () => { if (selected.size && guardDiscard()) copyMutation.mutate({ employeeIds: [...selected] }); };
 
   // Current select value for a cell: pending edit wins over the fetched cell.
   const cellValue = (empId: number, date: string, cell: any): string => {
@@ -117,10 +135,16 @@ export default function RosterPage() {
   });
 
   const copyMutation = useMutation({
-    mutationFn: () => api.post('/shifts/roster/copy-previous', { property_id: activePropertyId, week_start: weekStart, week_end: weekEnd }).then(r => r.data),
+    // No employeeIds → copy the whole property; an array → copy only those employees.
+    mutationFn: (vars?: { employeeIds?: number[] }) =>
+      api.post('/shifts/roster/copy-previous', {
+        property_id: activePropertyId, week_start: weekStart, week_end: weekEnd,
+        ...(vars?.employeeIds ? { employee_ids: vars.employeeIds } : {}),
+      }).then(r => r.data),
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['roster', activePropertyId, weekStart] });
-      toast.success(`Copied ${res.copied} cells from last week (draft)`);
+      setSelected(new Set());
+      toast.success(`Copied ${res.copied} cell(s) from last week (draft)`);
     },
     onError: (err: any) => toast.error(err.response?.data?.error || 'Failed to copy'),
   });
@@ -182,11 +206,13 @@ export default function RosterPage() {
 
           <div className="flex items-center gap-2 ml-auto">
             <button
-              onClick={() => { if (guardDiscard()) copyMutation.mutate(); }}
-              disabled={copyMutation.isPending || hasPublished}
+              onClick={copySelected}
+              disabled={copyMutation.isPending || hasPublished || selected.size === 0}
+              title={selected.size === 0 ? 'Tick employees to copy their last-week shifts' : `Copy last week's shifts for ${selected.size} selected employee(s)`}
               className="flex items-center gap-1.5 px-3 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted disabled:opacity-50"
             >
-              <Copy size={14} /> Copy last week
+              {copyMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Copy size={14} />}
+              Copy{selected.size > 0 ? ` (${selected.size})` : ''}
             </button>
             {!hasPublished ? (
               <>
@@ -240,7 +266,19 @@ export default function RosterPage() {
               <table className="w-full border-collapse">
                 <thead>
                   <tr className="bg-muted/50 border-b border-border">
-                    <th className="text-left px-4 py-3 text-xs font-medium text-secondary uppercase sticky left-0 bg-muted/50 min-w-48">Employee</th>
+                    <th className="text-left px-4 py-3 text-xs font-medium text-secondary uppercase sticky left-0 bg-muted/50 min-w-48">
+                      <label className="flex items-center gap-2 normal-case">
+                        <input
+                          type="checkbox"
+                          checked={allSelected}
+                          onChange={toggleAll}
+                          disabled={hasPublished || employees.length === 0}
+                          title="Select all employees"
+                          className="h-4 w-4 rounded border-border text-primary focus:ring-2 focus:ring-primary/50 disabled:opacity-50"
+                        />
+                        Employee
+                      </label>
+                    </th>
                     {days.map((d, i) => (
                       <th key={d} className="px-2 py-3 text-xs font-medium text-secondary text-center min-w-32">
                         {DAY_LABELS[i]}<span className="block font-normal text-[11px] text-secondary/70">{shortDate(d)}</span>
@@ -252,8 +290,19 @@ export default function RosterPage() {
                   {employees.map((emp) => (
                     <tr key={emp.id} className="hover:bg-muted/20">
                       <td className="px-4 py-2 sticky left-0 bg-card">
-                        <p className="text-sm font-medium text-foreground truncate">{emp.first_name} {emp.last_name}</p>
-                        <p className="text-xs text-secondary">{emp.employee_code}{emp.designation ? ` · ${emp.designation}` : ''}</p>
+                        <label className="flex items-center gap-2.5 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={selected.has(emp.id)}
+                            onChange={() => toggleOne(emp.id)}
+                            disabled={hasPublished}
+                            className="h-4 w-4 rounded border-border text-primary focus:ring-2 focus:ring-primary/50 disabled:opacity-50 shrink-0"
+                          />
+                          <span className="min-w-0">
+                            <span className="block text-sm font-medium text-foreground truncate">{emp.first_name} {emp.last_name}</span>
+                            <span className="block text-xs text-secondary">{emp.employee_code}{emp.designation ? ` · ${emp.designation}` : ''}</span>
+                          </span>
+                        </label>
                       </td>
                       {days.map((date) => {
                         const cell = emp.cells?.[date];

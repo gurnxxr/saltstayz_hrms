@@ -164,8 +164,10 @@ export default function ShiftTypePage() {
 
   useUnsavedChangesWarning(mode === 'form' && dirty);
 
+  // Shared key with the Roster (both read /shifts/types) so a create/edit/delete
+  // here refreshes the roster's shift dropdown too.
   const { data: shiftTypes = [], isError, refetch } = useQuery({
-    queryKey: ['shift-types-config'],
+    queryKey: ['shift-types'],
     queryFn: () => api.get('/shifts/types').then((r) => r.data),
   });
 
@@ -204,7 +206,6 @@ export default function ShiftTypePage() {
     mutationFn: (payload: any) =>
       editingId ? api.put(`/shifts/types/${editingId}`, payload) : api.post('/shifts/types', payload),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['shift-types-config'] });
       qc.invalidateQueries({ queryKey: ['shift-types'] });
       toast.success(editingId ? 'Shift type updated' : 'Shift type created');
       closeForm();
@@ -215,7 +216,6 @@ export default function ShiftTypePage() {
   const deleteMutation = useMutation({
     mutationFn: (id: number) => api.delete(`/shifts/types/${id}`),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['shift-types-config'] });
       qc.invalidateQueries({ queryKey: ['shift-types'] });
       toast.success('Shift type deleted');
       setConfirmDel(null);

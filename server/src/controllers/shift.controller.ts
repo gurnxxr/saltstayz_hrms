@@ -78,8 +78,9 @@ export async function saveRoster(req: AuthRequest, res: Response, next: NextFunc
 
 export async function copyPreviousWeek(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    const { property_id, week_start, week_end } = req.body;
-    res.json(await shiftService.copyPreviousWeek(Number(property_id), week_start, week_end, req.user!.userId));
+    const { property_id, week_start, week_end, employee_ids } = req.body;
+    const scope = Array.isArray(employee_ids) && employee_ids.length ? employee_ids.map(Number) : undefined;
+    res.json(await shiftService.copyPreviousWeek(Number(property_id), week_start, week_end, req.user!.userId, scope));
   } catch (err) { next(err); }
 }
 
