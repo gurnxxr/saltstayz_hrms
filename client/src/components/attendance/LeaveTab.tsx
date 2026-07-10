@@ -6,10 +6,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import api from '@/lib/api';
 import LoadError from '@/components/ui/LoadError';
-import {
-  Plus, Calendar, Clock, CheckCircle, XCircle, AlertCircle,
-} from 'lucide-react';
-import HolidaysPanel from '@/components/attendance/HolidaysPanel';
+import { Plus, Calendar, Clock, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
 
 const STATUS_COLORS: Record<string, string> = {
   pending: 'bg-yellow-100 text-yellow-700',
@@ -25,10 +22,11 @@ const STATUS_ICONS: Record<string, typeof Clock> = {
   cancelled: AlertCircle,
 };
 
-export default function LeaveTab({ isAdmin }: { isAdmin: boolean }) {
+// Self-service: leave balances + apply button + my requests. (Holidays live on
+// the Leaves page's own "Holidays" tab now.)
+export default function LeaveTab() {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const [leaveSubTab, setLeaveSubTab] = useState<'requests' | 'holidays'>('requests');
   const [statusFilter, setStatusFilter] = useState('');
 
   const { data: balances = [], isError: balancesError, refetch: refetchBalances } = useQuery({
@@ -57,14 +55,12 @@ export default function LeaveTab({ isAdmin }: { isAdmin: boolean }) {
 
   return (
     <div className="space-y-6">
-      {/* Action Buttons */}
       <div className="flex justify-end gap-3">
         <button
           onClick={() => router.push('/leaves/apply')}
           className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
         >
-          <Plus size={16} />
-          Apply Leave
+          <Plus size={16} /> Apply Leave
         </button>
       </div>
 
@@ -93,98 +89,77 @@ export default function LeaveTab({ isAdmin }: { isAdmin: boolean }) {
         })}
       </div>
 
-      {/* Leave Sub-tabs */}
-      <div className="flex items-center gap-4">
-        <div className="flex gap-1 bg-muted p-1 rounded-lg">
-          <button
-            onClick={() => setLeaveSubTab('requests')}
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${leaveSubTab === 'requests' ? 'bg-card text-foreground shadow-sm' : 'text-secondary hover:text-foreground'}`}
-          >
-            My Requests
-          </button>
-          <button
-            onClick={() => setLeaveSubTab('holidays')}
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${leaveSubTab === 'holidays' ? 'bg-card text-foreground shadow-sm' : 'text-secondary hover:text-foreground'}`}
-          >
-            Holidays
-          </button>
-        </div>
-        {leaveSubTab === 'requests' && (
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="px-3 py-2 border border-border rounded-lg bg-background text-sm"
-          >
-            <option value="">All Status</option>
-            <option value="pending">Pending</option>
-            <option value="approved">Approved</option>
-            <option value="rejected">Rejected</option>
-            <option value="cancelled">Cancelled</option>
-          </select>
-        )}
+      {/* My Requests */}
+      <div className="flex items-center justify-between gap-4">
+        <h2 className="text-sm font-semibold text-foreground">My Requests</h2>
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          className="px-3 py-2 border border-border rounded-lg bg-background text-sm"
+        >
+          <option value="">All Status</option>
+          <option value="pending">Pending</option>
+          <option value="approved">Approved</option>
+          <option value="rejected">Rejected</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
       </div>
 
-      {/* Requests Sub-tab */}
-      {leaveSubTab === 'requests' && (
-        <div className="bg-card rounded-xl border border-border overflow-hidden">
-          {leavesError ? (
-            <LoadError message="Couldn't load your leave requests." onRetry={() => refetchLeaves()} />
-          ) : leaves.length === 0 ? (
-            <div className="p-8 text-center text-secondary">
-              <Calendar size={32} className="mx-auto mb-2 opacity-40" />
-              <p>No leave requests found.</p>
-            </div>
-          ) : (
-            <div className="divide-y divide-border">
-              {leaves.map((leave: any) => {
-                const Icon = STATUS_ICONS[leave.status] || Clock;
-                return (
-                  <div key={leave.id} className="p-4 flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${STATUS_COLORS[leave.status]}`}>
-                        <Icon size={18} />
-                      </div>
-                      <div>
-                        <p className="font-medium text-foreground">{leave.leave_type}</p>
-                        <p className="text-sm text-secondary">
-                          {new Date(leave.start_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
-                          {leave.start_date !== leave.end_date && ` — ${new Date(leave.end_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`}
-                          {' '}&middot; {leave.days} day{leave.days > 1 ? 's' : ''}
-                        </p>
-                        {leave.reason && <p className="text-xs text-secondary mt-0.5 line-clamp-1">{leave.reason}</p>}
-                      </div>
+      <div className="bg-card rounded-xl border border-border overflow-hidden">
+        {leavesError ? (
+          <LoadError message="Couldn't load your leave requests." onRetry={() => refetchLeaves()} />
+        ) : leaves.length === 0 ? (
+          <div className="p-8 text-center text-secondary">
+            <Calendar size={32} className="mx-auto mb-2 opacity-40" />
+            <p>No leave requests found.</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-border">
+            {leaves.map((leave: any) => {
+              const Icon = STATUS_ICONS[leave.status] || Clock;
+              return (
+                <div key={leave.id} className="p-4 flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${STATUS_COLORS[leave.status]}`}>
+                      <Icon size={18} />
                     </div>
-                    <div className="flex items-center gap-3">
-                      {leave.rejection_reason && (
-                        <p className="text-xs text-red-600 max-w-48 truncate" title={leave.rejection_reason}>
-                          {leave.rejection_reason}
-                        </p>
-                      )}
-                      {leave.approved_by_name && leave.status !== 'pending' && (
-                        <p className="text-xs text-secondary">by {leave.approved_by_name}</p>
-                      )}
-                      <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${STATUS_COLORS[leave.status]}`}>
-                        {leave.status}
-                      </span>
-                      {leave.status === 'pending' && (
-                        <button
-                          onClick={() => cancelMutation.mutate(leave.id)}
-                          className="text-xs px-3 py-1 border border-red-200 text-red-600 rounded-lg hover:bg-red-50"
-                        >
-                          Cancel
-                        </button>
-                      )}
+                    <div>
+                      <p className="font-medium text-foreground">{leave.leave_type}</p>
+                      <p className="text-sm text-secondary">
+                        {new Date(leave.start_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                        {leave.start_date !== leave.end_date && ` — ${new Date(leave.end_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`}
+                        {' '}&middot; {leave.days} day{leave.days > 1 ? 's' : ''}
+                      </p>
+                      {leave.reason && <p className="text-xs text-secondary mt-0.5 line-clamp-1">{leave.reason}</p>}
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Holidays Sub-tab */}
-      {leaveSubTab === 'holidays' && <HolidaysPanel isAdmin={isAdmin} />}
+                  <div className="flex items-center gap-3">
+                    {leave.rejection_reason && (
+                      <p className="text-xs text-red-600 max-w-48 truncate" title={leave.rejection_reason}>
+                        {leave.rejection_reason}
+                      </p>
+                    )}
+                    {leave.approved_by_name && leave.status !== 'pending' && (
+                      <p className="text-xs text-secondary">by {leave.approved_by_name}</p>
+                    )}
+                    <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${STATUS_COLORS[leave.status]}`}>
+                      {leave.status}
+                    </span>
+                    {leave.status === 'pending' && (
+                      <button
+                        onClick={() => cancelMutation.mutate(leave.id)}
+                        className="text-xs px-3 py-1 border border-red-200 text-red-600 rounded-lg hover:bg-red-50"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

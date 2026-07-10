@@ -26,11 +26,12 @@ router.put('/:id/cancel', authorize('leave', 'update'), ctrl.cancelLeave);
 // Managers approve their reports via /approvals (already scoped) instead.
 router.get('/all', authorize('leave', 'read'), authorizeRoles('admin', 'chro', 'hr', 'property_manager'), ctrl.getAllLeaves);
 
-// Approvals — Admin/CHRO/HR only (managed centrally from Leaves → Application)
-const APPROVAL_ROLES = authorizeRoles('admin', 'chro', 'hr');
-router.get('/approvals', authorize('leave', 'read'), APPROVAL_ROLES, ctrl.getPendingApprovals);
-router.put('/:id/approve', authorize('leave', 'update'), APPROVAL_ROLES, ctrl.approveLeave);
-router.put('/:id/reject', authorize('leave', 'update'), APPROVAL_ROLES, ctrl.rejectLeave);
+// Approvals — a reporting manager acts on their own reports; HR/CHRO/Admin act on
+// all. Authority is enforced inside the service (manager-or-HR), so the route only
+// needs plain leave read/update (a plain employee who is someone's manager qualifies).
+router.get('/approvals', authorize('leave', 'read'), ctrl.getPendingApprovals);
+router.put('/:id/approve', authorize('leave', 'update'), ctrl.approveLeave);
+router.put('/:id/reject', authorize('leave', 'update'), ctrl.rejectLeave);
 
 // ─── Leaves module (admin layer): Application / Encashment / Control Panel / Allocation ───
 const LEAVE_ADMIN = authorizeRoles('admin', 'chro', 'hr');
@@ -57,12 +58,12 @@ router.post('/encashments', authorize('leave', 'create'), LEAVE_ADMIN, ctrl.crea
 router.put('/encashments/:id/approve', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.approveEncashment);
 router.put('/encashments/:id/reject', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.rejectEncashment);
 
-// Holiday & region management (admin only) — configured from Leave & Attendance
+// Holiday management (Admin → Holidays) — Admin/CHRO/HR upload per-state lists.
 const ADMIN_ONLY = authorizeRoles('admin');
-router.post('/holidays', ADMIN_ONLY, ctrl.createHoliday);
-router.put('/holidays/:id', ADMIN_ONLY, ctrl.updateHoliday);
-router.post('/holidays/upload-csv', ADMIN_ONLY, upload.single('file'), ctrl.uploadHolidaysCSV);
-router.delete('/holidays/:id', ADMIN_ONLY, ctrl.deleteHoliday);
+router.post('/holidays', authorize('leave', 'create'), LEAVE_ADMIN, ctrl.createHoliday);
+router.put('/holidays/:id', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.updateHoliday);
+router.post('/holidays/upload-csv', authorize('leave', 'create'), LEAVE_ADMIN, upload.single('file'), ctrl.uploadHolidaysCSV);
+router.delete('/holidays/:id', authorize('leave', 'delete'), LEAVE_ADMIN, ctrl.deleteHoliday);
 
 router.post('/regions', ADMIN_ONLY, ctrl.createRegion);
 router.put('/regions/:id', ADMIN_ONLY, ctrl.updateRegion);

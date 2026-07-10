@@ -162,7 +162,7 @@ export async function buildWorkCalendar(
     .whereBetween('date', [startDate, endDate])
     .where(function (this: any) {
       this.where('is_national', true);
-      if (region?.region_id) this.orWhere('region_id', region.region_id);
+      if (region?.state) this.orWhere('state', region.state);
     })
     .select('date', 'name');
   const holidayByDate = new Map<string, string>(holidayRows.map((h: any) => [String(h.date).slice(0, 10), h.name]));

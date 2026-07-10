@@ -176,7 +176,7 @@ export async function setPropertyRegion(req: AuthRequest, res: Response, next: N
 export async function getHolidays(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     res.json(await leaveService.getHolidays({
-      region_id: req.query.region_id as string,
+      state: req.query.state as string,
       scope: req.query.scope as string,
       year: req.query.year as string,
     }));
@@ -203,7 +203,7 @@ export async function uploadHolidaysCSV(req: AuthRequest, res: Response, next: N
     const csvText = req.file.buffer.toString('utf-8');
     const result = await leaveService.uploadHolidaysCSV(csvText, {
       is_national: req.body.is_national === 'true' || req.body.is_national === true,
-      region_id: req.body.region_id != null && req.body.region_id !== '' ? Number(req.body.region_id) : undefined,
+      state: req.body.state ? String(req.body.state) : undefined,
     });
     res.json(result);
   } catch (err) { next(err); }

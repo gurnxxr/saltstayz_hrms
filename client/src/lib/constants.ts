@@ -32,12 +32,11 @@ export const NAVIGATION: NavItem[] = [
     label: 'Leaves',
     href: '/leaves/my',
     icon: 'CalendarDays',
-    // Employees & property managers get self-service ("My Leave"); admin/CHRO/HR
-    // also get the management pages below.
+    // Everyone gets the merged Leaves page (apply / approvals / holidays);
+    // admin/CHRO/HR also get Encashment + Control Panel.
     roles: ['admin', 'chro', 'hr', 'property_manager', 'employee'],
     children: [
-      { label: 'My Leave', href: '/leaves/my', icon: 'CalendarCheck', roles: ['admin', 'chro', 'hr', 'property_manager', 'employee'] },
-      { label: 'Application', href: '/leaves/application', icon: 'FileText', roles: ['admin', 'chro', 'hr'] },
+      { label: 'Leaves', href: '/leaves/my', icon: 'CalendarCheck', roles: ['admin', 'chro', 'hr', 'property_manager', 'employee'] },
       { label: 'Encashment', href: '/leaves/encashment', icon: 'Coins', roles: ['admin', 'chro', 'hr'] },
       { label: 'Control Panel', href: '/leaves/control-panel', icon: 'SlidersHorizontal', roles: ['admin', 'chro', 'hr'] },
     ],

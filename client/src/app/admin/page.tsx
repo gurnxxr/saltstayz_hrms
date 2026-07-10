@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { Building2, ClipboardList, ShieldCheck, ScrollText, DatabaseBackup, Play, Wallet, SlidersHorizontal, AlertTriangle, Users, Landmark } from 'lucide-react';
+import { Building2, ClipboardList, ShieldCheck, ScrollText, DatabaseBackup, Play, Wallet, SlidersHorizontal, AlertTriangle, Users, Landmark, CalendarDays } from 'lucide-react';
 
 const adminModules = [
   { label: 'Employee Details', href: '/employees', icon: Users, description: 'Full employee directory — profiles, contacts & org details', roles: ['admin', 'chro', 'hr', 'hr_manager', 'property_manager'] },
@@ -18,6 +18,7 @@ const adminModules = [
   { label: 'Database Backups', href: '/admin/backups', icon: DatabaseBackup, description: 'Create and review database snapshots', roles: ['admin'] },
   { label: 'Organization', href: '/admin/organization', icon: Building2, description: 'Properties, departments, and employee categories', roles: ['admin'] },
   { label: 'Attendance Admin', href: '/admin/attendance', icon: ClipboardList, description: 'Upload & review property attendance', roles: ['admin', 'chro', 'hr'] },
+  { label: 'Holidays', href: '/admin/holidays', icon: CalendarDays, description: 'Upload & manage national + per-state holiday calendars', roles: ['admin', 'chro', 'hr'] },
 ];
 
 export default function AdminPage() {

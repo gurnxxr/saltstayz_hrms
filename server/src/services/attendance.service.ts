@@ -75,7 +75,7 @@ export async function getMyCalendar(employeeId: number, month: string) {
     .whereBetween('date', [startDate, endDate])
     .where(function () {
       this.where('is_national', true);
-      if (region?.region_id) this.orWhere('region_id', region.region_id);
+      if (region?.state) this.orWhere('state', region.state);
     })
     .select('date', 'name')
     .orderBy('date', 'asc');
