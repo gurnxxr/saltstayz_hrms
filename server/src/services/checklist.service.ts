@@ -1,0 +1,281 @@
+import fs from 'fs';
+import path from 'path';
+import type { Knex } from 'knex';
+import db from '../config/database';
+import { NotFoundError, ValidationError } from '../utils/errors';
+
+/**
+ * The one checklist. Templates (admin-editable) -> instances (per candidate OR per
+ * employee) -> items -> completion (+ optional document).
+ *
+ * This replaces onboarding's copy. Steps 6 (Document Collection), 9 (Pre-joining
+ * Formalities) and 10 (Joining Day) are all instances of this, distinguished only by
+ * their template. Completing a phase's checklist is what unlocks the next stage, and
+ * that is enforced in recruitment.service via `isComplete` — never in the UI.
+ */
+
+const UPLOAD_DIR = path.join(process.cwd(), 'data', 'uploads', 'checklists');
+
+export const TEMPLATE_KEYS = ['document_collection', 'pre_joining', 'joining_day'] as const;
+export type TemplateKey = typeof TEMPLATE_KEYS[number];
+
+export type Subject = { candidate_id: number } | { employee_id: number };
+
+function subjectWhere(subject: Subject) {
+  return 'candidate_id' in subject
+    ? { candidate_id: subject.candidate_id, employee_id: null as number | null }
+    : { employee_id: subject.employee_id, candidate_id: null as number | null };
+}
+
+function sanitizeName(name: string) {
+  return String(name || 'file').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120);
+}
+
+// ─── Templates (admin) ───
+
+export async function listTemplates() {
+  const templates = await db('checklist_templates').orderBy('id');
+  const items = await db('checklist_template_items').where('is_active', true).orderBy(['template_id', 'sort_order']);
+  return templates.map((t: any) => ({
+    ...t,
+    supports_documents: !!t.supports_documents,
+    is_active: !!t.is_active,
+    items: items.filter((i: any) => i.template_id === t.id).map((i: any) => ({ ...i, is_active: !!i.is_active })),
+  }));
+}
+
+export async function addTemplateItem(templateId: number, data: { label: string; category?: string }) {
+  const template = await db('checklist_templates').where('id', templateId).first();
+  if (!template) throw new NotFoundError('Checklist template');
+  const label = String(data.label || '').trim();
+  if (!label) throw new ValidationError('Item label is required');
+  const max = await db('checklist_template_items').where('template_id', templateId).max({ m: 'sort_order' }).first();
+  const [id] = await db('checklist_template_items').insert({
+    template_id: templateId, label, category: data.category || 'General',
+    sort_order: Number((max as any)?.m || 0) + 1, is_active: true,
+  });
+  return db('checklist_template_items').where('id', id).first();
+}
+
+export async function updateTemplateItem(itemId: number, data: { label?: string; category?: string; is_active?: boolean }) {
+  const item = await db('checklist_template_items').where('id', itemId).first();
+  if (!item) throw new NotFoundError('Checklist template item');
+  const patch: any = {};
+  if ('label' in data) {
+    const label = String(data.label || '').trim();
+    if (!label) throw new ValidationError('Item label is required');
+    patch.label = label;
+  }
+  if ('category' in data) patch.category = data.category || 'General';
+  if ('is_active' in data) patch.is_active = !!data.is_active;
+  await db('checklist_template_items').where('id', itemId).update({ ...patch, updated_at: db.fn.now() });
+  return db('checklist_template_items').where('id', itemId).first();
+}
+
+/**
+ * Deleting a template item only removes it from FUTURE instances. Items already
+ * handed to a candidate keep their row (template_item_id goes null via SET NULL),
+ * so a checklist someone already worked can't lose entries under them.
+ */
+export async function deleteTemplateItem(itemId: number) {
+  const item = await db('checklist_template_items').where('id', itemId).first();
+  if (!item) throw new NotFoundError('Checklist template item');
+  await db('checklist_template_items').where('id', itemId).del();
+  return { id: itemId };
+}
+
+// ─── Instances ───
+
+/** Idempotent: instantiating an existing phase checklist returns the existing one. */
+export async function ensureInstance(
+  key: TemplateKey, subject: Subject, userId?: number | null, trx?: Knex.Transaction,
+) {
+  const cx = trx || db;
+  const template = await cx('checklist_templates').where('key', key).first();
+  if (!template) throw new NotFoundError(`Checklist template "${key}"`);
+
+  const where = subjectWhere(subject);
+  const existing = await cx('checklist_instances').where({ template_id: template.id, ...where }).first();
+  if (existing) return existing;
+
+  const [instanceId] = await cx('checklist_instances').insert({
+    template_id: template.id, ...where, status: 'pending', initiated_by: userId ?? null,
+  });
+  const templateItems = await cx('checklist_template_items')
+    .where({ template_id: template.id, is_active: true }).orderBy('sort_order');
+  if (templateItems.length) {
+    await cx('checklist_instance_items').insert(templateItems.map((ti: any, i: number) => ({
+      instance_id: instanceId, template_item_id: ti.id, label: ti.label,
+      category: ti.category, sort_order: ti.sort_order ?? i,
+    })));
+  }
+  return cx('checklist_instances').where('id', instanceId).first();
+}
+
+export async function getInstance(instanceId: number) {
+  const instance = await db('checklist_instances as ci')
+    .join('checklist_templates as ct', 'ct.id', 'ci.template_id')
+    .where('ci.id', instanceId)
+    .select('ci.*', 'ct.key as template_key', 'ct.name as template_name', 'ct.supports_documents')
+    .first();
+  if (!instance) throw new NotFoundError('Checklist');
+  const items = await db('checklist_instance_items as cii')
+    .leftJoin('users as u', 'u.id', 'cii.completed_by')
+    .where('cii.instance_id', instanceId)
+    .select('cii.*', 'u.email as completed_by_email')
+    .orderBy('cii.sort_order');
+  return {
+    ...instance,
+    supports_documents: !!instance.supports_documents,
+    items: items.map((i: any) => ({ ...i, is_completed: !!i.is_completed })),
+  };
+}
+
+/** Every checklist attached to a subject, newest phase last. */
+export async function listForSubject(subject: Subject) {
+  const instances = await db('checklist_instances as ci')
+    .join('checklist_templates as ct', 'ct.id', 'ci.template_id')
+    .where(subjectWhere(subject))
+    .select('ci.*', 'ct.key as template_key', 'ct.name as template_name', 'ct.supports_documents')
+    .orderBy('ci.id');
+  if (!instances.length) return [];
+  const items = await db('checklist_instance_items')
+    .whereIn('instance_id', instances.map((i: any) => i.id))
+    .orderBy('sort_order');
+  return instances.map((inst: any) => {
+    const own = items.filter((i: any) => i.instance_id === inst.id);
+    return {
+      ...inst,
+      supports_documents: !!inst.supports_documents,
+      total_items: own.length,
+      completed_items: own.filter((i: any) => i.is_completed).length,
+      items: own.map((i: any) => ({ ...i, is_completed: !!i.is_completed })),
+    };
+  });
+}
+
+/**
+ * Is a subject's phase checklist finished? An instance that was never created is NOT
+ * complete — the stage gate must not pass just because nobody started the checklist.
+ */
+export async function isComplete(key: TemplateKey, subject: Subject, trx?: Knex.Transaction): Promise<boolean> {
+  const cx = trx || db;
+  const template = await cx('checklist_templates').where('key', key).first();
+  if (!template) return false;
+  const instance = await cx('checklist_instances').where({ template_id: template.id, ...subjectWhere(subject) }).first();
+  if (!instance) return false;
+  const items = await cx('checklist_instance_items').where('instance_id', instance.id).select('is_completed');
+  return items.length > 0 && items.every((i: any) => i.is_completed);
+}
+
+async function recomputeStatus(instanceId: number, trx?: Knex.Transaction) {
+  const cx = trx || db;
+  const items = await cx('checklist_instance_items').where('instance_id', instanceId).select('is_completed');
+  const all = items.length > 0 && items.every((i: any) => i.is_completed);
+  const any = items.some((i: any) => i.is_completed);
+  await cx('checklist_instances').where('id', instanceId).update({
+    status: all ? 'completed' : any ? 'in_progress' : 'pending',
+    completed_at: all ? cx.fn.now() : null,
+    updated_at: cx.fn.now(),
+  });
+}
+
+// ─── Items ───
+
+export async function toggleItem(itemId: number, userId: number) {
+  const item = await db('checklist_instance_items').where('id', itemId).first();
+  if (!item) throw new NotFoundError('Checklist item');
+  const next = !item.is_completed;
+  if (!next && item.document_url) {
+    throw new ValidationError('Remove the uploaded document before marking this item incomplete.');
+  }
+  await db('checklist_instance_items').where('id', itemId).update({
+    is_completed: next,
+    completed_at: next ? db.fn.now() : null,
+    completed_by: next ? userId : null,
+    updated_at: db.fn.now(),
+  });
+  await recomputeStatus(item.instance_id);
+  return db('checklist_instance_items').where('id', itemId).first();
+}
+
+export async function addItem(instanceId: number, data: { label: string; category?: string }) {
+  const instance = await db('checklist_instances').where('id', instanceId).first();
+  if (!instance) throw new NotFoundError('Checklist');
+  const label = String(data.label || '').trim();
+  if (!label) throw new ValidationError('Item label is required');
+  const max = await db('checklist_instance_items').where('instance_id', instanceId).max({ m: 'sort_order' }).first();
+  const [id] = await db('checklist_instance_items').insert({
+    instance_id: instanceId, label, category: data.category || 'General',
+    sort_order: Number((max as any)?.m || 0) + 1,
+  });
+  await recomputeStatus(instanceId); // a new unticked item can un-complete the phase
+  return db('checklist_instance_items').where('id', id).first();
+}
+
+export async function deleteItem(itemId: number) {
+  const item = await db('checklist_instance_items').where('id', itemId).first();
+  if (!item) throw new NotFoundError('Checklist item');
+  if (item.document_url) {
+    try { fs.unlinkSync(path.join(UPLOAD_DIR, path.basename(item.document_url))); } catch { /* already gone */ }
+  }
+  await db('checklist_instance_items').where('id', itemId).del();
+  await recomputeStatus(item.instance_id);
+  return { id: itemId };
+}
+
+// ─── Per-item documents (as onboarding had) ───
+
+export async function uploadItemDocument(itemId: number, file: { originalname: string; buffer: Buffer }, userId: number) {
+  const item = await db('checklist_instance_items').where('id', itemId).first();
+  if (!item) throw new NotFoundError('Checklist item');
+  if (!file) throw new ValidationError('No file uploaded');
+
+  const instance = await db('checklist_instances as ci')
+    .join('checklist_templates as ct', 'ct.id', 'ci.template_id')
+    .where('ci.id', item.instance_id).select('ct.supports_documents').first();
+  if (!instance?.supports_documents) throw new ValidationError('This checklist does not accept documents.');
+
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+  const stored = `${itemId}_${Date.now()}_${sanitizeName(file.originalname)}`;
+  fs.writeFileSync(path.join(UPLOAD_DIR, stored), file.buffer);
+
+  if (item.document_url) {
+    try { fs.unlinkSync(path.join(UPLOAD_DIR, path.basename(item.document_url))); } catch { /* ignore */ }
+  }
+
+  await db('checklist_instance_items').where('id', itemId).update({
+    document_url: `uploads/checklists/${stored}`,
+    document_name: file.originalname.slice(0, 255),
+    is_completed: true,
+    completed_at: db.fn.now(),
+    completed_by: userId,
+    updated_at: db.fn.now(),
+  });
+  await recomputeStatus(item.instance_id);
+  return db('checklist_instance_items').where('id', itemId).first();
+}
+
+export async function getItemDocument(itemId: number) {
+  const item = await db('checklist_instance_items').where('id', itemId).first();
+  if (!item || !item.document_url) throw new NotFoundError('Document');
+  return {
+    absPath: path.join(UPLOAD_DIR, path.basename(item.document_url)),
+    name: item.document_name || path.basename(item.document_url),
+  };
+}
+
+export async function removeItemDocument(itemId: number) {
+  const item = await db('checklist_instance_items').where('id', itemId).first();
+  if (!item) throw new NotFoundError('Checklist item');
+  if (item.document_url) {
+    try { fs.unlinkSync(path.join(UPLOAD_DIR, path.basename(item.document_url))); } catch { /* ignore */ }
+  }
+  await db('checklist_instance_items').where('id', itemId).update({
+    document_url: null, document_name: null,
+    is_completed: false, completed_at: null, completed_by: null,
+    updated_at: db.fn.now(),
+  });
+  await recomputeStatus(item.instance_id);
+  return db('checklist_instance_items').where('id', itemId).first();
+}

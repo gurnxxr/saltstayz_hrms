@@ -1,6 +1,7 @@
 import db from '../config/database';
 import { getMonthSummary } from './attendance.service';
 import { getMyBalances, getMyLeaves } from './leave.service';
+import { LIVE_VACANCY_STATUSES } from './recruitment.service';
 
 // ─── Layer 1: KPI Strip ───
 
@@ -29,7 +30,7 @@ export async function getKpiStrip() {
     ? ((Number(attendanceToday?.present ?? 0) / headcount) * 100) : 0;
 
   // Open positions
-  const openPos = await db('vacancies').where('status', 'open')
+  const openPos = await db('vacancies').whereIn('status', LIVE_VACANCY_STATUSES)
     .select(db.raw("coalesce(sum(positions - filled), 0) as c")).first();
 
   // Absenteeism MTD
@@ -111,7 +112,7 @@ export async function getWorkforceOverview() {
     .leftJoin('properties as p', 'p.id', 'v.property_id')
     .leftJoin('departments as d', 'd.id', 'v.department_id')
     .leftJoin('job_titles as jt', 'jt.id', 'v.job_title_id')
-    .where('v.status', 'open')
+    .whereIn('v.status', LIVE_VACANCY_STATUSES)
     .where(db.raw('v.positions > v.filled'))
     .select(
       'p.name as property',
@@ -719,7 +720,7 @@ export async function getRecruitmentSummary() {
   const vacancyStats = await db('vacancies')
     .select(
       db.raw("count(*) as total_vacancies"),
-      db.raw("sum(case when status = 'open' then 1 else 0 end) as open_vacancies"),
+      db.raw("sum(case when status in ('new_role','listed') then 1 else 0 end) as open_vacancies"),
       db.raw("sum(positions) as total_positions"),
       db.raw("sum(filled) as total_filled")
     )
@@ -770,7 +771,7 @@ export async function getDashboardOverview() {
     .first();
 
   const openVacancies = await db('vacancies')
-    .where('status', 'open')
+    .whereIn('status', LIVE_VACANCY_STATUSES)
     .count('* as count')
     .first();
 

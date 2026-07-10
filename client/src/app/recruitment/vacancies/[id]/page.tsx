@@ -13,6 +13,11 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { Plus, User, Eye, Archive, Users, FileText, Download, Loader2, Pencil, ArrowRight } from 'lucide-react';
 
 const EMPLOYMENT_TYPES = ['Full-time', 'Part-time', 'Contract', 'Internship'];
+
+// Steps 1-2 of the hiring process: a vacancy is drafted (new_role), listed, then closed.
+const VACANCY_STATUS_LABELS: Record<string, string> = {
+  new_role: 'New Role', listed: 'Listed', closed: 'Closed',
+};
 const emptyJd = {
   summary: '', responsibilities: '', requirements: '',
   experience: '', employment_type: 'Full-time', reporting_to: '',
@@ -104,8 +109,8 @@ export default function VacancyDetailPage({ params }: { params: Promise<{ id: st
       invalidateAll();
       setStageConfirm(null);
       if (stage === 'offered') {
-        toast.success('Candidate offered — moved to Onboarding', {
-          action: { label: 'Go to Onboarding', onClick: () => router.push('/onboarding') },
+        toast.success('Candidate offered — moved to Joining Queue', {
+          action: { label: 'Go to Joining Queue', onClick: () => router.push('/recruitment/joining') },
         });
       } else if (stage === 'rejected') toast.success('Candidate rejected and archived');
       else toast.success('Stage updated');
@@ -205,8 +210,8 @@ export default function VacancyDetailPage({ params }: { params: Promise<{ id: st
                 <div className="flex items-center gap-2">
                   <select value={newStatus} onChange={(e) => setNewStatus(e.target.value)}
                     className="px-2 py-1 border border-border rounded-lg text-sm bg-background">
-                    <option value="open">Open</option>
-                    <option value="on_hold">On Hold</option>
+                    <option value="new_role">New Role</option>
+                    <option value="listed">Listed</option>
                     <option value="closed">Closed</option>
                   </select>
                   <button onClick={() => updateStatusMutation.mutate(newStatus)} className="px-3 py-1 bg-primary text-white rounded-lg text-sm">Save</button>
@@ -216,12 +221,12 @@ export default function VacancyDetailPage({ params }: { params: Promise<{ id: st
                 <button
                   onClick={() => { if (canEdit) { setNewStatus(vacancy.status); setStatusEdit(true); } }}
                   className={`px-3 py-1.5 rounded-full text-xs font-medium ${canEdit ? 'cursor-pointer' : ''} ${
-                    vacancy.status === 'open' ? 'bg-green-100 text-green-700' :
-                    vacancy.status === 'on_hold' ? 'bg-yellow-100 text-yellow-700' :
+                    vacancy.status === 'listed' ? 'bg-green-100 text-green-700' :
+                    vacancy.status === 'new_role' ? 'bg-blue-100 text-blue-700' :
                     'bg-gray-100 text-gray-700'
                   }`}
                 >
-                  {vacancy.status}
+                  {VACANCY_STATUS_LABELS[vacancy.status] || vacancy.status}
                 </button>
               )}
             </div>
@@ -454,11 +459,11 @@ export default function VacancyDetailPage({ params }: { params: Promise<{ id: st
                           )}
                           {c.stage === 'offered' && !c.archived && (
                             <button
-                              onClick={() => router.push('/onboarding')}
+                              onClick={() => router.push('/recruitment/joining')}
                               className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-green-700 hover:bg-green-50 rounded-lg transition-colors"
-                              title="Open Onboarding to generate the offer letter"
+                              title="Open the Joining Queue to generate the offer letter"
                             >
-                              In onboarding <ArrowRight size={12} />
+                              In joining queue <ArrowRight size={12} />
                             </button>
                           )}
                           <button

@@ -29,7 +29,7 @@ export async function seed(knex: Knex): Promise<void> {
     'F&B Server': 'Food & Beverage',
     'Front Desk Executive': 'Front Desk',
   };
-  const stages = ['screening', 'interview', 'shortlisted', 'offered', 'rejected'];
+  const stages = ['applied', 'interview', 'selected', 'rejected'];
   const firstNames = ['Aarav', 'Diya', 'Kabir', 'Isha', 'Rohan', 'Sara', 'Vivaan', 'Anaya', 'Arjun', 'Myra', 'Reyansh', 'Kiara'];
   const lastNames = ['Sharma', 'Verma', 'Iyer', 'Khan', 'Nair', 'Patel', 'Reddy', 'Bose', 'Gill', 'Rao'];
 
@@ -39,7 +39,7 @@ export async function seed(knex: Knex): Promise<void> {
       if (!jt[role] || !dept[roleDept[role]]) continue;
       const [vacId] = await knex('vacancies').insert({
         job_title_id: jt[role], department_id: dept[roleDept[role]], property_id: p.id,
-        positions: 2, filled: 0, status: 'open',
+        positions: 2, filled: 0, status: 'listed',
         description: `DUMMY: ${role} opening at ${p.name}`,
         reporting_manager_id: mgr?.id || null, posted_by: admin?.id,
       });

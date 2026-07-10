@@ -13,10 +13,15 @@ export async function getAllBankDetails(filters: { search?: string; branch_name?
     )
     .orderBy('e.employee_code', 'asc');
 
-  // Onboarded employees (have an onboarding checklist) without bank details yet
-  const missingQ = db('onboarding_checklists as oc')
-    .join('employees as e', 'e.id', 'oc.employee_id')
+  // Onboarded employees (have a document-collection checklist) without bank details yet.
+  // The document checklist lives on the candidate; the employee is reached via the link
+  // set at offer acceptance (candidates.employee_id).
+  const missingQ = db('checklist_instances as ci')
+    .join('checklist_templates as ct', 'ct.id', 'ci.template_id')
+    .join('candidates as c', 'c.id', 'ci.candidate_id')
+    .join('employees as e', 'e.id', 'c.employee_id')
     .leftJoin('employee_bank_details as ebd', 'ebd.employee_id', 'e.id')
+    .where('ct.key', 'document_collection')
     .where('e.is_active', true)
     .whereNull('ebd.id')
     .groupBy('e.id')
@@ -103,10 +108,13 @@ export async function getStats() {
     .where('e.is_active', 1)
     .count('ebd.id as count').first();
 
-  // Newly onboarded employees (have an onboarding checklist) still missing bank details
-  const onboardedMissing = await db('onboarding_checklists as oc')
-    .join('employees as e', 'e.id', 'oc.employee_id')
+  // Newly onboarded employees (have a document-collection checklist) still missing bank details
+  const onboardedMissing = await db('checklist_instances as ci')
+    .join('checklist_templates as ct', 'ct.id', 'ci.template_id')
+    .join('candidates as c', 'c.id', 'ci.candidate_id')
+    .join('employees as e', 'e.id', 'c.employee_id')
     .leftJoin('employee_bank_details as ebd', 'ebd.employee_id', 'e.id')
+    .where('ct.key', 'document_collection')
     .where('e.is_active', 1)
     .whereNull('ebd.id')
     .countDistinct('e.id as count').first();

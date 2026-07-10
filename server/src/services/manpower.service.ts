@@ -4,6 +4,7 @@ import { JwtPayload } from '../types';
 import { NotFoundError, ValidationError, ForbiddenError, GuardrailError } from '../utils/errors';
 import { nextJobId } from '../utils/jobId';
 import { notifyRole } from './notification.service';
+import { LIVE_VACANCY_STATUSES } from './recruitment.service';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Manpower & Budget Control
@@ -14,11 +15,12 @@ import { notifyRole } from './notification.service';
 // exception for Admin approval. Committed = Σ monthly_ctc of non-Left employees.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const EMPLOYMENT_STATUSES = ['active', 'pip', 'on_notice', 'left', 'absconding'] as const;
+export const EMPLOYMENT_STATUSES = ['pre_joining', 'active', 'pip', 'on_notice', 'left', 'absconding'] as const;
 export type EmploymentStatus = typeof EMPLOYMENT_STATUSES[number];
 // Departed = the employee is gone (Left = resigned/terminated, Absconding =
-// vanished without notice). Both free the headcount slot + budget. Active, PIP
-// and On Notice still consume a slot + budget.
+// vanished without notice). Both free the headcount slot + budget. Pre-joining
+// (an accepted-but-not-yet-active hire), Active, PIP and On Notice all consume a
+// slot + budget — a pre-joining hire reserves its sanctioned position.
 export const DEPARTED_STATUSES: string[] = ['left', 'absconding'];
 const CONSUMES_SLOT = (s: string) => !DEPARTED_STATUSES.includes(s);
 
@@ -975,7 +977,7 @@ export async function getBandForEmployee(employeeId: number): Promise<RoleBand> 
  */
 export async function getVacancySanctionContext(propertyId: number, jobTitleId: number) {
   const pb = await computePropertyBudget(propertyId);
-  const openVacs = await db('vacancies').where('property_id', propertyId).where('status', 'open').select('positions', 'filled');
+  const openVacs = await db('vacancies').where('property_id', propertyId).whereIn('status', LIVE_VACANCY_STATUSES).select('positions', 'filled');
   const open_vacancy_demand = openVacs.reduce((s: number, v: any) => s + Math.max(0, Number(v.positions || 0) - Number(v.filled || 0)), 0);
   const band = await getRoleBand(propertyId, jobTitleId);
   // Each PIP employee frees a backup slot (their position is backfillable).

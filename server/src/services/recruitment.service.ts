@@ -1,29 +1,76 @@
 import type { Knex } from 'knex';
 import db from '../config/database';
 import { NotFoundError, ValidationError } from '../utils/errors';
-import { getCtcRange } from './salaryStructure.service';
-import { getVacancySanctionContext } from './manpower.service';
+import {
+  getCtcRange, getStructureByJobTitle, computeForStructure, seedEmployeeStructureFromTemplate,
+} from './salaryStructure.service';
+import { getVacancySanctionContext, getRoleBand } from './manpower.service';
+import * as checklist from './checklist.service';
+import { notifyEmployee } from './notification.service';
 import { nextJobId } from '../utils/jobId';
 
-// Recruitment funnel stages (Hired removed — "Offered" promotes to onboarding,
-// "Rejected" archives the application).
-export const CANDIDATE_STAGES = ['screening', 'interview', 'shortlisted', 'offered', 'rejected'] as const;
+// ─── The eleven-step hiring process ───
+//
+// Steps 1-2 are states of a VACANCY; steps 3-11 are states of a CANDIDATE. They are
+// the state of a record, not eleven destinations. The server is authoritative: the
+// client mirrors FUNNEL_ORDER / allowedNextStages, it does not decide.
 
-// The funnel is a strict forward sequence. "rejected" is the off-ramp, not a step.
-// A candidate may only advance one stage at a time (or be rejected). "offered" and
-// "rejected" are terminal — no moves out.
-export const FUNNEL_ORDER = ['screening', 'interview', 'shortlisted', 'offered'] as const;
+/** Step 1 (new_role) and step 2 (listed). A vacancy is "live" in either. */
+export const VACANCY_STATUSES = ['new_role', 'listed', 'closed'] as const;
+export const LIVE_VACANCY_STATUSES = ['new_role', 'listed'];
+
+/** Steps 3-11, in order. */
+export const FUNNEL_ORDER = [
+  'applied',              // 3  Shortlisting
+  'interview',            // 4  Interview
+  'selected',             // 5  Selection
+  'document_collection',  // 6  Document Collection   [checklist]
+  'offer_released',       // 7  Offer Release
+  'offer_accepted',       // 8  Offer Acceptance
+  'pre_joining',          // 9  Pre-joining Formalities [checklist]
+  'joining',              // 10 Joining Day             [checklist]
+  'transferred',          // 11 Transfer to Manager
+] as const;
+
+/** Off-ramps. `rejected` before an offer, `offer_declined` at acceptance, `no_show` at 9/10. */
+export const OFF_RAMPS = ['rejected', 'offer_declined', 'no_show'] as const;
+export const CANDIDATE_STAGES = [...FUNNEL_ORDER, ...OFF_RAMPS] as const;
+export type CandidateStage = typeof CANDIDATE_STAGES[number];
+
+export const STAGE_LABELS: Record<string, string> = {
+  applied: 'Shortlisting', interview: 'Interview', selected: 'Selection',
+  document_collection: 'Document Collection', offer_released: 'Offer Release',
+  offer_accepted: 'Offer Acceptance', pre_joining: 'Pre-joining Formalities',
+  joining: 'Joining Day', transferred: 'Transfer to Manager',
+  rejected: 'Rejected', offer_declined: 'Offer Declined', no_show: 'No Show',
+};
+
+/** A stage whose checklist must be complete before the candidate may leave it. */
+export const STAGE_CHECKLIST: Record<string, 'document_collection' | 'pre_joining' | 'joining_day'> = {
+  document_collection: 'document_collection',
+  pre_joining: 'pre_joining',
+  joining: 'joining_day',
+};
+
+const TERMINAL: string[] = ['transferred', ...OFF_RAMPS];
 
 /**
- * Valid stages a candidate at `from` may move to: the next funnel stage and
- * `rejected`. Returns [] for terminal stages (offered/rejected).
+ * Stages a candidate at `from` may move to: the next funnel step, plus whichever
+ * off-ramp is legal there. Terminal stages return []. Unchanged in spirit from the
+ * old four-stage funnel — one step forward at a time, never backwards.
+ *
+ * `rejected` is only an off-ramp BEFORE an offer exists; once the offer is out the
+ * candidate declines it, and once they have accepted they can only fail to show up.
  */
 export function allowedNextStages(from: string): string[] {
-  if (from === 'offered' || from === 'rejected') return [];
+  if (TERMINAL.includes(from)) return [];
   const i = FUNNEL_ORDER.indexOf(from as any);
+  if (i === -1) return [];
   const next: string[] = [];
-  if (i !== -1 && i + 1 < FUNNEL_ORDER.length) next.push(FUNNEL_ORDER[i + 1]);
-  next.push('rejected');
+  if (i + 1 < FUNNEL_ORDER.length) next.push(FUNNEL_ORDER[i + 1]);
+  if (i < FUNNEL_ORDER.indexOf('offer_released')) next.push('rejected');
+  else if (from === 'offer_released') next.push('offer_declined');
+  else if (from === 'pre_joining' || from === 'joining') next.push('no_show');
   return next;
 }
 
@@ -183,7 +230,7 @@ export async function getVacancyStats() {
   const stats = await db('vacancies')
     .select(
       db.raw("count(*) as total"),
-      db.raw("sum(case when status = 'open' then 1 else 0 end) as open_count"),
+      db.raw("sum(case when status in ('new_role','listed') then 1 else 0 end) as open_count"),
       db.raw("sum(case when status = 'closed' then 1 else 0 end) as closed_count"),
       db.raw("sum(case when status = 'on_hold' then 1 else 0 end) as on_hold_count"),
       db.raw("sum(positions) as total_positions"),
@@ -264,7 +311,10 @@ export async function createCandidate(data: {
   notes?: string;
   added_by: number;
 }) {
-  const [id] = await db('candidates').insert(data);
+  // The column default is still the retired 'screening' (SQLite cannot alter a default
+  // without rebuilding the table). Set the entry stage explicitly: a candidate parked
+  // in a dead stage has no allowedNextStages and can never move.
+  const [id] = await db('candidates').insert({ ...data, stage: FUNNEL_ORDER[0] });
   return getCandidate(id);
 }
 
@@ -308,6 +358,11 @@ export async function createEmployeeFromCandidate(
   // Unique, readable employee code for the new hire
   const employeeCode = `NH-${String(candidate.id).padStart(4, '0')}`;
 
+  // Created at Offer Acceptance but NOT yet a working employee: pre_joining holds the
+  // sanctioned headcount slot (manpower segments on employment_status) while is_active
+  // = false keeps them out of payroll, attendance, leave and analytics. Transfer to
+  // Manager (step 11) is what activates them. monthly_ctc stays null until then, so a
+  // hire in flight can never trip the budget guardrail against a real hire.
   const [employeeId] = await cx('employees').insert({
     employee_code: employeeCode,
     job_id: await nextJobId(cx),
@@ -320,64 +375,142 @@ export async function createEmployeeFromCandidate(
     branch_name: vacancy.property_name,
     reporting_manager_id: vacancy.reporting_manager_id || null,
     date_of_joining: joiningDate || new Date().toISOString().split('T')[0],
-    is_active: true,
+    employment_status: 'pre_joining',
+    is_active: false,
   });
 
   return employeeId;
 }
 
-export async function moveCandidateStage(
-  id: number,
-  toStage: string,
-  userId: number,
-  notes?: string
-) {
-  if (!CANDIDATE_STAGES.includes(toStage as any)) {
-    throw new ValidationError(`Invalid stage: ${toStage}`);
-  }
-
-  const candidate = await db('candidates').where('id', id).first();
-  if (!candidate) throw new NotFoundError('Candidate');
-
+/**
+ * Is this move legal? Pure — no writes. Split out of `transition` so the actions with
+ * side effects (releaseOffer prices a salary, acceptOffer mints an employee) can check
+ * the gate BEFORE doing that work, and report the actionable error. Without this,
+ * releasing an offer on an unfinished checklist complains about the salary band.
+ */
+async function assertGate(candidate: any, toStage: string, trx?: Knex.Transaction) {
   const fromStage = candidate.stage;
 
-  // Enforce the strict forward funnel: one step at a time, no skipping, no going
-  // back. "rejected" is allowed from any active stage; offered/rejected are final.
-  if (fromStage === 'offered' || fromStage === 'rejected') {
-    throw new ValidationError("This candidate's stage is final and cannot be changed.");
-  }
-  if (toStage === fromStage) {
-    throw new ValidationError('Candidate is already at this stage.');
-  }
+  if (!CANDIDATE_STAGES.includes(toStage as any)) throw new ValidationError(`Invalid stage: ${toStage}`);
+  if (TERMINAL.includes(fromStage)) throw new ValidationError("This candidate's stage is final and cannot be changed.");
+  if (toStage === fromStage) throw new ValidationError('Candidate is already at this stage.');
   if (!allowedNextStages(fromStage).includes(toStage)) {
     throw new ValidationError(
-      `Cannot move from "${fromStage}" to "${toStage}". Stages must advance one step at a time (or be rejected).`
+      `Cannot move from "${STAGE_LABELS[fromStage] || fromStage}" to "${STAGE_LABELS[toStage] || toStage}". ` +
+      'Stages advance one step at a time.',
     );
   }
 
-  await db('candidates')
-    .where('id', id)
-    .update({ stage: toStage, updated_at: db.fn.now() });
+  // Completing a phase's checklist is what unlocks the next stage. Enforced here, in
+  // the service — the UI only mirrors it. Leaving via an off-ramp is always allowed:
+  // a no-show doesn't have to finish their joining-day paperwork first.
+  const gate = STAGE_CHECKLIST[fromStage];
+  if (gate && !OFF_RAMPS.includes(toStage as any)) {
+    const done = await checklist.isComplete(gate, { candidate_id: candidate.id }, trx);
+    if (!done) {
+      throw new ValidationError(
+        `The ${STAGE_LABELS[fromStage]} checklist must be completed before moving to ${STAGE_LABELS[toStage]}.`,
+      );
+    }
+  }
+}
 
-  await db('candidate_history').insert({
-    candidate_id: id,
-    from_stage: fromStage,
-    to_stage: toStage,
-    notes: notes || null,
-    changed_by: userId,
+/** The gate + the audit row. Every stage change in the module goes through here. */
+async function transition(
+  candidate: any, toStage: string, userId: number, notes: string | undefined, trx?: Knex.Transaction,
+) {
+  const cx = trx || db;
+  const fromStage = candidate.stage;
+  await assertGate(candidate, toStage, trx);
+
+  await cx('candidates').where('id', candidate.id).update({ stage: toStage, updated_at: cx.fn.now() });
+  await cx('candidate_history').insert({
+    candidate_id: candidate.id, from_stage: fromStage, to_stage: toStage,
+    notes: notes || null, changed_by: userId,
   });
 
-  // Offered → hand to Onboarding for offer-letter generation. The employee
-  // record is created only when HR marks the offer accepted (no employee yet).
-  if (toStage === 'offered' && !candidate.employee_id && !candidate.offer_status) {
-    await db('candidates').where('id', id).update({ offer_status: 'pending' });
-  }
+  // Entering a checklist phase instantiates that phase's checklist from its template.
+  const entering = STAGE_CHECKLIST[toStage];
+  if (entering) await checklist.ensureInstance(entering, { candidate_id: candidate.id }, userId, trx);
 
-  // Rejected → archive the application out of the active funnel
-  if (toStage === 'rejected') {
-    await db('candidates').where('id', id).update({ archived: true });
+  // Any off-ramp archives the application out of the active pipeline.
+  if (OFF_RAMPS.includes(toStage as any)) {
+    await cx('candidates').where('id', candidate.id).update({ archived: true });
   }
+}
 
+/**
+ * Plain forward moves and the pre-offer/no-show off-ramps. Offer release, acceptance
+ * and decline carry side effects and have their own entry points below — this refuses
+ * them so a bare stage PUT can never mint an offer letter or an employee.
+ */
+export async function moveCandidateStage(id: number, toStage: string, userId: number, notes?: string) {
+  const candidate = await db('candidates').where('id', id).first();
+  if (!candidate) throw new NotFoundError('Candidate');
+
+  if (toStage === 'offer_released') throw new ValidationError('Release the offer letter to move to Offer Release.');
+  if (toStage === 'offer_accepted') throw new ValidationError('Record the offer acceptance to move to Offer Acceptance.');
+  if (toStage === 'offer_declined') throw new ValidationError('Record the offer decline instead.');
+  if (toStage === 'transferred') throw new ValidationError('Use Transfer to Manager to complete the hire.');
+
+  if (toStage === 'no_show') return markNoShow(id, userId, notes);
+  await transition(candidate, toStage, userId, notes);
+  return getCandidate(id);
+}
+
+/**
+ * Step 11. Activates the employee created at acceptance and hands them to their
+ * reporting manager. The joining-day checklist gate applies (see `transition`).
+ */
+export async function transferToManager(id: number, userId: number, notes?: string) {
+  const candidate = await db('candidates').where('id', id).first();
+  if (!candidate) throw new NotFoundError('Candidate');
+  if (!candidate.employee_id) throw new ValidationError('This candidate has no employee record to transfer.');
+
+  const employee = await db('employees').where('id', candidate.employee_id).first();
+  if (!employee) throw new NotFoundError('Employee');
+
+  await db.transaction(async (trx) => {
+    await transition(candidate, 'transferred', userId, notes, trx);
+    await trx('employees').where('id', employee.id).update({
+      is_active: true,
+      employment_status: 'active',
+      updated_at: trx.fn.now(),
+    });
+  });
+
+  if (employee.reporting_manager_id) {
+    await notifyEmployee(employee.reporting_manager_id, {
+      type: 'hire_transferred',
+      title: 'New team member joined',
+      message: `${employee.first_name} ${employee.last_name} has joined and now reports to you.`,
+      link: `/employees/${employee.id}`,
+    });
+  }
+  return getCandidate(id);
+}
+
+/**
+ * Off-ramp at step 9 or 10. The employee row already exists, so keep it for the audit
+ * trail but mark it departed — that frees the sanctioned slot and stops it lingering
+ * as an inactive row nobody can offboard (offboarding refuses inactive employees).
+ */
+export async function markNoShow(id: number, userId: number, notes?: string) {
+  const candidate = await db('candidates').where('id', id).first();
+  if (!candidate) throw new NotFoundError('Candidate');
+
+  await db.transaction(async (trx) => {
+    await transition(candidate, 'no_show', userId, notes, trx);
+    if (candidate.employee_id) {
+      await trx('employees').where('id', candidate.employee_id).update({
+        employment_status: 'left', is_active: false, updated_at: trx.fn.now(),
+      });
+    }
+    if (candidate.vacancy_id) {
+      await trx('vacancies').where('id', candidate.vacancy_id)
+        .where('filled', '>', 0).decrement('filled', 1);
+    }
+  });
   return getCandidate(id);
 }
 
@@ -404,4 +537,238 @@ export async function getCandidatesByStage(vacancyId?: number) {
   if (vacancyId) query.where('vacancy_id', vacancyId);
 
   return query;
+}
+
+// ─── Steps 7-8: one offer letter ───
+//
+// There used to be two: a bare PDF built from candidates.offer_data before acceptance,
+// and a real offer_letters row with the salary editor and the sanctioned-band cap,
+// issued only after the onboarding checklist finished. They are now one letter, issued
+// at Offer Release, carrying the editor and the cap. Acceptance stays an HR action —
+// there is no candidate portal.
+
+const inrAmount = (n: number) => Math.round(Number(n) || 0).toLocaleString('en-IN');
+
+/** The candidate's vacancy resolved to the bits the offer needs. */
+async function offerContext(candidateId: number) {
+  const c = await db('candidates as c')
+    .join('vacancies as v', 'v.id', 'c.vacancy_id')
+    .join('job_titles as jt', 'jt.id', 'v.job_title_id')
+    .join('properties as p', 'p.id', 'v.property_id')
+    .where('c.id', candidateId)
+    .select('c.*', 'v.job_title_id', 'v.property_id', 'v.reporting_manager_id',
+      'jt.title as designation', 'p.name as property_name', 'p.state as property_state')
+    .first();
+  if (!c) throw new NotFoundError('Candidate');
+  return c;
+}
+
+/** Live salary breakdown for a proposed monthly base, keyed to the property state. */
+async function breakdownFor(jobTitleId: number, baseGross: number, state: string | null) {
+  const structure = await getStructureByJobTitle(jobTitleId);
+  if (!structure) return null;
+  const structGross = Number(structure.default_base) || 0;
+  const gross = baseGross > 0 ? baseGross : structGross;
+  const breakdown = await computeForStructure(structure, gross, null, undefined, { state: state ?? null });
+  return { gross, structGross, breakdown, annual_ctc: Math.round(breakdown.ctc * 12) };
+}
+
+/** Prefill for the salary editor: structure base, the sanctioned band cap, prior issue. */
+export async function getOfferDefaults(candidateId: number) {
+  const c = await offerContext(candidateId);
+  const range = await getCtcRange(c.job_title_id);
+  const band = await getRoleBand(c.property_id, c.job_title_id);
+  const structure = await getStructureByJobTitle(c.job_title_id);
+  const issued = await db('offer_letters').where('candidate_id', candidateId).first();
+  return {
+    candidate_name: c.name,
+    designation: c.designation,
+    configured: range.configured,
+    base_gross: structure ? Math.round(Number(structure.default_base) || 0) : 0,
+    band_max: band.configured ? band.band_max : null,
+    already_issued: !!issued,
+    status: issued?.status ?? null,
+  };
+}
+
+/** Live recompute as the editor base changes. No salary math in the client. */
+export async function getOfferBreakdown(candidateId: number, baseGross: number) {
+  const c = await offerContext(candidateId);
+  const ob = await breakdownFor(c.job_title_id, baseGross, c.property_state);
+  if (!ob) throw new ValidationError('This designation has no salary structure — configure one first.');
+  const band = await getRoleBand(c.property_id, c.job_title_id);
+  return { ...ob, band_max: band.configured ? band.band_max : null };
+}
+
+/** Snapshot the letter template_data — exactly what the PDF renders. */
+async function buildOfferLetter(
+  candidateId: number, opts: { base_gross: number; joining_date?: string | null; designation?: string },
+) {
+  const c = await offerContext(candidateId);
+  const ob = await breakdownFor(c.job_title_id, Number(opts.base_gross) || 0, c.property_state);
+  if (!ob) throw new ValidationError('This designation has no salary structure — configure one first.');
+
+  // Manpower & Budget Control: the offered salary cannot exceed the sanctioned band.
+  const band = await getRoleBand(c.property_id, c.job_title_id);
+  if (band.configured && ob.breakdown.ctc > band.band_max) {
+    throw new ValidationError(
+      `Offered monthly CTC ₹${inrAmount(ob.breakdown.ctc)} exceeds the sanctioned salary band maximum ` +
+      `₹${inrAmount(band.band_max)} for this role at ${c.property_name}. ` +
+      'Lower the base salary or raise the band in Admin → Budget Control.',
+    );
+  }
+
+  const pct = ob.structGross > 0 ? Math.round((ob.gross / ob.structGross - 1) * 10000) / 100 : 0;
+  return {
+    candidate: c,
+    offered_base: ob.gross,
+    offered_ctc: ob.annual_ctc,
+    offer_adjustment_pct: pct,
+    template_data: {
+      designation: opts.designation || c.designation || 'Position',
+      salary: inrAmount(ob.annual_ctc),
+      joining_date: opts.joining_date || null,
+      base_gross: ob.gross,
+      adjustment_pct: pct,
+      breakdown: ob.breakdown,
+    },
+  };
+}
+
+/** Preview the PDF without filing anything. */
+export async function previewOffer(
+  candidateId: number, opts: { base_gross: number; joining_date?: string | null; designation?: string },
+) {
+  const built = await buildOfferLetter(candidateId, opts);
+  return { candidate: built.candidate, template_data: built.template_data };
+}
+
+/** Step 7. Issues THE offer letter and advances the candidate — atomically. */
+export async function releaseOffer(
+  candidateId: number, opts: { base_gross: number; joining_date?: string | null; designation?: string }, userId: number,
+) {
+  const existing = await db('offer_letters').where('candidate_id', candidateId).first();
+  if (existing) throw new ValidationError('An offer letter has already been issued for this candidate.');
+
+  // Gate first: an unfinished document checklist should say so, not complain about the
+  // salary band. transition() re-checks inside the transaction.
+  const gateCandidate = await db('candidates').where('id', candidateId).first();
+  if (!gateCandidate) throw new NotFoundError('Candidate');
+  await assertGate(gateCandidate, 'offer_released');
+
+  const built = await buildOfferLetter(candidateId, opts);
+  await db.transaction(async (trx) => {
+    await transition(built.candidate, 'offer_released', userId, 'Offer letter issued', trx);
+    await trx('offer_letters').insert({
+      candidate_id: candidateId,
+      template_data: JSON.stringify(built.template_data),
+      offered_base: built.offered_base,
+      offered_ctc: built.offered_ctc,
+      offer_adjustment_pct: built.offer_adjustment_pct,
+      status: 'issued',
+      issued_by: userId,
+    });
+  });
+  return getCandidate(candidateId);
+}
+
+export async function getOfferLetter(candidateId: number) {
+  const letter = await db('offer_letters as ol')
+    .join('candidates as c', 'c.id', 'ol.candidate_id')
+    .where('ol.candidate_id', candidateId)
+    .select('ol.*', 'c.name as candidate_name', 'c.employee_id')
+    .first();
+  if (!letter) throw new NotFoundError('Offer letter');
+  const tpl = typeof letter.template_data === 'string' ? JSON.parse(letter.template_data) : letter.template_data;
+  return { ...letter, template_data: tpl };
+}
+
+/**
+ * Step 8 (accept). HR records the acceptance; the employee record is created here,
+ * inactive and pre_joining, and the vacancy takes a filled seat.
+ */
+export async function acceptOffer(candidateId: number, userId: number, joiningDate?: string) {
+  const candidate = await db('candidates').where('id', candidateId).first();
+  if (!candidate) throw new NotFoundError('Candidate');
+  const letter = await db('offer_letters').where('candidate_id', candidateId).first();
+  if (!letter) throw new ValidationError('No offer letter has been issued for this candidate.');
+  if (letter.status !== 'issued') throw new ValidationError(`This offer is already ${letter.status}.`);
+
+  const tpl = typeof letter.template_data === 'string' ? JSON.parse(letter.template_data) : letter.template_data;
+  const joining = joiningDate || tpl.joining_date || undefined;
+
+  const employeeId = await db.transaction(async (trx) => {
+    await transition(candidate, 'offer_accepted', userId, 'Offer accepted', trx);
+    const newEmployeeId = await createEmployeeFromCandidate(candidate, joining, trx);
+
+    // Carry the issued salary onto the employee record — the old post-checklist path
+    // wrote these columns; they now travel with the one letter.
+    await trx('employees').where('id', newEmployeeId).update({
+      offered_base: letter.offered_base,
+      offered_ctc: letter.offered_ctc,
+      offer_adjustment_pct: letter.offer_adjustment_pct,
+    });
+    await trx('candidates').where('id', candidateId)
+      .update({ employee_id: newEmployeeId, offer_responded_at: trx.fn.now() });
+    await trx('offer_letters').where('id', letter.id).update({
+      status: 'accepted', employee_id: newEmployeeId, responded_at: trx.fn.now(), updated_at: trx.fn.now(),
+    });
+    if (candidate.vacancy_id) await trx('vacancies').where('id', candidate.vacancy_id).increment('filled', 1);
+    return newEmployeeId;
+  });
+
+  // Best effort: a missing designation template must not fail the acceptance.
+  try { await seedEmployeeStructureFromTemplate(employeeId); } catch { /* configured later */ }
+
+  return getCandidate(candidateId);
+}
+
+/** Step 8 (decline). Off-ramp; no employee is ever created. */
+export async function declineOffer(candidateId: number, userId: number, reason?: string) {
+  const candidate = await db('candidates').where('id', candidateId).first();
+  if (!candidate) throw new NotFoundError('Candidate');
+  const letter = await db('offer_letters').where('candidate_id', candidateId).first();
+  if (letter && letter.status !== 'issued') throw new ValidationError(`This offer is already ${letter.status}.`);
+
+  await db.transaction(async (trx) => {
+    await transition(candidate, 'offer_declined', userId, reason, trx);
+    if (letter) {
+      await trx('offer_letters').where('id', letter.id).update({
+        status: 'declined', responded_at: trx.fn.now(), updated_at: trx.fn.now(),
+      });
+    }
+    await trx('candidates').where('id', candidateId).update({ offer_responded_at: trx.fn.now() });
+  });
+  return getCandidate(candidateId);
+}
+
+/** Steps 9-11, worked by HR ops: everyone past acceptance and not yet transferred. */
+export async function listJoiningQueue() {
+  const rows = await db('candidates as c')
+    .join('vacancies as v', 'v.id', 'c.vacancy_id')
+    .join('job_titles as jt', 'jt.id', 'v.job_title_id')
+    .join('properties as p', 'p.id', 'v.property_id')
+    .leftJoin('employees as e', 'e.id', 'c.employee_id')
+    .whereIn('c.stage', ['offer_accepted', 'pre_joining', 'joining'])
+    .select('c.id', 'c.name', 'c.stage', 'c.employee_id', 'jt.title as designation',
+      'p.name as property_name', 'e.employee_code', 'e.date_of_joining', 'e.employment_status')
+    .orderBy('e.date_of_joining');
+  if (!rows.length) return [];
+
+  const instances = await db('checklist_instances as ci')
+    .join('checklist_templates as ct', 'ct.id', 'ci.template_id')
+    .whereIn('ci.candidate_id', rows.map((r: any) => r.id))
+    .select('ci.id', 'ci.candidate_id', 'ci.status', 'ct.key');
+  const items = instances.length
+    ? await db('checklist_instance_items').whereIn('instance_id', instances.map((i: any) => i.id))
+      .select('instance_id', 'is_completed')
+    : [];
+
+  return rows.map((r: any) => ({
+    ...r,
+    checklists: instances.filter((i: any) => i.candidate_id === r.id).map((i: any) => {
+      const own = items.filter((it: any) => it.instance_id === i.id);
+      return { key: i.key, status: i.status, total: own.length, done: own.filter((it: any) => it.is_completed).length };
+    }),
+  }));
 }

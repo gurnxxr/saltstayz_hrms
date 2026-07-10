@@ -48,14 +48,19 @@ export const NAVIGATION: NavItem[] = [
     icon: 'Briefcase',
     roles: ['admin', 'chro', 'hr', 'hr_manager'],
     module: 'recruitment',
+    children: [
+      { label: 'Pipeline', href: '/recruitment', icon: 'Workflow', roles: ['admin', 'chro', 'hr', 'hr_manager'], module: 'recruitment' },
+      { label: 'Vacancies', href: '/recruitment/vacancies', icon: 'Briefcase', roles: ['admin', 'chro', 'hr', 'hr_manager'], module: 'recruitment' },
+      { label: 'Joining Queue', href: '/recruitment/joining', icon: 'UserPlus', roles: ['admin', 'chro', 'hr'], module: 'recruitment' },
+      { label: 'Checklist Templates', href: '/recruitment/checklists', icon: 'ListChecks', roles: ['admin', 'chro', 'hr'], module: 'recruitment' },
+    ],
   },
   {
     label: 'Employee Lifecycle',
-    href: '/onboarding',
+    href: '/offboarding',
     icon: 'UserCog',
     roles: ['admin', 'chro', 'hr', 'hr_manager'],
     children: [
-      { label: 'Onboarding', href: '/onboarding', icon: 'UserPlus', roles: ['admin', 'chro', 'hr', 'hr_manager'], module: 'onboarding' },
       { label: 'Offboarding', href: '/offboarding', icon: 'UserMinus', roles: ['admin', 'chro', 'hr', 'hr_manager'], module: 'onboarding' },
       { label: 'Employee Promotion', href: '/employee-lifecycle/promotion', icon: 'TrendingUp', roles: ['admin', 'chro', 'hr', 'hr_manager'] },
       { label: 'Employee Transfer', href: '/employee-lifecycle/transfer', icon: 'ArrowRightLeft', roles: ['admin', 'chro', 'hr', 'hr_manager'] },
@@ -111,18 +116,85 @@ export const INDIAN_STATES = [
   'Delhi', 'Jammu and Kashmir', 'Ladakh', 'Lakshadweep', 'Puducherry',
 ];
 
-// Recruitment funnel: a strict forward sequence. "rejected" is the off-ramp, not a
-// step. A candidate may only advance one stage at a time (or be rejected). Mirrors
-// the server-side rule in recruitment.service.ts (the server is authoritative).
-export const RECRUITMENT_FUNNEL_ORDER = ['screening', 'interview', 'shortlisted', 'offered'] as const;
+// ─── The eleven-step hiring process (mirrors recruitment.service.ts) ───
+//
+// Steps 1-2 are states of a VACANCY; steps 3-11 are states of a CANDIDATE. The
+// server is authoritative: the client mirrors FUNNEL_ORDER / allowedNextStages, it
+// does not decide. Keep these in lock-step with server/src/services/recruitment.service.ts.
 
-/** Stages a candidate at `from` may move to: the next funnel stage + "rejected". */
+/** Step 1 (new_role) and step 2 (listed). A vacancy is "live" in either. */
+export const VACANCY_STATUSES = ['new_role', 'listed', 'closed'] as const;
+export const LIVE_VACANCY_STATUSES = ['new_role', 'listed'] as const;
+
+/** Steps 3-11, in order. */
+export const FUNNEL_ORDER = [
+  'applied',              // 3  Shortlisting
+  'interview',            // 4  Interview
+  'selected',             // 5  Selection
+  'document_collection',  // 6  Document Collection    [checklist]
+  'offer_released',       // 7  Offer Release
+  'offer_accepted',       // 8  Offer Acceptance
+  'pre_joining',          // 9  Pre-joining Formalities [checklist]
+  'joining',              // 10 Joining Day             [checklist]
+  'transferred',          // 11 Transfer to Manager
+] as const;
+
+/** Off-ramps. `rejected` before an offer, `offer_declined` at acceptance, `no_show` at 9/10. */
+export const OFF_RAMPS = ['rejected', 'offer_declined', 'no_show'] as const;
+export const CANDIDATE_STAGES = [...FUNNEL_ORDER, ...OFF_RAMPS] as const;
+
+export const STAGE_LABELS: Record<string, string> = {
+  new_role: 'New Role', listed: 'Listed', closed: 'Closed',
+  applied: 'Shortlisting', interview: 'Interview', selected: 'Selection',
+  document_collection: 'Document Collection', offer_released: 'Offer Release',
+  offer_accepted: 'Offer Acceptance', pre_joining: 'Pre-joining Formalities',
+  joining: 'Joining Day', transferred: 'Transfer to Manager',
+  rejected: 'Rejected', offer_declined: 'Offer Declined', no_show: 'No Show',
+};
+
+/** A stage whose checklist must be complete before the candidate may leave it. */
+export const STAGE_CHECKLIST: Record<string, 'document_collection' | 'pre_joining' | 'joining_day'> = {
+  document_collection: 'document_collection',
+  pre_joining: 'pre_joining',
+  joining: 'joining_day',
+};
+
+/**
+ * The full eleven-step ladder for the stepper: steps 1-2 are vacancy states, 3-11 are
+ * candidate states. `kind` lets the UI render vacancy vs candidate steps differently.
+ */
+export const STEPS = [
+  { n: 1, key: 'new_role', label: 'New Role', kind: 'vacancy' },
+  { n: 2, key: 'listed', label: 'Listed', kind: 'vacancy' },
+  { n: 3, key: 'applied', label: 'Shortlisting', kind: 'candidate' },
+  { n: 4, key: 'interview', label: 'Interview', kind: 'candidate' },
+  { n: 5, key: 'selected', label: 'Selection', kind: 'candidate' },
+  { n: 6, key: 'document_collection', label: 'Document Collection', kind: 'candidate' },
+  { n: 7, key: 'offer_released', label: 'Offer Release', kind: 'candidate' },
+  { n: 8, key: 'offer_accepted', label: 'Offer Acceptance', kind: 'candidate' },
+  { n: 9, key: 'pre_joining', label: 'Pre-joining Formalities', kind: 'candidate' },
+  { n: 10, key: 'joining', label: 'Joining Day', kind: 'candidate' },
+  { n: 11, key: 'transferred', label: 'Transfer to Manager', kind: 'candidate' },
+] as const;
+
+const TERMINAL_STAGES: string[] = ['transferred', ...OFF_RAMPS];
+
+/**
+ * Stages a candidate at `from` may move to: the next funnel step, plus whichever
+ * off-ramp is legal there. Terminal stages return []. One step forward at a time,
+ * never backwards. `rejected` is only an off-ramp BEFORE an offer exists; once the
+ * offer is out the candidate declines it, and once accepted they can only no-show.
+ * Copied from recruitment.service.ts allowedNextStages (the server is authoritative).
+ */
 export function allowedNextStages(from: string): string[] {
-  if (from === 'offered' || from === 'rejected') return [];
-  const i = RECRUITMENT_FUNNEL_ORDER.indexOf(from as typeof RECRUITMENT_FUNNEL_ORDER[number]);
+  if (TERMINAL_STAGES.includes(from)) return [];
+  const i = FUNNEL_ORDER.indexOf(from as typeof FUNNEL_ORDER[number]);
+  if (i === -1) return [];
   const next: string[] = [];
-  if (i !== -1 && i + 1 < RECRUITMENT_FUNNEL_ORDER.length) next.push(RECRUITMENT_FUNNEL_ORDER[i + 1]);
-  next.push('rejected');
+  if (i + 1 < FUNNEL_ORDER.length) next.push(FUNNEL_ORDER[i + 1]);
+  if (i < FUNNEL_ORDER.indexOf('offer_released')) next.push('rejected');
+  else if (from === 'offer_released') next.push('offer_declined');
+  else if (from === 'pre_joining' || from === 'joining') next.push('no_show');
   return next;
 }
 

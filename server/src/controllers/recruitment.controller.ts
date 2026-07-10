@@ -1,8 +1,13 @@
 import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../types';
 import * as recruitmentService from '../services/recruitment.service';
+import * as checklistService from '../services/checklist.service';
 import { generateJdPdf } from '../services/jdPdf.service';
+import { generateOfferLetterPdf } from '../services/offerLetterPdf.service';
 import { getCtcRange } from '../services/salaryStructure.service';
+
+const fmtDate = (d?: string | null) =>
+  d ? new Date(d).toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' }) : '—';
 
 // ─── Vacancies ───
 
@@ -198,6 +203,161 @@ export async function getCandidatesByStage(req: AuthRequest, res: Response, next
       vacancy_id ? Number(vacancy_id) : undefined
     );
     res.json(stats);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ─── Stage vocabulary (server is authoritative; the client mirrors it) ───
+
+export function getStages(_req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json({
+      funnel_order: recruitmentService.FUNNEL_ORDER,
+      off_ramps: recruitmentService.OFF_RAMPS,
+      labels: recruitmentService.STAGE_LABELS,
+      stage_checklist: recruitmentService.STAGE_CHECKLIST,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ─── Candidate checklists (steps 6, 9, 10) ───
+
+export async function getCandidateChecklists(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json(await checklistService.listForSubject({ candidate_id: Number(req.params.id) }));
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ─── Offer lifecycle (steps 7-8) ───
+
+export async function getOfferDefaults(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json(await recruitmentService.getOfferDefaults(Number(req.params.id)));
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getOfferBreakdown(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const base = req.query.base != null ? Number(req.query.base) : 0;
+    res.json(await recruitmentService.getOfferBreakdown(Number(req.params.id), base));
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function previewOffer(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const { candidate, template_data } = await recruitmentService.previewOffer(Number(req.params.id), {
+      base_gross: Number(req.body.base_gross) || 0,
+      joining_date: req.body.joining_date,
+      designation: req.body.designation,
+    });
+    const buffer = await generateOfferLetterPdf({
+      candidateName: candidate.name,
+      designation: template_data.designation,
+      salary: template_data.salary,
+      joiningDate: fmtDate(template_data.joining_date),
+      employeeCode: '—',
+      generatedBy: req.user!.email,
+      generatedDate: fmtDate(new Date().toISOString()),
+      salaryBreakdown: template_data.breakdown,
+    });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename="offer-preview.pdf"');
+    res.setHeader('Content-Length', buffer.length);
+    res.send(buffer);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function releaseOffer(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const candidate = await recruitmentService.releaseOffer(
+      Number(req.params.id),
+      {
+        base_gross: Number(req.body.base_gross) || 0,
+        joining_date: req.body.joining_date,
+        designation: req.body.designation,
+      },
+      req.user!.userId
+    );
+    res.status(201).json(candidate);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getOffer(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json(await recruitmentService.getOfferLetter(Number(req.params.id)));
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function downloadOfferPdf(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const letter = await recruitmentService.getOfferLetter(Number(req.params.id));
+    const tpl = letter.template_data || {};
+    const buffer = await generateOfferLetterPdf({
+      candidateName: letter.candidate_name,
+      designation: tpl.designation || '—',
+      salary: tpl.salary || '—',
+      joiningDate: fmtDate(tpl.joining_date),
+      employeeCode: '—',
+      generatedBy: req.user!.email,
+      generatedDate: fmtDate(letter.created_at),
+      salaryBreakdown: tpl.breakdown,
+    });
+    const filename = `Offer_Letter_${String(letter.candidate_name || 'Candidate').replace(/\s+/g, '_')}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', buffer.length);
+    res.send(buffer);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function acceptOffer(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json(await recruitmentService.acceptOffer(Number(req.params.id), req.user!.userId, req.body.joining_date));
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function declineOffer(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json(await recruitmentService.declineOffer(Number(req.params.id), req.user!.userId, req.body.reason));
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ─── Step 11: transfer to reporting manager ───
+
+export async function transferToManager(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json(await recruitmentService.transferToManager(Number(req.params.id), req.user!.userId, req.body.notes));
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ─── Steps 9-11: joining queue ───
+
+export async function getJoiningQueue(_req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json(await recruitmentService.listJoiningQueue());
   } catch (err) {
     next(err);
   }
