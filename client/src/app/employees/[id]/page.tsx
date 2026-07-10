@@ -77,6 +77,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
     form.aadhaar_number !== (emp.aadhaar_number || '') ||
     form.dept_name !== (emp.dept_name || '') ||
     form.branch_name !== (emp.branch_name || '') ||
+    form.gender !== (emp.gender || '') ||
     String(form.job_title_id) !== String(emp.job_title_id || '')
   );
   useUnsavedChangesWarning(dirty);
@@ -87,6 +88,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       first_name: emp.first_name,
       last_name: emp.last_name,
       date_of_birth: emp.date_of_birth || '',
+      gender: emp.gender || '',
       father_name: emp.father_name || '',
       reporting_manager_id: emp.reporting_manager_id || '',
       email: emp.email || '',
@@ -197,6 +199,8 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
               <FormField label="First Name" value={form.first_name} onChange={(v) => setForm((p: any) => ({ ...p, first_name: v }))} />
               <FormField label="Last Name" value={form.last_name} onChange={(v) => setForm((p: any) => ({ ...p, last_name: v }))} />
               <FormField label="Date of Birth" value={form.date_of_birth} onChange={(v) => setForm((p: any) => ({ ...p, date_of_birth: v }))} type="date" />
+              {/* Gender drives eligibility for gender-restricted leave (Maternity / Paternity). */}
+              <SelectField label="Gender" value={form.gender} onChange={(v) => setForm((p: any) => ({ ...p, gender: v }))} options={[{ value: 'male', label: 'Male' }, { value: 'female', label: 'Female' }, { value: 'other', label: 'Other' }]} />
               <FormField label="Father's Name (As per UID)" value={form.father_name} onChange={(v) => setForm((p: any) => ({ ...p, father_name: v }))} />
               <SelectField label="Reporting Manager" value={form.reporting_manager_id} onChange={(v) => setForm((p: any) => ({ ...p, reporting_manager_id: v ? Number(v) : null }))} options={managers.filter((m: any) => m.id !== Number(id)).map((m: any) => ({ value: m.id, label: `${m.first_name} ${m.last_name}` }))} />
               <FormField label="Email Address" value={form.email} onChange={(v) => setForm((p: any) => ({ ...p, email: v }))} type="email" />
@@ -215,6 +219,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
               <InfoRow icon={Hash} label="Emp Code" value={emp.employee_code} />
               <InfoRow icon={User} label="Emp Name (As per UID)" value={`${emp.first_name} ${emp.last_name}`} />
               <InfoRow icon={Calendar} label="DOB (As per UID)" value={emp.date_of_birth ? new Date(emp.date_of_birth).toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' }) : 'Not set'} />
+              <InfoRow icon={User} label="Gender" value={emp.gender ? emp.gender[0].toUpperCase() + emp.gender.slice(1) : 'Not set'} />
               <InfoRow icon={User} label="F_Name (As per UID)" value={emp.father_name || 'Not set'} />
               <InfoRow icon={User} label="Reporting Manager" value={managerName} />
               <InfoRow icon={Mail} label="Email Address" value={emp.email || 'N/A'} />
@@ -282,7 +287,7 @@ function FormField({ label, value, onChange, type = 'text', maxLength }: {
 
 function SelectField({ label, value, onChange, options }: {
   label: string; value: string | number; onChange: (v: string) => void;
-  options: { value: number; label: string }[];
+  options: { value: number | string; label: string }[];
 }) {
   return (
     <div>

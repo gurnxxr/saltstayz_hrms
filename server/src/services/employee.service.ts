@@ -1,5 +1,23 @@
 import db from '../config/database';
 import { nextJobId } from '../utils/jobId';
+import { ValidationError } from '../utils/errors';
+
+// createEmployee/updateEmployee write the payload straight through, so gender is
+// normalised here — leave eligibility compares it verbatim against 'female'/'male',
+// and a stray 'M' or 'Male' would silently fail every gender-restricted leave check.
+//
+// ValidationError, not the `Object.assign(new Error(), { status })` used elsewhere in
+// this file: errorHandler only maps AppError subclasses to a status code, so those
+// throws surface as a generic 500.
+const GENDERS = ['male', 'female', 'other'];
+
+function normalizeGender(data: any) {
+  if (!('gender' in data)) return;
+  const raw = String(data.gender ?? '').trim().toLowerCase();
+  if (!raw) { data.gender = null; return; } // blank clears it
+  if (!GENDERS.includes(raw)) throw new ValidationError(`Gender must be one of: ${GENDERS.join(', ')}`);
+  data.gender = raw;
+}
 
 export async function listEmployees(filters: {
   search?: string;
@@ -83,6 +101,7 @@ export async function createEmployee(data: any) {
     if (emailExists) throw Object.assign(new Error('Email already in use'), { status: 409 });
   }
 
+  normalizeGender(data);
   if (!data.job_id) data.job_id = await nextJobId(db);
   const [id] = await db('employees').insert(data);
   return getEmployee(id);
@@ -216,6 +235,7 @@ export async function updateEmployee(id: number, data: any) {
     if (emailExists) throw Object.assign(new Error('Email already in use'), { status: 409 });
   }
 
+  normalizeGender(data);
   await db('employees').where('id', id).update({ ...data, updated_at: db.fn.now() });
   return getEmployee(id);
 }

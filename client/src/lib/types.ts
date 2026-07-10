@@ -31,6 +31,8 @@ export interface Employee {
   email: string;
   phone: string;
   date_of_birth: string;
+  /** 'male' | 'female' | 'other' — drives gender-restricted leave eligibility. */
+  gender: string | null;
   date_of_joining: string;
   date_of_exit: string | null;
   department_id: number;

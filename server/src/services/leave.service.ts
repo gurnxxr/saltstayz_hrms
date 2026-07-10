@@ -103,6 +103,23 @@ async function setDepartments(trx: Knex.Transaction, typeId: number, rawIds: any
   }
 }
 
+/**
+ * Whether an employee's recorded gender satisfies a leave type's `eligibility`.
+ *
+ * Strict, like the department rule: a gender-restricted type (Maternity, Paternity)
+ * needs the gender ON RECORD to match, so an employee with no gender recorded can't
+ * take it. Missing data never widens access. `eligibility: 'any'` restricts nothing,
+ * and a gender of 'other' satisfies neither 'female' nor 'male'.
+ *
+ * The single definition — checkLeavePolicy (the gate), getLeaveTypes (the apply
+ * dropdown) and getEffectiveBalances (the balances grid) all call this, so what an
+ * employee sees and what they can submit never disagree.
+ */
+function genderAllows(eligibility?: string | null, gender?: string | null): boolean {
+  if (!eligibility || eligibility === 'any') return true;
+  return eligibility === gender;
+}
+
 /** Employees carry their department as free text — resolve it to a departments.id. */
 async function departmentIdByName(name?: string | null): Promise<number | null> {
   const trimmed = String(name || '').trim();
@@ -151,9 +168,11 @@ async function withRelations(types: any[]): Promise<any[]> {
 export async function getLeaveTypes(employeeId?: number) {
   const types = await withRelations(await db('leave_types').where('is_active', true).orderBy('name'));
   if (!employeeId) return types;
-  const emp = await db('employees').where('id', employeeId).select('dept_name').first();
+  const emp = await db('employees').where('id', employeeId).select('dept_name', 'gender').first();
   const deptId = await departmentIdByName(emp?.dept_name);
-  return types.filter((t: any) => !t.departments.length || (deptId !== null && t.departments.includes(deptId)));
+  return types.filter((t: any) =>
+    (!t.departments.length || (deptId !== null && t.departments.includes(deptId)))
+    && genderAllows(t.eligibility, emp?.gender));
 }
 
 /** All leave types incl. inactive — for the Control Panel. */
@@ -441,12 +460,12 @@ export async function getEffectiveBalances(
 
   // No leaveTypeIds = the types an employee could actually apply for (active only).
   // applyLeave passes an explicit id so it keeps gating inactive types as it always has.
-  const typesQuery = db('leave_types').select('id', 'name', 'is_paid', 'default_days').orderBy('name');
+  const typesQuery = db('leave_types').select('id', 'name', 'is_paid', 'default_days', 'eligibility').orderBy('name');
   if (opts.leaveTypeIds) typesQuery.whereIn('id', opts.leaveTypeIds);
   else typesQuery.where('is_active', true);
 
   const [employees, departments, leaveTypes, restrictions, entitlements, booked] = await Promise.all([
-    db('employees').whereIn('id', employeeIds).select('id', 'dept_name'),
+    db('employees').whereIn('id', employeeIds).select('id', 'dept_name', 'gender'),
     db('departments').select('id', 'name'),
     typesQuery,
     db('leave_type_departments').select('leave_type_id', 'department_id'),
@@ -503,8 +522,10 @@ export async function getEffectiveBalances(
         leave_type: lt.name,
         is_paid: !!lt.is_paid,
         // No rows for a type = every department (migration 070). A restricted type stays
-        // unavailable when the employee's department is missing or unrecognised.
-        applicable: !allowed || (deptId !== null && allowed.has(deptId)),
+        // unavailable when the employee's department is missing or unrecognised, and a
+        // gender-restricted type (Maternity/Paternity) needs a matching recorded gender.
+        applicable: (!allowed || (deptId !== null && allowed.has(deptId)))
+          && genderAllows(lt.eligibility, emp.gender),
         source: ent ? 'entitlement' : 'default',
         allocated,
         taken,
@@ -632,9 +653,14 @@ async function checkLeavePolicy(
   if (!truthy(leaveType.half_day_allowed) && !Number.isInteger(days)) {
     throw new ValidationError(`Half-day ${name} is not allowed.`);
   }
-  // Eligibility / probation are enforced only when that employee data is known.
-  if (leaveType.eligibility && leaveType.eligibility !== 'any' && employee?.gender && employee.gender !== leaveType.eligibility) {
-    throw new ValidationError(`${name} can only be taken by ${leaveType.eligibility} employees.`);
+  // Gender eligibility — strict, like the department rule below: a gender-restricted
+  // type needs the gender ON RECORD to match, so an employee with no gender recorded
+  // is blocked rather than waved through. Probation, just below, stays lenient (it
+  // can't be enforced against an unknown probation date without denying everyone).
+  if (!genderAllows(leaveType.eligibility, employee?.gender)) {
+    throw new ValidationError(employee?.gender
+      ? `${name} can only be taken by ${leaveType.eligibility} employees.`
+      : `${name} can only be taken by ${leaveType.eligibility} employees, and no gender is recorded for you. Ask HR to update your profile.`);
   }
   if (truthy(leaveType.after_probation_only) && employee?.probation_end_date
     && new Date().toISOString().slice(0, 10) < String(employee.probation_end_date).slice(0, 10)) {

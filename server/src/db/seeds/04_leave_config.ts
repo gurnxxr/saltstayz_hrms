@@ -12,8 +12,10 @@ export async function seed(knex: Knex): Promise<void> {
     { name: 'Casual Leave', default_days: 12, is_paid: true, is_encashable: false },
     { name: 'Sick Leave', default_days: 12, is_paid: true, is_encashable: false },
     { name: 'Privilege Leave', default_days: 15, is_paid: true, is_encashable: true },
-    { name: 'Maternity Leave', default_days: 182, is_paid: true, is_encashable: false },
-    { name: 'Paternity Leave', default_days: 15, is_paid: true, is_encashable: false },
+    // Gender-restricted: eligibility is matched strictly against employees.gender,
+    // so an employee with no gender recorded can take neither.
+    { name: 'Maternity Leave', default_days: 182, is_paid: true, is_encashable: false, eligibility: 'female' },
+    { name: 'Paternity Leave', default_days: 15, is_paid: true, is_encashable: false, eligibility: 'male' },
     { name: 'Loss of Pay', default_days: 365, is_paid: false, is_encashable: false },
   ]);
 
