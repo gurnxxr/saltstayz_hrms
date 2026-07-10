@@ -153,6 +153,9 @@ export default function ProfilePage() {
             <InfoRow icon={Hash} label="Emp Code" value={profile.employee_code} />
             <InfoRow icon={User} label="Emp Name (As per UID)" value={`${profile.first_name} ${profile.last_name}`} />
             <InfoRow icon={Calendar} label="DOB (As per UID)" value={profile.date_of_birth ? new Date(profile.date_of_birth).toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' }) : 'Not set'} />
+            {/* Read-only on purpose: gender gates maternity/paternity eligibility, so only
+                HR can change it (updateMyProfile allows phone / father_name / aadhaar only). */}
+            <InfoRow icon={User} label="Gender" value={profile.gender ? profile.gender[0].toUpperCase() + profile.gender.slice(1) : 'Not set — ask HR to update'} />
             <InfoRow icon={User} label="Reporting Manager" value={managerName} />
             <InfoRow icon={Mail} label="Email Address" value={profile.email || 'N/A'} />
             <InfoRow icon={Calendar} label="Date of Joining" value={profile.date_of_joining ? new Date(profile.date_of_joining).toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' }) : 'N/A'} />
