@@ -2,8 +2,10 @@ import type { Knex } from 'knex';
 import db from '../config/database';
 import { NotFoundError, ValidationError } from '../utils/errors';
 import {
-  getCtcRange, getStructureByJobTitle, computeForStructure, seedEmployeeStructureFromTemplate,
+  getCtcRange, getStructureByJobTitle, seedEmployeeStructureFromTemplate,
+  editorLines, previewStructure, saveEmployeeStructure,
 } from './salaryStructure.service';
+import { listSalaryComponents } from './salaryComponent.service';
 import { getVacancySanctionContext, getRoleBand } from './manpower.service';
 import * as checklist from './checklist.service';
 import { notifyEmployee } from './notification.service';
@@ -563,14 +565,44 @@ async function offerContext(candidateId: number) {
   return c;
 }
 
-/** Live salary breakdown for a proposed monthly base, keyed to the property state. */
-async function breakdownFor(jobTitleId: number, baseGross: number, state: string | null) {
+/** The component + calc rule + value the offer editor works in. */
+export type OfferLine = { component_id: number; calculation_type: string; value: number };
+
+const toOfferLines = (rows: any[]): OfferLine[] => rows.map((l: any) => ({
+  component_id: Number(l.component_id),
+  calculation_type: String(l.calculation_type),
+  value: Number(l.value) || 0,
+}));
+
+/**
+ * Live salary breakdown for a proposed monthly base and — optionally — a per-offer
+ * structure. When `lines` are omitted the designation template's lines are used, so
+ * an untouched offer prices exactly as it always did.
+ *
+ * The draft lines are never written back to the template: it feeds every other
+ * candidate's offer, the vacancy's advertised CTC, the JD, and every future hire for
+ * the designation. They live on the offer letter and are cloned onto the employee's
+ * PRIVATE structure at acceptance.
+ */
+async function breakdownFor(jobTitleId: number, baseGross: number, state: string | null, lines?: OfferLine[] | null) {
   const structure = await getStructureByJobTitle(jobTitleId);
   if (!structure) return null;
+  // Omitted lines mean "price the designation template". An EMPTY array is different:
+  // the operator cleared the editor, and silently substituting the template would file
+  // an offer whose structure nobody chose. The client blocks it; the server decides.
+  if (Array.isArray(lines) && lines.length === 0) {
+    throw new ValidationError('An offer must include at least one salary component.');
+  }
   const structGross = Number(structure.default_base) || 0;
   const gross = baseGross > 0 ? baseGross : structGross;
-  const breakdown = await computeForStructure(structure, gross, null, undefined, { state: state ?? null });
-  return { gross, structGross, breakdown, annual_ctc: Math.round(breakdown.ctc * 12) };
+  const draft = lines?.length ? lines : toOfferLines(await editorLines(structure.id));
+  const breakdown = await previewStructure({ lines: draft, base: gross, city: state ?? structure.city });
+  return { gross, structGross, breakdown, annual_ctc: Math.round(breakdown.ctc * 12), lines: draft };
+}
+
+/** The component catalog the offer's line editor picks from. */
+export async function listOfferComponents() {
+  return listSalaryComponents();
 }
 
 /** Prefill for the salary editor: structure base, the sanctioned band cap, prior issue. */
@@ -580,6 +612,9 @@ export async function getOfferDefaults(candidateId: number) {
   const band = await getRoleBand(c.property_id, c.job_title_id);
   const structure = await getStructureByJobTitle(c.job_title_id);
   const issued = await db('offer_letters').where('candidate_id', candidateId).first();
+  const issuedTpl = issued
+    ? (typeof issued.template_data === 'string' ? JSON.parse(issued.template_data) : issued.template_data)
+    : null;
   return {
     candidate_name: c.name,
     designation: c.designation,
@@ -588,13 +623,17 @@ export async function getOfferDefaults(candidateId: number) {
     band_max: band.configured ? band.band_max : null,
     already_issued: !!issued,
     status: issued?.status ?? null,
+    // Seed the line editor: an issued letter shows what was actually offered, an
+    // unissued one starts from the designation template.
+    lines: issuedTpl?.lines?.length ? issuedTpl.lines : (structure ? await editorLines(structure.id) : []),
+    template_lines: structure ? await editorLines(structure.id) : [],
   };
 }
 
-/** Live recompute as the editor base changes. No salary math in the client. */
-export async function getOfferBreakdown(candidateId: number, baseGross: number) {
+/** Live recompute as the editor base or lines change. No salary math in the client. */
+export async function getOfferBreakdown(candidateId: number, baseGross: number, lines?: OfferLine[] | null) {
   const c = await offerContext(candidateId);
-  const ob = await breakdownFor(c.job_title_id, baseGross, c.property_state);
+  const ob = await breakdownFor(c.job_title_id, baseGross, c.property_state, lines);
   if (!ob) throw new ValidationError('This designation has no salary structure — configure one first.');
   const band = await getRoleBand(c.property_id, c.job_title_id);
   return { ...ob, band_max: band.configured ? band.band_max : null };
@@ -602,20 +641,33 @@ export async function getOfferBreakdown(candidateId: number, baseGross: number) 
 
 /** Snapshot the letter template_data — exactly what the PDF renders. */
 async function buildOfferLetter(
-  candidateId: number, opts: { base_gross: number; joining_date?: string | null; designation?: string },
+  candidateId: number,
+  opts: { base_gross: number; joining_date?: string | null; designation?: string; lines?: OfferLine[] | null },
+  { enforceBand = true }: { enforceBand?: boolean } = {},
 ) {
   const c = await offerContext(candidateId);
-  const ob = await breakdownFor(c.job_title_id, Number(opts.base_gross) || 0, c.property_state);
+  const ob = await breakdownFor(c.job_title_id, Number(opts.base_gross) || 0, c.property_state, opts.lines);
   if (!ob) throw new ValidationError('This designation has no salary structure — configure one first.');
 
   // Manpower & Budget Control: the offered salary cannot exceed the sanctioned band.
-  const band = await getRoleBand(c.property_id, c.job_title_id);
-  if (band.configured && ob.breakdown.ctc > band.band_max) {
-    throw new ValidationError(
-      `Offered monthly CTC ₹${inrAmount(ob.breakdown.ctc)} exceeds the sanctioned salary band maximum ` +
-      `₹${inrAmount(band.band_max)} for this role at ${c.property_name}. ` +
-      'Lower the base salary or raise the band in Admin → Budget Control.',
-    );
+  // Only ISSUING is gated — a preview is a read-only look at the numbers, and refusing
+  // to render one is how you hide from an operator why they can't proceed.
+  //
+  // NOTE: this caps CTC only. Now that the offer's lines are editable, CTC is no longer
+  // a monotonic function of what the candidate is actually paid — CTC includes employer
+  // PF/ESI, and moving money out of PF-eligible Basic into a non-PF-eligible allowance
+  // lowers CTC while RAISING take-home. Capping gross_earnings as well as CTC would
+  // close that; it was a deliberate decision not to. Reviewers: this is a known hole,
+  // not an oversight.
+  if (enforceBand) {
+    const band = await getRoleBand(c.property_id, c.job_title_id);
+    if (band.configured && ob.breakdown.ctc > band.band_max) {
+      throw new ValidationError(
+        `Offered monthly CTC ₹${inrAmount(ob.breakdown.ctc)} exceeds the sanctioned salary band maximum ` +
+        `₹${inrAmount(band.band_max)} for this role at ${c.property_name}. ` +
+        'Lower the base salary or raise the band in Admin → Budget Control.',
+      );
+    }
   }
 
   const pct = ob.structGross > 0 ? Math.round((ob.gross / ob.structGross - 1) * 10000) / 100 : 0;
@@ -631,22 +683,26 @@ async function buildOfferLetter(
       base_gross: ob.gross,
       adjustment_pct: pct,
       breakdown: ob.breakdown,
+      // The structure as offered. Cloned onto the employee's private structure at
+      // acceptance, so what was signed is what payroll pays.
+      lines: ob.lines,
     },
   };
 }
 
-/** Preview the PDF without filing anything. */
-export async function previewOffer(
-  candidateId: number, opts: { base_gross: number; joining_date?: string | null; designation?: string },
-) {
-  const built = await buildOfferLetter(candidateId, opts);
+type OfferInput = { base_gross: number; joining_date?: string | null; designation?: string; lines?: OfferLine[] | null };
+
+/**
+ * Preview the PDF without filing anything. Deliberately NOT band-gated: HR must be able
+ * to see an over-band offer in order to understand what to change. Release still refuses.
+ */
+export async function previewOffer(candidateId: number, opts: OfferInput) {
+  const built = await buildOfferLetter(candidateId, opts, { enforceBand: false });
   return { candidate: built.candidate, template_data: built.template_data };
 }
 
 /** Step 7. Issues THE offer letter and advances the candidate — atomically. */
-export async function releaseOffer(
-  candidateId: number, opts: { base_gross: number; joining_date?: string | null; designation?: string }, userId: number,
-) {
+export async function releaseOffer(candidateId: number, opts: OfferInput, userId: number) {
   const existing = await db('offer_letters').where('candidate_id', candidateId).first();
   if (existing) throw new ValidationError('An offer letter has already been issued for this candidate.');
 
@@ -717,8 +773,28 @@ export async function acceptOffer(candidateId: number, userId: number, joiningDa
     return newEmployeeId;
   });
 
-  // Best effort: a missing designation template must not fail the acceptance.
-  try { await seedEmployeeStructureFromTemplate(employeeId); } catch { /* configured later */ }
+  // Seed the employee's PRIVATE payroll structure from the offer that was signed —
+  // its lines and its base — not from the designation template. Previously this called
+  // seedEmployeeStructureFromTemplate(employeeId) with no base, so payroll paid the
+  // template's default_base and every negotiated adjustment was silently discarded.
+  // Best effort: a missing structure must not fail the acceptance.
+  try {
+    if (tpl.lines?.length) {
+      await saveEmployeeStructure(employeeId, {
+        lines: (tpl.lines as OfferLine[]).map((l) => ({
+          component_id: Number(l.component_id),
+          calculation_type: l.calculation_type,
+          value: Number(l.value) || 0,
+        })),
+        base: Number(letter.offered_base) || 0,
+        tds_amount: 0,
+        effective_from: joining || null,
+      } as any, userId);
+    } else {
+      // A letter issued before per-offer lines existed: still honour its base.
+      await seedEmployeeStructureFromTemplate(employeeId, { base: Number(letter.offered_base) || 0 }, userId);
+    }
+  } catch { /* configured later in Admin → Salary Structures */ }
 
   return getCandidate(candidateId);
 }

@@ -9,29 +9,16 @@ import Breadcrumb from '@/components/ui/Breadcrumb';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { formatINR } from '@/lib/utils';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
-import { Search, Layers, Loader2, Save, Plus, Trash2, X, IndianRupee, Users, RotateCcw, UserCog, Wallet, Download } from 'lucide-react';
+import { LinesEditor, LineDraft, toLineDrafts, linesPayload } from '@/components/salary/LinesEditor';
+import Pagination, { pageSlice } from '@/components/ui/Pagination';
+import { Search, Layers, Loader2, Save, Plus, Trash2, IndianRupee, Users, RotateCcw, UserCog, Wallet, Download } from 'lucide-react';
+
+const CTC_PAGE_SIZE = 25;
 
 // Operating cities/states — resolve to a statutory state on the server.
 const CITIES = ['Haryana', 'Gurugram', 'Faridabad', 'Delhi', 'Noida', 'Greater Noida', 'Uttar Pradesh', 'Chandigarh', 'Dehradun', 'Uttarakhand'];
 
-const CALC_TYPES = [
-  { v: 'flat', label: 'Flat amount ₹' },
-  { v: 'pct_of_base', label: '% of base' },
-  { v: 'pct_of_basic', label: '% of Basic' },
-  { v: 'remainder', label: 'Remainder (base − other earnings)' },
-];
-
-const CATEGORY_LABEL: Record<string, string> = {
-  earning: 'Earning', deduction: 'Deduction', benefit: 'Benefit (employer)', reimbursement: 'Reimbursement',
-};
-
 const inputCls = 'w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50';
-
-interface LineDraft { component_id: string; calculation_type: string; value: string }
-const toLineDrafts = (lines: any[] = []): LineDraft[] =>
-  lines.map((l) => ({ component_id: String(l.component_id), calculation_type: l.calculation_type, value: String(l.value ?? 0) }));
-const linesPayload = (lines: LineDraft[]) =>
-  lines.filter((l) => l.component_id).map((l) => ({ component_id: Number(l.component_id), calculation_type: l.calculation_type, value: Number(l.value) || 0 }));
 
 export default function SalaryStructurePage() {
   const [tab, setTab] = useState<'employee' | 'register' | 'templates'>('employee');
@@ -61,6 +48,7 @@ export default function SalaryStructurePage() {
 function CtcRegisterPanel() {
   const [search, setSearch] = useState('');
   const [branch, setBranch] = useState('');
+  const [page, setPage] = useState(1);
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['ctc-register'],
@@ -80,6 +68,13 @@ function CtcRegisterPanel() {
     gross: a.gross + (Number(r.gross) || 0), net: a.net + (Number(r.net) || 0),
     ctc: a.ctc + (Number(r.ctc) || 0), configured: a.configured + (r.gross != null ? 1 : 0),
   }), { gross: 0, net: 0, ctc: 0, configured: 0 }), [filtered]);
+
+  // Reset to page 1 whenever the filters narrow the set.
+  useEffect(() => { setPage(1); }, [search, branch]);
+  // Clamp: if the filtered set shrinks past the current page, fall back to the last valid page.
+  const pageCount = Math.max(1, Math.ceil(filtered.length / CTC_PAGE_SIZE));
+  const safePage = Math.min(page, pageCount);
+  const paged = pageSlice(filtered, safePage, CTC_PAGE_SIZE);
 
   const exportCsv = () => {
     const head = ['Employee Code', 'Name', 'Designation', 'Property', 'Salary/Month', 'Net/Month', 'CTC/Month'];
@@ -142,7 +137,7 @@ function CtcRegisterPanel() {
               <tr><td colSpan={5} className="px-4 py-10 text-center text-secondary">Computing salaries…</td></tr>
             ) : isError ? (
               <tr><td colSpan={5} className="px-4 py-10 text-center text-red-600">Couldn&apos;t load the register.</td></tr>
-            ) : filtered.map((r) => (
+            ) : paged.map((r) => (
               <tr key={r.employee_id} className="hover:bg-muted/20">
                 <td className="px-4 py-2">
                   <p className="font-medium text-foreground">{r.first_name} {r.last_name}</p>
@@ -157,6 +152,15 @@ function CtcRegisterPanel() {
           </tbody>
         </table>
       </div>
+
+      <Pagination
+        total={filtered.length}
+        page={safePage}
+        pageSize={CTC_PAGE_SIZE}
+        shown={paged.length}
+        onPageChange={setPage}
+        itemLabel="employees"
+      />
     </div>
   );
 }
@@ -586,59 +590,6 @@ function TemplatesPanel() {
 }
 
 // ─────────────────────────────── Shared ───────────────────────────────
-
-function LinesEditor({ components, lines, setLine, addLine, removeLine }: {
-  components: any[]; lines: LineDraft[];
-  setLine: (idx: number, patch: Partial<LineDraft>) => void; addLine: () => void; removeLine: (idx: number) => void;
-}) {
-  const componentById = useMemo(() => new Map(components.map((c: any) => [String(c.id), c])), [components]);
-  return (
-    <>
-      <div className="flex items-center justify-between mt-5 mb-2">
-        <p className="text-xs font-semibold text-secondary uppercase">Components</p>
-        <button onClick={addLine}
-          className="flex items-center gap-1.5 px-3 py-1.5 border border-border rounded-lg text-sm font-medium hover:bg-muted transition-colors">
-          <Plus size={14} /> Add component
-        </button>
-      </div>
-      <div className="space-y-2">
-        {lines.map((line, idx) => {
-          const comp: any = componentById.get(line.component_id);
-          return (
-            <div key={idx} className="grid grid-cols-[1fr_170px_120px_36px] gap-2 items-center">
-              <select className={inputCls} value={line.component_id} onChange={(e) => setLine(idx, { component_id: e.target.value })}>
-                <option value="">Select component…</option>
-                {['earning', 'deduction', 'benefit', 'reimbursement'].map((cat) => (
-                  <optgroup key={cat} label={CATEGORY_LABEL[cat]}>
-                    {components.filter((c: any) => c.category === cat).map((c: any) => (
-                      <option key={c.id} value={c.id}>{c.name_in_payslip || c.name}</option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
-              <select className={inputCls} value={line.calculation_type} onChange={(e) => setLine(idx, { calculation_type: e.target.value })}>
-                {CALC_TYPES
-                  .filter((t) => t.v !== 'remainder' || comp?.category === 'earning')
-                  .map((t) => <option key={t.v} value={t.v}>{t.label}</option>)}
-              </select>
-              <input type="number" step="any" className={inputCls} value={line.value}
-                disabled={line.calculation_type === 'remainder'}
-                onChange={(e) => setLine(idx, { value: e.target.value })} />
-              <button onClick={() => removeLine(idx)}
-                className="p-1.5 rounded-lg text-secondary hover:text-red-600 hover:bg-red-50 transition-colors" title="Remove">
-                <X size={16} />
-              </button>
-            </div>
-          );
-        })}
-      </div>
-      <p className="text-xs text-secondary mt-3">
-        EPF, ESI and LWF are applied automatically from each component&apos;s applicability flags and the state-wise rates in{' '}
-        <a href="/setup/statutory-components" className="underline hover:text-foreground">Payroll → Statutory Components</a>.
-      </p>
-    </>
-  );
-}
 
 function PreviewCard({ preview, base }: { preview: any; base: number }) {
   if (!preview) return null;

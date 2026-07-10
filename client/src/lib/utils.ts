@@ -76,3 +76,21 @@ export function formatINRShort(
   if (v >= 1e3) return '₹' + (v / 1e3).toFixed(1) + 'k';
   return '₹' + v;
 }
+
+/**
+ * Pull the server's error message out of a failed `responseType: 'blob'` request.
+ *
+ * Axios hands back the error body as a Blob when the response type is blob, so the
+ * usual `err.response?.data?.error` is always undefined and the user sees a generic
+ * message instead of the real reason. Read the blob back as text and parse it.
+ */
+export async function errorFromBlob(err: any): Promise<string | null> {
+  const data = err?.response?.data;
+  if (!data) return err?.message ?? null;
+  if (typeof data === 'string') return data;
+  if (typeof data.error === 'string') return data.error;
+  if (typeof Blob !== 'undefined' && data instanceof Blob) {
+    try { return JSON.parse(await data.text())?.error ?? null; } catch { return null; }
+  }
+  return null;
+}

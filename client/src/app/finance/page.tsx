@@ -7,12 +7,14 @@ import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useAuth } from '@/lib/auth';
+import Pagination, { pageSlice } from '@/components/ui/Pagination';
 import {
   Search, Plus, Pencil, Trash2, X, Landmark, Users, CircleDollarSign,
   AlertCircle, Download, Eye, EyeOff,
 } from 'lucide-react';
 
 const PAYMENT_MODES = ['Bank Transfer', 'Cheque', 'Cash', 'UPI'];
+const PAGE_SIZE = 25;
 
 // Masks a sensitive value with password-style dots, mirroring its length.
 const DOTS = (s: any) => '•'.repeat(Math.min(Math.max(String(s ?? '').length, 6), 16));
@@ -25,6 +27,7 @@ export default function FinancePage() {
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search, 300);
   const [branchFilter, setBranchFilter] = useState('');
+  const [page, setPage] = useState(1);
   // Sensitive financial columns (account no., PAN, IFSC) are masked by default.
   const [reveal, setReveal] = useState(false);
 
@@ -155,6 +158,16 @@ export default function FinancePage() {
   }
 
   const branches = [...new Set(records.map((r: any) => r.employee_branch).filter(Boolean))] as string[];
+
+  // Client-side pagination — presentation only. Filters/search/stats/branches all
+  // keep operating on the full `records` set; only the rendered slice is paged.
+  const totalPages = Math.max(1, Math.ceil(records.length / PAGE_SIZE));
+  // Reset to page 1 whenever the search or branch filter changes.
+  useEffect(() => { setPage(1); }, [debouncedSearch, branchFilter]);
+  // Clamp: if the list shrinks (e.g. after a delete) past the current page, step back.
+  useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
+  const safePage = Math.min(page, totalPages);
+  const pagedRecords = pageSlice(records, safePage, PAGE_SIZE);
 
   return (
     <AppShell>
@@ -406,7 +419,7 @@ export default function FinancePage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {records.map((r: any) => {
+                  {pagedRecords.map((r: any) => {
                     const missing = r.detail_status === 'missing';
                     return (
                       <tr key={r.employee_id} className={`transition-colors ${missing ? 'bg-amber-50/60 hover:bg-amber-50' : 'hover:bg-muted/30'}`}>
@@ -485,6 +498,14 @@ export default function FinancePage() {
                   })}
                 </tbody>
               </table>
+              <Pagination
+                total={records.length}
+                page={safePage}
+                pageSize={PAGE_SIZE}
+                shown={pagedRecords.length}
+                onPageChange={setPage}
+                itemLabel="employees"
+              />
             </div>
           )}
         </div>

@@ -40,16 +40,21 @@ export async function listEmployees(filters: {
     return q;
   };
 
+  // State is DERIVED from the employee's property, never stored on the employee —
+  // it decides Professional Tax, LWF, minimum wage and per-state holidays, and one
+  // source of truth for that is the point (see getEmployeeState in statutory.service).
   const baseQuery = () =>
     db('employees as e')
       .leftJoin('job_titles as j', 'j.id', 'e.job_title_id')
       .leftJoin('employees as mgr', 'mgr.id', 'e.reporting_manager_id')
+      .leftJoin('properties as p', 'p.name', 'e.branch_name')
       .select(
         'e.id', 'e.employee_code', 'e.first_name', 'e.last_name',
         'e.email', 'e.phone', 'e.date_of_birth', 'e.date_of_joining',
         'e.father_name', 'e.aadhaar_number', 'e.dept_name', 'e.branch_name',
         'e.is_active',
         'j.title as designation_name',
+        'p.state as state',
         'mgr.first_name as manager_first_name',
         'mgr.last_name as manager_last_name',
       )
@@ -79,10 +84,12 @@ export async function getEmployee(id: number) {
   const emp = await db('employees as e')
     .leftJoin('job_titles as j', 'j.id', 'e.job_title_id')
     .leftJoin('employees as mgr', 'mgr.id', 'e.reporting_manager_id')
+    .leftJoin('properties as p', 'p.name', 'e.branch_name')
     .where('e.id', id)
     .select(
       'e.*',
       'j.title as designation_name',
+      'p.state as state', // derived from the property; see listEmployees
       'mgr.first_name as manager_first_name',
       'mgr.last_name as manager_last_name',
     )

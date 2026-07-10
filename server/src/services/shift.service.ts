@@ -213,7 +213,10 @@ export async function getPropertyEmployees(propertyId?: number) {
     .leftJoin('job_titles as jt', 'jt.id', 'e.job_title_id')
     .where('e.is_active', true)
     .where('e.branch_name', property.name)
-    .select('e.id', 'e.first_name', 'e.last_name', 'e.employee_code', 'jt.title as designation')
+    // dept_name drives the roster's Department filter. It is free text on the employee,
+    // not an FK, so the filter's options are derived from these rows rather than from
+    // the departments table — some employees sit in departments that table doesn't have.
+    .select('e.id', 'e.first_name', 'e.last_name', 'e.employee_code', 'e.dept_name', 'jt.title as designation')
     .orderBy('e.first_name');
 }
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useState } from 'react';
+import { use, useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
@@ -13,7 +13,7 @@ import Breadcrumb from '@/components/ui/Breadcrumb';
 import LoadError from '@/components/ui/LoadError';
 import { useUnsavedChangesWarning } from '@/hooks/useUnsavedChangesWarning';
 import {
-  ArrowLeft, User, Phone, Mail, Calendar, Briefcase,
+  ArrowLeft, User, Phone, Mail, Calendar, Briefcase, MapPin,
   CreditCard, Shield, Hash, Save, Loader2, Pencil,
 } from 'lucide-react';
 
@@ -103,6 +103,19 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
     setEditing(true);
   }
 
+  // "Edit" in the Employee Details list links here with ?edit=1, so the editor opens
+  // straight away instead of making the user click Edit again. useSearchParams() would
+  // force a Suspense boundary on this page; read the query directly, as the Leaves page
+  // does. Runs once, after the employee loads.
+  const [autoEditDone, setAutoEditDone] = useState(false);
+  useEffect(() => {
+    if (autoEditDone || !emp || editing || !canEditStatus) return;
+    if (new URLSearchParams(window.location.search).get('edit') === '1') {
+      startEditing();
+      setAutoEditDone(true);
+    }
+  }, [emp, editing, canEditStatus, autoEditDone]); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (isLoading) {
     return (
       <AppShell>
@@ -138,12 +151,16 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
         <div className="flex items-center justify-between">
           <Breadcrumb items={[{ label: 'Employee Details', href: '/employees' }, { label: `${emp.first_name} ${emp.last_name}` }]} />
           {!editing ? (
-            <button
-              onClick={startEditing}
-              className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
-            >
-              <Pencil size={14} /> Edit Employee
-            </button>
+            // Only admin/CHRO/HR may write (EMPLOYEE_WRITE_ROLES on PUT /employees/:id).
+            // Offering the button to anyone else just earns them a 403.
+            canEditStatus && (
+              <button
+                onClick={startEditing}
+                className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
+              >
+                <Pencil size={14} /> Edit Employee
+              </button>
+            )
           ) : (
             <div className="flex gap-2">
               <button
@@ -229,6 +246,14 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
               <InfoRow icon={Briefcase} label="Dept Name" value={emp.dept_name || 'N/A'} />
               <InfoRow icon={Briefcase} label="Designation Name" value={emp.designation_name || 'N/A'} />
               <InfoRow icon={Briefcase} label="Branch Name" value={emp.branch_name || 'N/A'} />
+              {/* Derived from the property, never stored on the employee — it decides
+                  Professional Tax, LWF, minimum wage and per-state holidays. Change it
+                  via the property in Admin → Organization. */}
+              <InfoRow
+                icon={MapPin}
+                label="State"
+                value={emp.state || 'Not set — payroll falls back to Haryana'}
+              />
               <InfoRow icon={CreditCard} label="Status" value={emp.is_active ? 'Active' : 'Inactive'} />
               {emp.offered_ctc != null && (
                 <InfoRow icon={CreditCard} label="Offered Salary" value={

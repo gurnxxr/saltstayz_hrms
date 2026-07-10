@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
@@ -13,6 +13,9 @@ import EmployeeStatusChip from '@/components/employees/EmployeeStatusChip';
 import EmployeeStatusDialog from '@/components/employees/EmployeeStatusDialog';
 import { EMPLOYEE_STATUSES, EMPLOYEE_STATUS_LABELS } from '@/lib/employeeStatus';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import Pagination, { pageSlice } from '@/components/ui/Pagination';
+
+const PAGE_SIZE = 25;
 
 
 
@@ -153,11 +156,21 @@ function StatusTab() {
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search, 300);
   const [target, setTarget] = useState<any | null>(null);
+  const [page, setPage] = useState(1);
 
   const { data: employees = [], isLoading, isError, refetch } = useQuery({
     queryKey: ['mp-employees', status, debouncedSearch],
     queryFn: () => api.get(`/manpower/employees?${status ? `status=${status}&` : ''}${debouncedSearch ? `search=${encodeURIComponent(debouncedSearch)}` : ''}`).then(r => r.data),
   });
+
+  // Reset to page 1 whenever a filter changes.
+  useEffect(() => { setPage(1); }, [status, debouncedSearch]);
+
+  // Clamp: if the set shrank past the current page, fall back to the last valid page.
+  const totalPages = Math.max(1, Math.ceil(employees.length / PAGE_SIZE));
+  useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
+
+  const visible = pageSlice(employees, Math.min(page, totalPages), PAGE_SIZE);
 
   return (
     <div className="space-y-4">
@@ -186,7 +199,7 @@ function StatusTab() {
                 <tr><td colSpan={7}><LoadError compact message="Couldn't load employees." onRetry={() => refetch()} /></td></tr>
               ) : employees.length === 0 ? (
                 <tr><td colSpan={7} className="px-4 py-8 text-center text-secondary">No employees.</td></tr>
-              ) : employees.map((e: any) => (
+              ) : visible.map((e: any) => (
                 <tr key={e.id} className="hover:bg-muted/30">
                   <td className="px-4 py-3">
                     <div className="font-medium text-foreground">{e.first_name} {e.last_name}</div>
@@ -205,6 +218,14 @@ function StatusTab() {
             </tbody>
           </table>
         </div>
+        <Pagination
+          total={employees.length}
+          page={page}
+          pageSize={PAGE_SIZE}
+          onPageChange={setPage}
+          shown={visible.length}
+          itemLabel="employees"
+        />
       </div>
       {target && <EmployeeStatusDialog employee={target} onClose={() => setTarget(null)} onSaved={() => { setTarget(null); qc.invalidateQueries({ queryKey: ['mp-employees'] }); qc.invalidateQueries({ queryKey: ['mp-sanctions'] }); }} />}
     </div>

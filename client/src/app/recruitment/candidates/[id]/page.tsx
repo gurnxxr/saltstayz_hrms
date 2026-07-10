@@ -1,19 +1,20 @@
 'use client';
 
-import { use, useEffect, useState } from 'react';
+import { use, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import { allowedNextStages } from '@/lib/constants';
-import { formatDateTime, formatINR } from '@/lib/utils';
+import { formatDateTime, formatINR, errorFromBlob } from '@/lib/utils';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import Breadcrumb from '@/components/ui/Breadcrumb';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { LinesEditor, LineDraft, toLineDrafts, linesPayload } from '@/components/salary/LinesEditor';
 import {
   User, Clock, ChevronRight, Check, Circle, Plus, Trash2, Upload, Paperclip, Download,
-  Loader2, FileText, Percent, IndianRupee, AlertTriangle, Eye, ArrowRight, ArrowLeft,
+  Loader2, FileText, Percent, IndianRupee, AlertTriangle, Eye, ArrowRight, ArrowLeft, RotateCcw,
 } from 'lucide-react';
 
 // ─── Stage vocabulary ───
@@ -203,8 +204,8 @@ export default function CandidateDetailPage({ params }: { params: Promise<{ id: 
       a.download = `Offer_Letter_${String(candidate?.name || 'Candidate').replace(/\s+/g, '_')}.pdf`;
       a.click();
       URL.revokeObjectURL(url);
-    } catch {
-      toast.error('Failed to download PDF');
+    } catch (e: any) {
+      toast.error(await errorFromBlob(e) || 'Failed to download PDF');
     }
   }
 
@@ -823,6 +824,7 @@ function OfferEditor({ candidateId, onCancel, onReleased }: { candidateId: strin
   const [joiningDate, setJoiningDate] = useState('');
   const [pct, setPct] = useState('0');
   const [finalBase, setFinalBase] = useState('');
+  const [lines, setLines] = useState<LineDraft[]>([]);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
 
@@ -831,22 +833,55 @@ function OfferEditor({ candidateId, onCancel, onReleased }: { candidateId: strin
     queryFn: () => api.get(`/recruitment/candidates/${candidateId}/offer-defaults`).then(r => r.data),
   });
 
+  // Component catalog for the line editor. The endpoint returns an object keyed by
+  // category; the editor wants a flat list (each row already carries its category).
+  const { data: catalog } = useQuery({
+    queryKey: ['offer-salary-components'],
+    queryFn: () => api.get('/recruitment/salary-components').then(r => r.data),
+  });
+  const components = useMemo(() => [
+    ...(catalog?.earnings ?? []), ...(catalog?.deductions ?? []),
+    ...(catalog?.benefits ?? []), ...(catalog?.reimbursements ?? []),
+  ], [catalog]);
+
   useEffect(() => {
     if (!def) return;
     setDesignation(def.designation || '');
     setFinalBase(def.base_gross ? String(def.base_gross) : '');
     setPct('0');
+    setLines(toLineDrafts(def.lines));
   }, [def]);
+
+  const setLine = (idx: number, patch: Partial<LineDraft>) =>
+    setLines((p) => p.map((l, i) => (i === idx ? { ...l, ...patch } : l)));
+  const addLine = () => setLines((p) => [...p, { component_id: '', calculation_type: 'flat', value: '0' }]);
+  const removeLine = (idx: number) => setLines((p) => p.filter((_, i) => i !== idx));
+  const resetLines = () => setLines(toLineDrafts(def?.template_lines));
 
   const baseGross = Number(def?.base_gross) || 0;
   const finalNum = Math.round(Number(finalBase) || 0);
+  const draftLines = useMemo(() => linesPayload(lines), [lines]);
 
-  // Server-computed live breakdown at the adjusted base (debounced while typing).
-  const debouncedBase = useDebouncedValue(finalNum, 350);
+  // Mirror the template editor's validation: need an earning, at most one remainder.
+  // Skip while the component catalog is still loading (categories are unknown then).
+  const componentById = useMemo(() => new Map(components.map((c: any) => [String(c.id), c])), [components]);
+  const earningCount = lines.filter((l) => componentById.get(l.component_id)?.category === 'earning').length;
+  const remainderCount = lines.filter((l) => l.calculation_type === 'remainder').length;
+  const linesError = components.length === 0
+    ? null
+    : earningCount < 1
+      ? 'Add at least one earning component.'
+      : remainderCount > 1
+        ? 'Only one component may use the “Remainder” calculation.'
+        : null;
+
+  // Server-computed live breakdown as the base OR lines change (debounced). No salary
+  // math in the client — the draft lines are POSTed so the CTC reflects them.
+  const breakdownInput = useDebouncedValue(JSON.stringify({ base_gross: finalNum, lines: draftLines }), 350);
   const { data: offerCalc } = useQuery({
-    queryKey: ['candidate-offer-breakdown', candidateId, debouncedBase],
-    queryFn: () => api.get(`/recruitment/candidates/${candidateId}/offer-breakdown?base=${debouncedBase}`).then(r => r.data),
-    enabled: !!def?.configured && debouncedBase > 0,
+    queryKey: ['candidate-offer-breakdown', candidateId, breakdownInput],
+    queryFn: () => api.post(`/recruitment/candidates/${candidateId}/offer-breakdown`, JSON.parse(breakdownInput)).then(r => r.data),
+    enabled: !!def?.configured && finalNum > 0 && draftLines.length > 0,
     placeholderData: (prev) => prev,
   });
   const bd = offerCalc?.breakdown ?? null;
@@ -864,21 +899,25 @@ function OfferEditor({ candidateId, onCancel, onReleased }: { candidateId: strin
     setPct(baseGross > 0 ? String(Math.round((f / baseGross - 1) * 10000) / 100) : '0');
   };
 
+  const canRelease = !!finalNum && !!joiningDate && !overBand && !linesError;
+
   async function handlePreview() {
     setPreviewing(true);
     try {
       const res = await api.post(`/recruitment/candidates/${candidateId}/offer/preview`,
-        { base_gross: finalNum, designation, joining_date: joiningDate }, { responseType: 'blob' });
+        { base_gross: finalNum, designation, joining_date: joiningDate, lines: draftLines }, { responseType: 'blob' });
       if (previewUrl) URL.revokeObjectURL(previewUrl);
       setPreviewUrl(URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' })));
     } catch (e: any) {
-      toast.error(e.response?.data?.error || 'Failed to generate preview');
+      // responseType 'blob' means an error body arrives as a Blob, not parsed JSON —
+      // reading e.response.data.error would always be undefined. Read the blob back.
+      toast.error(await errorFromBlob(e) || 'Failed to generate preview');
     } finally { setPreviewing(false); }
   }
 
   const releaseMutation = useMutation({
     mutationFn: () => api.post(`/recruitment/candidates/${candidateId}/offer`,
-      { base_gross: finalNum, designation, joining_date: joiningDate }),
+      { base_gross: finalNum, designation, joining_date: joiningDate, lines: draftLines }),
     onSuccess: () => { toast.success('Offer letter issued'); onReleased(); },
     onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to issue offer letter'),
   });
@@ -947,6 +986,25 @@ function OfferEditor({ candidateId, onCancel, onReleased }: { candidateId: strin
               </div>
             </div>
 
+            {/* Per-offer salary structure — same editor as the designation template */}
+            <div className="border-t border-border pt-4">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <p className="text-sm font-medium text-foreground">Salary structure</p>
+                <button onClick={resetLines}
+                  className="flex items-center gap-1.5 px-3 py-1.5 border border-border rounded-lg text-xs font-medium hover:bg-muted transition-colors"
+                  title="Restore this designation's template lines">
+                  <RotateCcw size={13} /> Reset to template
+                </button>
+              </div>
+              <p className="text-xs text-secondary mt-1">
+                These components apply to <b>this offer only</b> and don&apos;t change the {designation || 'designation'}&apos;s template.
+              </p>
+              <LinesEditor components={components} lines={lines} setLine={setLine} addLine={addLine} removeLine={removeLine} />
+              {linesError && (
+                <p className="text-xs text-red-600 mt-2">{linesError}</p>
+              )}
+            </div>
+
             {bd && (
               <div className="bg-muted/40 rounded-lg p-4 text-sm space-y-1.5">
                 {(bd.earnings ?? []).map((l: any) => (
@@ -975,11 +1033,12 @@ function OfferEditor({ candidateId, onCancel, onReleased }: { candidateId: strin
             )}
 
             <div className="flex gap-3 pt-1">
-              <button onClick={handlePreview} disabled={previewing || !finalNum}
+              <button onClick={handlePreview} disabled={previewing || !finalNum || !!linesError}
                 className="flex items-center gap-2 px-5 py-2.5 border border-primary text-primary rounded-lg text-sm font-medium hover:bg-primary/5 disabled:opacity-50 transition-colors">
                 {previewing ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} Preview PDF
               </button>
-              <button onClick={() => releaseMutation.mutate()} disabled={releaseMutation.isPending || !finalNum || !joiningDate || overBand}
+              <button onClick={() => releaseMutation.mutate()} disabled={releaseMutation.isPending || !canRelease}
+                title={linesError ?? (overBand ? 'Offered CTC exceeds the sanctioned band' : undefined)}
                 className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors">
                 {releaseMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />} Release Offer
               </button>

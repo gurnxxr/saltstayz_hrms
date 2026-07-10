@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
@@ -11,12 +11,15 @@ import {
   Play, Lock, LockOpen, Loader2, CheckCircle2, AlertTriangle, Download, Pencil, X, ClipboardList,
 } from 'lucide-react';
 import Breadcrumb from '@/components/ui/Breadcrumb';
+import Pagination, { pageSlice } from '@/components/ui/Pagination';
 import { formatINR } from '@/lib/utils';
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
+
+const PAGE_SIZE = 25;
 
 export default function PayrollRunsPage() {
   const router = useRouter();
@@ -39,6 +42,9 @@ export default function PayrollRunsPage() {
   const [adjusting, setAdjusting] = useState<any | null>(null);
   const [adjForm, setAdjForm] = useState({ lop_override: '', adjustment_amount: '', adjustment_label: '', note: '' });
 
+  // Client-side pagination for the review grid (presentation only — export/coverage read the full run).
+  const [reviewPage, setReviewPage] = useState(1);
+
   const { data: runs = [], isLoading } = useQuery({
     queryKey: ['payroll-runs'],
     queryFn: () => api.get('/payroll/runs').then(r => r.data),
@@ -47,12 +53,21 @@ export default function PayrollRunsPage() {
 
   const currentRun = runs.find((r: any) => r.month === month && r.year === year);
 
+  // Reset to the first page whenever the selected month/year/run changes.
+  useEffect(() => { setReviewPage(1); }, [month, year, currentRun?.id]);
+
   // Review grid: per-employee days / LOP / net for the selected period.
   const { data: details } = useQuery({
     queryKey: ['run-details', month, year],
     queryFn: () => api.get(`/payroll/runs/details?month=${month}&year=${year}`).then(r => r.data),
     enabled: canManage && !!currentRun,
   });
+
+  // Clamp the page when the set shrinks so we never render an empty grid with rows available.
+  // `details.slips` stays the FULL run — the register export and the coverage gate read it.
+  const reviewTotal = details?.slips?.length ?? 0;
+  const reviewCurrent = Math.min(reviewPage, Math.max(1, Math.ceil(reviewTotal / PAGE_SIZE)));
+  const reviewSlips = pageSlice(details?.slips ?? [], reviewCurrent, PAGE_SIZE);
 
   const runMutation = useMutation({
     mutationFn: () => api.post('/payroll/runs', { month, year }).then(r => r.data),
@@ -265,7 +280,7 @@ export default function PayrollRunsPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {details.slips.map((s: any) => {
+                  {reviewSlips.map((s: any) => {
                     const unmarked = s.days?.counts?.unmarked ?? 0;
                     const missPunch = s.days?.counts?.miss_punch ?? 0;
                     const shortPunch = s.days?.counts?.short_punch ?? 0;
@@ -332,6 +347,14 @@ export default function PayrollRunsPage() {
                 </tbody>
               </table>
             </div>
+            <Pagination
+              total={reviewTotal}
+              page={reviewCurrent}
+              pageSize={PAGE_SIZE}
+              onPageChange={setReviewPage}
+              shown={reviewSlips.length}
+              itemLabel="payslips"
+            />
             {details.skipped?.length > 0 && (
               <div className="px-6 py-3 border-t border-border text-xs text-amber-700">
                 Not generated ({details.skipped.length}): {details.skipped.slice(0, 8).map((s: any) => s.employee_code).join(', ')}{details.skipped.length > 8 ? '…' : ''} — assign a salary structure and re-run.

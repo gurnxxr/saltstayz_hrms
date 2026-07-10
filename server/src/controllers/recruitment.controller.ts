@@ -243,13 +243,21 @@ export async function getOfferDefaults(req: AuthRequest, res: Response, next: Ne
   }
 }
 
+/** Draft lines are too big for a query string, so the editor POSTs them; GET ?base= still works. */
 export async function getOfferBreakdown(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    const base = req.query.base != null ? Number(req.query.base) : 0;
-    res.json(await recruitmentService.getOfferBreakdown(Number(req.params.id), base));
+    const base = req.body?.base_gross != null ? Number(req.body.base_gross)
+      : (req.query.base != null ? Number(req.query.base) : 0);
+    const lines = Array.isArray(req.body?.lines) ? req.body.lines : null;
+    res.json(await recruitmentService.getOfferBreakdown(Number(req.params.id), base, lines));
   } catch (err) {
     next(err);
   }
+}
+
+/** The salary-component catalog the offer's line editor picks from. */
+export async function listOfferComponents(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await recruitmentService.listOfferComponents()); } catch (err) { next(err); }
 }
 
 export async function previewOffer(req: AuthRequest, res: Response, next: NextFunction) {
@@ -258,6 +266,7 @@ export async function previewOffer(req: AuthRequest, res: Response, next: NextFu
       base_gross: Number(req.body.base_gross) || 0,
       joining_date: req.body.joining_date,
       designation: req.body.designation,
+      lines: Array.isArray(req.body.lines) ? req.body.lines : null,
     });
     const buffer = await generateOfferLetterPdf({
       candidateName: candidate.name,
@@ -286,6 +295,7 @@ export async function releaseOffer(req: AuthRequest, res: Response, next: NextFu
         base_gross: Number(req.body.base_gross) || 0,
         joining_date: req.body.joining_date,
         designation: req.body.designation,
+        lines: Array.isArray(req.body.lines) ? req.body.lines : null,
       },
       req.user!.userId
     );

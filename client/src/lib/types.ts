@@ -33,6 +33,8 @@ export interface Employee {
   date_of_birth: string;
   /** 'male' | 'female' | 'other' — drives gender-restricted leave eligibility. */
   gender: string | null;
+  /** Derived from the employee's property, not stored. Drives PT / LWF / holidays. */
+  state?: string | null;
   date_of_joining: string;
   date_of_exit: string | null;
   department_id: number;

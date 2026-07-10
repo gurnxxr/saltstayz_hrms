@@ -1,15 +1,17 @@
 'use client';
 
-import { Fragment, useState } from 'react';
+import { Fragment, useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import AppShell from '@/components/layout/AppShell';
 import Breadcrumb from '@/components/ui/Breadcrumb';
 import LoadError from '@/components/ui/LoadError';
+import Pagination, { pageSlice } from '@/components/ui/Pagination';
 import api from '@/lib/api';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { Search, Filter, ChevronDown, ChevronRight, Download, Loader2 } from 'lucide-react';
 
 const selectCls = 'px-3 py-2 border border-border rounded-lg bg-background text-sm';
+const PAGE_SIZE = 25;
 
 /**
  * Every employee's leave balance, by leave type, for one period.
@@ -25,6 +27,7 @@ export default function LeaveBalancesPage() {
   const [dept, setDept] = useState('');
   const [search, setSearch] = useState('');
   const [expanded, setExpanded] = useState<number | null>(null);
+  const [page, setPage] = useState(1);
   const debouncedSearch = useDebouncedValue(search, 300);
 
   const { data: periods = [] } = useQuery({
@@ -53,8 +56,16 @@ export default function LeaveBalancesPage() {
   });
 
   const leaveTypes = data?.leave_types ?? [];
-  const employees = data?.employees ?? [];
+  const employees = data?.employees ?? [];        // full filtered set (all pages) — CSV/summary read this
   const balanceOf = (emp: any, typeId: number) => emp.balances.find((b: any) => b.leave_type_id === typeId);
+
+  // Client-side pagination over the rows. `visible` is what the table renders.
+  const totalPages = Math.max(1, Math.ceil(employees.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages); // clamp when the filtered set shrinks past the current page
+  const visible = pageSlice(employees, currentPage, PAGE_SIZE);
+
+  // Reset to page 1 when the filtered set changes.
+  useEffect(() => { setPage(1); }, [periodId, branch, dept, debouncedSearch]);
 
   // Flatten the grid to one row per employee, exactly as displayed (plus the
   // taken/pending/source values behind each cell's tooltip).
@@ -156,6 +167,7 @@ export default function LeaveBalancesPage() {
           ) : employees.length === 0 ? (
             <div className="p-8 text-center text-secondary">No employees match these filters.</div>
           ) : (
+            <>
             <div className="overflow-x-auto">
               <table className="w-full border-collapse text-sm">
                 <thead>
@@ -167,7 +179,7 @@ export default function LeaveBalancesPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {employees.map((e: any) => (
+                  {visible.map((e: any) => (
                     <Fragment key={e.id}>
                       <tr
                         onClick={() => setExpanded(expanded === e.id ? null : e.id)}
@@ -249,6 +261,15 @@ export default function LeaveBalancesPage() {
                 </tbody>
               </table>
             </div>
+            <Pagination
+              total={employees.length}
+              page={currentPage}
+              pageSize={PAGE_SIZE}
+              shown={visible.length}
+              onPageChange={setPage}
+              itemLabel="employees"
+            />
+            </>
           )}
         </div>
 

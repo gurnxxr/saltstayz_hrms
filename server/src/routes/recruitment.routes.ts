@@ -38,8 +38,11 @@ router.get('/candidates/:id/history', authorize('recruitment', 'read'), ctrl.get
 router.get('/candidates/:id/checklists', authorize('recruitment', 'read'), ctrl.getCandidateChecklists);
 
 // Offer lifecycle (steps 7-8)
+router.get('/salary-components', authorize('recruitment', 'read'), ctrl.listOfferComponents);
 router.get('/candidates/:id/offer-defaults', authorize('recruitment', 'read'), ctrl.getOfferDefaults);
 router.get('/candidates/:id/offer-breakdown', authorize('recruitment', 'read'), ctrl.getOfferBreakdown);
+// POST too: the offer's draft structure lines don't fit in a query string.
+router.post('/candidates/:id/offer-breakdown', authorize('recruitment', 'read'), ctrl.getOfferBreakdown);
 router.post('/candidates/:id/offer/preview', authorize('recruitment', 'create'), ctrl.previewOffer);
 router.get('/candidates/:id/offer/pdf', authorize('recruitment', 'read'), ctrl.downloadOfferPdf);
 router.post('/candidates/:id/offer/accept', authorize('recruitment', 'create'), ctrl.acceptOffer);

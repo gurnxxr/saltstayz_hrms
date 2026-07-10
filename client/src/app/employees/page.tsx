@@ -10,8 +10,9 @@ import { useAuth } from '@/lib/auth';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import LoadError from '@/components/ui/LoadError';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import Pagination from '@/components/ui/Pagination';
 import {
-  Search, Users, Filter, Eye, ChevronDown, ChevronLeft, ChevronRight, Upload, X, History, Copy,
+  Search, Users, Filter, Eye, Pencil, ChevronDown, ChevronRight, Upload, X, History, Copy,
 } from 'lucide-react';
 
 const PAGE_SIZE = 10;
@@ -85,9 +86,7 @@ export default function EmployeeDetailsPage() {
 
   const pageEmployees = data?.data ?? [];
   const total = data?.total ?? 0;
-  const totalPages = data?.totalPages ?? 1;
   const currentPage = data?.page ?? page;
-  const startIdx = (currentPage - 1) * PAGE_SIZE;
 
   return (
     <AppShell>
@@ -157,6 +156,7 @@ export default function EmployeeDetailsPage() {
                     <th className="text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Dept Name</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Designation</th>
                     <th className="hidden sm:table-cell text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Branch Name</th>
+                    <th className="hidden lg:table-cell text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">State</th>
                     <th className="hidden sm:table-cell text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Reporting Manager</th>
                     <th className="hidden sm:table-cell text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Phone Number</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Email Address</th>
@@ -181,6 +181,15 @@ export default function EmployeeDetailsPage() {
                         <td className="px-4 py-3 text-sm text-foreground">{emp.dept_name || '—'}</td>
                         <td className="px-4 py-3 text-sm text-foreground">{emp.designation_name || '—'}</td>
                         <td className="hidden sm:table-cell px-4 py-3 text-sm text-foreground">{emp.branch_name || '—'}</td>
+                        {/* Derived from the property. Blank means the branch isn't a known
+                            property, and payroll silently falls back to Haryana rates. */}
+                        <td className="hidden lg:table-cell px-4 py-3 text-sm text-foreground">
+                          {emp.state || (
+                            <span className="text-amber-600" title={`"${emp.branch_name || 'No branch'}" is not a known property, so no state resolves. Payroll falls back to Haryana.`}>
+                              Not set
+                            </span>
+                          )}
+                        </td>
                         <td className="hidden sm:table-cell px-4 py-3 text-sm text-foreground">{manager || '—'}</td>
                         <td className="hidden sm:table-cell px-4 py-3 text-sm text-foreground">{emp.phone || '—'}</td>
                         <td className="px-4 py-3 text-sm text-foreground">{emp.email || '—'}</td>
@@ -209,12 +218,24 @@ export default function EmployeeDetailsPage() {
                           </div>
                         </td>
                         <td className="px-4 py-3 text-right">
-                          <button
-                            onClick={() => router.push(`/employees/${emp.id}`)}
-                            className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/5 rounded-lg transition-colors"
-                          >
-                            <Eye size={14} /> View
-                          </button>
+                          <div className="inline-flex items-center gap-1">
+                            <button
+                              onClick={() => router.push(`/employees/${emp.id}`)}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/5 rounded-lg transition-colors"
+                            >
+                              <Eye size={14} /> View
+                            </button>
+                            {/* Opens the detail page's existing editor rather than a second form. */}
+                            {canEditStatus && (
+                              <button
+                                onClick={() => router.push(`/employees/${emp.id}?edit=1`)}
+                                title={`Edit ${emp.first_name} ${emp.last_name}`}
+                                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-secondary hover:text-foreground hover:bg-muted rounded-lg transition-colors"
+                              >
+                                <Pencil size={14} /> Edit
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -223,47 +244,14 @@ export default function EmployeeDetailsPage() {
               </table>
             </div>
 
-            {/* Pagination */}
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-border bg-muted/30">
-              <p className="text-xs text-secondary">
-                Showing <span className="font-medium text-foreground">{startIdx + 1}</span>–
-                <span className="font-medium text-foreground">{startIdx + pageEmployees.length}</span> of{' '}
-                <span className="font-medium text-foreground">{total}</span> employees
-              </p>
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => setPage(p => Math.max(1, p - 1))}
-                  disabled={currentPage === 1}
-                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-foreground border border-border rounded-lg hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                >
-                  <ChevronLeft size={14} /> Prev
-                </button>
-                {getPageNumbers(currentPage, totalPages).map((p, i) =>
-                  p === '...' ? (
-                    <span key={`ellipsis-${i}`} className="px-2 text-xs text-secondary">…</span>
-                  ) : (
-                    <button
-                      key={p}
-                      onClick={() => setPage(p as number)}
-                      className={`min-w-[32px] px-2.5 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-                        currentPage === p
-                          ? 'bg-primary text-white'
-                          : 'text-foreground border border-border hover:bg-muted'
-                      }`}
-                    >
-                      {p}
-                    </button>
-                  )
-                )}
-                <button
-                  onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-                  disabled={currentPage === totalPages}
-                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-foreground border border-border rounded-lg hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                >
-                  Next <ChevronRight size={14} />
-                </button>
-              </div>
-            </div>
+            <Pagination
+              total={total}
+              page={currentPage}
+              pageSize={PAGE_SIZE}
+              shown={pageEmployees.length}
+              itemLabel="employees"
+              onPageChange={setPage}
+            />
           </div>
         )}
 
@@ -337,13 +325,6 @@ export default function EmployeeDetailsPage() {
       )}
     </AppShell>
   );
-}
-
-function getPageNumbers(current: number, total: number): (number | string)[] {
-  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
-  if (current <= 4) return [1, 2, 3, 4, 5, '...', total];
-  if (current >= total - 3) return [1, '...', total - 4, total - 3, total - 2, total - 1, total];
-  return [1, '...', current - 1, current, current + 1, '...', total];
 }
 
 function fmtDateTime(s?: string) {

@@ -43,6 +43,7 @@ export default function RosterPage() {
   const [weekStart, setWeekStart] = useState<string>(() => mondayOf(new Date()));
   const [edits, setEdits] = useState<Record<string, Edit>>({}); // `${empId}|${date}` → Edit
   const [selected, setSelected] = useState<Set<number>>(new Set()); // employees ticked for copy
+  const [deptFilter, setDeptFilter] = useState(''); // '' = all departments
 
   const weekEnd = addDays(weekStart, 6);
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
@@ -74,19 +75,44 @@ export default function RosterPage() {
     enabled: !!activePropertyId,
   });
 
-  const employees: any[] = roster?.employees ?? [];
+  const allEmployees: any[] = roster?.employees ?? [];
   const status: string = roster?.status ?? 'empty';
   // Any published cells (fully or partially) lock editing — you must unpublish first.
   const hasPublished = status === 'published' || status === 'partial';
 
+  // ── Department filter ──
+  // Options come from the rostered employees themselves, not from the departments
+  // table: dept_name is free text and some employees sit in departments that table
+  // doesn't contain, so sourcing options there would silently hide them.
+  const NO_DEPT = '__none__';
+  const departments = useMemo(() => {
+    const seen = new Set<string>();
+    for (const e of allEmployees) seen.add(e.dept_name?.trim() || NO_DEPT);
+    return [...seen].sort((a, b) => (a === NO_DEPT ? 1 : b === NO_DEPT ? -1 : a.localeCompare(b)));
+  }, [allEmployees]);
+
+  const employees = useMemo(
+    () => (deptFilter ? allEmployees.filter((e) => (e.dept_name?.trim() || NO_DEPT) === deptFilter) : allEmployees),
+    [allEmployees, deptFilter],
+  );
+
   // ── Employee selection (for "copy last week" of chosen employees) ──
+  // Selection is scoped to what's visible: ticking "all" while filtered to Housekeeping
+  // must not copy the whole property, and a hidden row must never ride along on Copy.
+  const visibleIds = useMemo(() => new Set(employees.map((e) => e.id)), [employees]);
+  const selectedVisible = useMemo(() => [...selected].filter((id) => visibleIds.has(id)), [selected, visibleIds]);
   const allSelected = employees.length > 0 && employees.every((e) => selected.has(e.id));
   const toggleOne = (id: number) => setSelected((prev) => {
     const next = new Set(prev);
     next.has(id) ? next.delete(id) : next.add(id);
     return next;
   });
-  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(employees.map((e) => e.id)));
+  const toggleAll = () => setSelected((prev) => {
+    const next = new Set(prev);
+    if (allSelected) employees.forEach((e) => next.delete(e.id));
+    else employees.forEach((e) => next.add(e.id));
+    return next;
+  });
 
   function guardDiscard(): boolean {
     if (!dirty) return true;
@@ -95,8 +121,13 @@ export default function RosterPage() {
   }
 
   const changeWeek = (delta: number) => { if (guardDiscard()) setWeekStart(addDays(weekStart, delta * 7)); };
-  const changeProperty = (id: number) => { if (guardDiscard()) { setPropertyId(id); setSelected(new Set()); } };
-  const copySelected = () => { if (selected.size && guardDiscard()) copyMutation.mutate({ employeeIds: [...selected] }); };
+  const changeProperty = (id: number) => {
+    if (guardDiscard()) { setPropertyId(id); setSelected(new Set()); setDeptFilter(''); }
+  };
+  // Copy only what the user can see — a selection hidden by the filter is not consent.
+  const copySelected = () => {
+    if (selectedVisible.length && guardDiscard()) copyMutation.mutate({ employeeIds: selectedVisible });
+  };
 
   // Current select value for a cell: pending edit wins over the fetched cell.
   const cellValue = (empId: number, date: string, cell: any): string => {
@@ -195,6 +226,20 @@ export default function RosterPage() {
             {properties.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
 
+          <select
+            value={deptFilter}
+            onChange={(e) => setDeptFilter(e.target.value)}
+            disabled={departments.length <= 1}
+            title={departments.length <= 1 ? 'This property has only one department' : 'Filter the roster by department'}
+            className="px-3 py-2 border border-border rounded-lg bg-background text-sm disabled:opacity-50"
+          >
+            <option value="">All Departments{allEmployees.length ? ` (${allEmployees.length})` : ''}</option>
+            {departments.map((d) => {
+              const n = allEmployees.filter((e) => (e.dept_name?.trim() || NO_DEPT) === d).length;
+              return <option key={d} value={d}>{d === NO_DEPT ? 'No department' : d} ({n})</option>;
+            })}
+          </select>
+
           <div className="flex items-center gap-1">
             <button onClick={() => changeWeek(-1)} className="p-2 rounded-lg border border-border hover:bg-muted" title="Previous week"><ChevronLeft size={16} /></button>
             <span className="text-sm font-medium text-foreground px-2 min-w-44 text-center inline-flex items-center gap-1.5">
@@ -207,12 +252,14 @@ export default function RosterPage() {
           <div className="flex items-center gap-2 ml-auto">
             <button
               onClick={copySelected}
-              disabled={copyMutation.isPending || hasPublished || selected.size === 0}
-              title={selected.size === 0 ? 'Tick employees to copy their last-week shifts' : `Copy last week's shifts for ${selected.size} selected employee(s)`}
+              disabled={copyMutation.isPending || hasPublished || selectedVisible.length === 0}
+              title={selectedVisible.length === 0
+                ? 'Tick employees to copy their last-week shifts'
+                : `Copy last week's shifts for ${selectedVisible.length} selected employee(s)`}
               className="flex items-center gap-1.5 px-3 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted disabled:opacity-50"
             >
               {copyMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Copy size={14} />}
-              Copy{selected.size > 0 ? ` (${selected.size})` : ''}
+              Copy{selectedVisible.length > 0 ? ` (${selectedVisible.length})` : ''}
             </button>
             {!hasPublished ? (
               <>
@@ -300,7 +347,9 @@ export default function RosterPage() {
                           />
                           <span className="min-w-0">
                             <span className="block text-sm font-medium text-foreground truncate">{emp.first_name} {emp.last_name}</span>
-                            <span className="block text-xs text-secondary">{emp.employee_code}{emp.designation ? ` · ${emp.designation}` : ''}</span>
+                            <span className="block text-xs text-secondary">
+                              {emp.employee_code}{emp.designation ? ` · ${emp.designation}` : ''}{emp.dept_name ? ` · ${emp.dept_name}` : ''}
+                            </span>
                           </span>
                         </label>
                       </td>

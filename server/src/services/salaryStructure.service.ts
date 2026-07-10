@@ -129,8 +129,8 @@ export async function getStructureByJobTitle(jobTitleId: number) {
 
 // ─── CRUD ───
 
-/** Raw lines (for the editor) — component + calc type + value. */
-async function editorLines(structureId: number) {
+/** Raw lines (for the editor) — component + calc type + value. Also seeds the offer editor. */
+export async function editorLines(structureId: number) {
   return db('salary_structure_components as l')
     .join('salary_components as c', 'c.id', 'l.component_id')
     .where('l.structure_id', structureId)
