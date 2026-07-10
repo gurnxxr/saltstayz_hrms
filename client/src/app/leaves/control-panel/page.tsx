@@ -18,6 +18,7 @@ const BLANK_LT_FORM = {
   min_days_per_request: '', max_days_per_request: '', advance_notice_days: '', document_required_after_days: '',
   half_day_allowed: true, after_probation_only: false, count_sandwich_days: false, eligibility: 'any',
   cannot_club_with: [] as number[],
+  departments: [] as number[],
 };
 
 export default function LeaveControlPanelPage() {
@@ -49,6 +50,11 @@ function LeaveTypesCard() {
     queryFn: () => api.get('/leave/types/all').then(r => r.data),
   });
 
+  const { data: departments = [] } = useQuery({
+    queryKey: ['departments'],
+    queryFn: () => api.get('/admin/departments').then(r => r.data),
+  });
+
   const openNew = () => { setForm(BLANK_LT_FORM); setEditing('new'); };
   const openEdit = (t: any) => {
     const num = (v: any) => (v != null ? String(v) : '');
@@ -59,6 +65,7 @@ function LeaveTypesCard() {
       half_day_allowed: t.half_day_allowed !== false, after_probation_only: !!t.after_probation_only,
       count_sandwich_days: !!t.count_sandwich_days, eligibility: t.eligibility || 'any',
       cannot_club_with: Array.isArray(t.cannot_club_with) ? t.cannot_club_with : [],
+      departments: Array.isArray(t.departments) ? t.departments : [],
     });
     setEditing(t);
   };
@@ -74,6 +81,7 @@ function LeaveTypesCard() {
         half_day_allowed: form.half_day_allowed, after_probation_only: form.after_probation_only,
         count_sandwich_days: form.count_sandwich_days, eligibility: form.eligibility,
         cannot_club_with: form.cannot_club_with,
+        departments: form.departments, // empty = applies to every department
       };
       return editing === 'new' ? api.post('/leave/types', payload) : api.put(`/leave/types/${(editing as any).id}`, payload);
     },
@@ -250,6 +258,21 @@ function LeaveTypesCard() {
                     ))}
                   </div>
                   <p className="text-xs text-secondary mt-1">Symmetric — the other type will also block this one.</p>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-secondary mb-1">Applies to departments</label>
+                  <div className="border border-border rounded-lg p-2 max-h-32 overflow-y-auto space-y-0.5">
+                    {departments.length === 0 ? (
+                      <p className="text-xs text-secondary px-1 py-0.5">No departments configured.</p>
+                    ) : departments.map((d: any) => (
+                      <label key={d.id} className="flex items-center gap-2 px-1 py-0.5 cursor-pointer text-sm">
+                        <input type="checkbox" className="accent-primary w-4 h-4" checked={form.departments.includes(d.id)}
+                          onChange={(e) => setForm((p: any) => ({ ...p, departments: e.target.checked ? [...p.departments, d.id] : p.departments.filter((x: number) => x !== d.id) }))} />
+                        <span className="text-foreground">{d.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <p className="text-xs text-secondary mt-1">Leave all unticked to make this type available to every department.</p>
                 </div>
               </div>
             </div>

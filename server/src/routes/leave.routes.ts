@@ -47,6 +47,10 @@ router.delete('/types/:id', authorize('leave', 'delete'), LEAVE_ADMIN, ctrl.dele
 router.post('/periods', authorize('leave', 'create'), LEAVE_ADMIN, ctrl.createLeavePeriod);
 router.put('/periods/:id/current', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.setCurrentPeriod);
 
+// Balances: every employee x every leave type for a period (read-only grid).
+// Distinct from GET /balances above, which is the caller's own self-service balances.
+router.get('/balances/overview', authorize('leave', 'read'), LEAVE_ADMIN, ctrl.getBalancesOverview);
+
 // Allocation: entitlements grid + single/bulk upsert
 router.get('/entitlements', authorize('leave', 'read'), LEAVE_ADMIN, ctrl.getEntitlements);
 router.put('/entitlements', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.upsertEntitlement);

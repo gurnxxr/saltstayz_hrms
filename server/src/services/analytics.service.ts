@@ -826,10 +826,14 @@ const ZERO_ATTENDANCE = { present: 0, absent: 0, half_day: 0, on_leave: 0, total
 async function leaveBalancesFor(employeeId: number) {
   let balances: any[] = [];
   try { balances = await getMyBalances(employeeId); } catch { balances = []; }
+  // getMyBalances returns EffectiveBalance rows (allocated / available / taken / pending).
+  // "Used" here is whatever no longer counts as available, so used + remaining === total
+  // for both allocation sources: an entitlement's used_days counter, or (taken + pending)
+  // on the default_days path where pending reserves balance.
   return balances.map((b: any) => {
-    const total_days = Number(b.total_days ?? 0);
-    const used_days = Number(b.used_days ?? 0);
-    return { leave_type: b.leave_type, total_days, used_days, remaining: Math.max(0, total_days - used_days), is_paid: !!b.is_paid };
+    const total_days = Number(b.allocated ?? 0);
+    const remaining = Math.max(0, Number(b.available ?? 0));
+    return { leave_type: b.leave_type, total_days, used_days: Math.max(0, total_days - remaining), remaining, is_paid: !!b.is_paid };
   });
 }
 

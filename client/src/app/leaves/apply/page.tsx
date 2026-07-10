@@ -41,7 +41,7 @@ export default function ApplyLeavePage() {
   });
 
   const selectedBalance = balances.find((b: any) => String(b.leave_type_id) === form.leave_type_id);
-  const remaining = selectedBalance ? selectedBalance.total_days - selectedBalance.used_days : null;
+  const remaining = selectedBalance ? selectedBalance.available : null;
 
   // The selected type's admin-configured rules, shown as a hint (server enforces them).
   const selectedType = leaveTypes.find((lt: any) => String(lt.id) === form.leave_type_id);
@@ -52,6 +52,7 @@ export default function ApplyLeavePage() {
     if (t.max_days_per_request) rules.push(`At most ${t.max_days_per_request} day(s) per request`);
     if (t.advance_notice_days) rules.push(`Apply at least ${t.advance_notice_days} day(s) in advance`);
     if (t.eligibility && t.eligibility !== 'any') rules.push(`${t.eligibility === 'female' ? 'Female' : 'Male'} employees only`);
+    if (Array.isArray(t.department_names) && t.department_names.length) rules.push(`Available to the ${t.department_names.join(', ')} department(s)`);
     if (t.after_probation_only) rules.push('Available only after probation ends');
     if (t.half_day_allowed === false) rules.push('Half-days not allowed');
     if (t.count_sandwich_days) rules.push('Holidays / weekly-offs in between also count as leave');

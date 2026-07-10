@@ -68,22 +68,24 @@ export default function LeaveTab() {
       {balancesError && <LoadError compact message="Couldn't load leave balances." onRetry={() => refetchBalances()} />}
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
         {balances.map((b: any) => {
-          const remaining = b.total_days - b.used_days;
-          const pct = b.total_days > 0 ? (b.used_days / b.total_days) * 100 : 0;
+          const consumed = b.allocated - b.available;
+          const pct = b.allocated > 0 ? (consumed / b.allocated) * 100 : 0;
           return (
-            <div key={b.id} className="bg-card rounded-xl border border-border p-4">
+            <div key={b.leave_type_id} className="bg-card rounded-xl border border-border p-4">
               <p className="text-xs font-medium text-secondary truncate">{b.leave_type}</p>
               <div className="mt-2 flex items-end gap-1">
-                <span className="text-2xl font-bold text-foreground">{remaining}</span>
-                <span className="text-xs text-secondary mb-1">/ {b.total_days}</span>
+                <span className="text-2xl font-bold text-foreground">{b.available}</span>
+                <span className="text-xs text-secondary mb-1">/ {b.allocated}</span>
               </div>
               <div className="mt-2 w-full h-1.5 bg-muted rounded-full overflow-hidden">
                 <div
                   className={`h-full rounded-full ${pct > 80 ? 'bg-red-500' : pct > 50 ? 'bg-yellow-500' : 'bg-green-500'}`}
-                  style={{ width: `${pct}%` }}
+                  style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
                 />
               </div>
-              <p className="text-xs text-secondary mt-1">{b.used_days} used</p>
+              <p className="text-xs text-secondary mt-1">
+                {b.taken} taken{b.pending > 0 ? ` · ${b.pending} pending` : ''}
+              </p>
             </div>
           );
         })}

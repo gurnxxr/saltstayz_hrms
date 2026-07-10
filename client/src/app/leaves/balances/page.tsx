@@ -1,0 +1,266 @@
+'use client';
+
+import { Fragment, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import AppShell from '@/components/layout/AppShell';
+import Breadcrumb from '@/components/ui/Breadcrumb';
+import LoadError from '@/components/ui/LoadError';
+import api from '@/lib/api';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { Search, Filter, ChevronDown, ChevronRight, Download, Loader2 } from 'lucide-react';
+
+const selectCls = 'px-3 py-2 border border-border rounded-lg bg-background text-sm';
+
+/**
+ * Every employee's leave balance, by leave type, for one period.
+ *
+ * "Available" is the number the apply screen actually gates on. It is NOT always
+ * allocated − taken − pending: for an employee with an explicit allocation the server
+ * counts only APPROVED days (a stored used_days counter), so their pending days do
+ * not reserve balance. Pending is therefore its own column rather than folded in.
+ */
+export default function LeaveBalancesPage() {
+  const [periodId, setPeriodId] = useState('');
+  const [branch, setBranch] = useState('');
+  const [dept, setDept] = useState('');
+  const [search, setSearch] = useState('');
+  const [expanded, setExpanded] = useState<number | null>(null);
+  const debouncedSearch = useDebouncedValue(search, 300);
+
+  const { data: periods = [] } = useQuery({
+    queryKey: ['leave-periods'],
+    queryFn: () => api.get('/leave/periods').then(r => r.data),
+  });
+  const { data: properties = [] } = useQuery({
+    queryKey: ['properties'],
+    queryFn: () => api.get('/admin/properties').then(r => r.data),
+  });
+  const { data: departments = [] } = useQuery({
+    queryKey: ['departments'],
+    queryFn: () => api.get('/admin/departments').then(r => r.data),
+  });
+
+  const { data, isLoading, isError, refetch } = useQuery({
+    queryKey: ['leave-balances-overview', periodId, branch, dept, debouncedSearch],
+    queryFn: () => api.get('/leave/balances/overview', {
+      params: {
+        period_id: periodId || undefined,
+        branch: branch || undefined,
+        dept: dept || undefined,
+        search: debouncedSearch || undefined,
+      },
+    }).then(r => r.data),
+  });
+
+  const leaveTypes = data?.leave_types ?? [];
+  const employees = data?.employees ?? [];
+  const balanceOf = (emp: any, typeId: number) => emp.balances.find((b: any) => b.leave_type_id === typeId);
+
+  // Flatten the grid to one row per employee, exactly as displayed (plus the
+  // taken/pending/source values behind each cell's tooltip).
+  function exportCsv() {
+    if (!employees.length) return;
+    const rows = employees.map((e: any) => {
+      const row: Record<string, any> = {
+        Code: e.employee_code,
+        Name: `${e.first_name} ${e.last_name}`,
+        Designation: e.designation ?? '',
+        Property: e.branch_name ?? '',
+        Department: e.dept_name ?? '',
+      };
+      for (const lt of leaveTypes) {
+        const b = balanceOf(e, lt.id);
+        const na = !b || !b.applicable;
+        row[`${lt.name} Available`] = na ? 'N/A' : b.available;
+        row[`${lt.name} Allocated`] = na ? 'N/A' : b.allocated;
+        row[`${lt.name} Taken`] = b ? b.taken : 0;
+        row[`${lt.name} Pending`] = b ? b.pending : 0;
+        row[`${lt.name} Source`] = na ? 'not applicable' : b.source;
+      }
+      return row;
+    });
+    const keys = Object.keys(rows[0]);
+    const cell = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`; // names may contain , or "
+    const csv = [keys.join(','), ...rows.map((r: any) => keys.map(k => cell(r[k])).join(','))].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `leave_balances_${data?.period?.name ?? 'period'}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <AppShell>
+      <div className="space-y-6">
+        <div>
+          <Breadcrumb className="mb-2" items={[{ label: 'Leaves' }, { label: 'Balances' }]} />
+          <h1 className="text-2xl font-bold text-foreground">Leave Balances</h1>
+          <p className="text-secondary mt-1">
+            Every employee&apos;s balance by leave type{data?.period ? ` — ${data.period.name}` : ''}
+          </p>
+        </div>
+
+        {/* Filters */}
+        <div className="flex flex-wrap gap-3">
+          <div className="relative flex-1 min-w-[200px]">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-secondary" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search by name or code..."
+              className="w-full pl-9 pr-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+            />
+          </div>
+          <select className={selectCls} value={periodId} onChange={(e) => setPeriodId(e.target.value)}>
+            <option value="">Current Period</option>
+            {periods.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <select className={selectCls} value={branch} onChange={(e) => setBranch(e.target.value)}>
+            <option value="">All Properties</option>
+            {properties.map((p: any) => <option key={p.id} value={p.name}>{p.name}</option>)}
+          </select>
+          <div className="relative">
+            <Filter size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-secondary" />
+            <select
+              value={dept}
+              onChange={(e) => setDept(e.target.value)}
+              className="pl-8 pr-8 py-2 border border-border rounded-lg bg-background text-sm appearance-none"
+            >
+              <option value="">All Departments</option>
+              {departments.map((d: any) => <option key={d.id} value={d.name}>{d.name}</option>)}
+            </select>
+            <ChevronDown size={14} className="absolute right-2 top-1/2 -translate-y-1/2 text-secondary pointer-events-none" />
+          </div>
+          <button
+            onClick={exportCsv}
+            disabled={!employees.length}
+            className="flex items-center gap-2 px-3 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted disabled:opacity-50"
+            title="Export CSV"
+          >
+            <Download size={15} /> Export
+          </button>
+        </div>
+
+        {/* Grid */}
+        <div className="bg-card rounded-xl border border-border overflow-hidden">
+          <div className="px-5 py-3 border-b border-border flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-foreground">
+              {employees.length} employee{employees.length === 1 ? '' : 's'}
+            </h2>
+            <p className="text-xs text-secondary">Available / allocated · click a row for detail</p>
+          </div>
+          {isError ? (
+            <LoadError message="Couldn't load leave balances." onRetry={() => refetch()} />
+          ) : isLoading ? (
+            <div className="p-10 flex justify-center"><Loader2 className="animate-spin text-secondary" /></div>
+          ) : employees.length === 0 ? (
+            <div className="p-8 text-center text-secondary">No employees match these filters.</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-border">
+                    <th className="text-left px-4 py-3 text-xs font-medium text-secondary uppercase sticky left-0 bg-muted/50 min-w-48">Employee</th>
+                    {leaveTypes.map((lt: any) => (
+                      <th key={lt.id} className="px-2 py-3 text-xs font-medium text-secondary text-center min-w-32">{lt.name}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {employees.map((e: any) => (
+                    <Fragment key={e.id}>
+                      <tr
+                        onClick={() => setExpanded(expanded === e.id ? null : e.id)}
+                        className="hover:bg-muted/20 cursor-pointer"
+                      >
+                        <td className="px-4 py-2 sticky left-0 bg-card">
+                          <div className="flex items-center gap-1.5">
+                            {expanded === e.id
+                              ? <ChevronDown size={14} className="text-secondary shrink-0" />
+                              : <ChevronRight size={14} className="text-secondary shrink-0" />}
+                            <div className="min-w-0">
+                              <p className="font-medium text-foreground truncate">{e.first_name} {e.last_name}</p>
+                              <p className="text-xs text-secondary truncate">
+                                {e.employee_code}{e.dept_name ? ` · ${e.dept_name}` : ''}
+                              </p>
+                            </div>
+                          </div>
+                        </td>
+                        {leaveTypes.map((lt: any) => {
+                          const b = balanceOf(e, lt.id);
+                          if (!b || !b.applicable) {
+                            // Historical taken/pending days can exist if the type was restricted
+                            // after they were booked — surface them rather than hide them.
+                            const history = b && (b.taken > 0 || b.pending > 0)
+                              ? ` (${b.taken} taken · ${b.pending} pending before it was restricted)` : '';
+                            return (
+                              <td key={lt.id} className="px-2 py-2 text-center text-secondary"
+                                title={`${lt.name} does not apply to this employee's department${history}`}>
+                                —
+                              </td>
+                            );
+                          }
+                          return (
+                            <td
+                              key={lt.id}
+                              className="px-2 py-2 text-center"
+                              title={`${b.taken} taken · ${b.pending} pending${b.source === 'default' ? ' · from default days (no allocation)' : ''}`}
+                            >
+                              <span className={`font-medium ${b.available <= 0 ? 'text-red-600' : 'text-foreground'}`}>{b.available}</span>
+                              <span className="text-secondary"> / {b.allocated}</span>
+                              {b.source === 'default' && <span className="text-amber-600" title="From default days">*</span>}
+                              {b.pending > 0 && (
+                                <span className="block text-[11px] text-blue-600">{b.pending} pending</span>
+                              )}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                      {expanded === e.id && (
+                        <tr className="bg-muted">
+                          {/* sticky cell needs an opaque bg or scrolled columns bleed through */}
+                          <td className="px-4 py-2 sticky left-0 bg-muted text-xs text-secondary">
+                            {e.designation ?? '—'}{e.branch_name ? ` · ${e.branch_name}` : ''}
+                          </td>
+                          {leaveTypes.map((lt: any) => {
+                            const b = balanceOf(e, lt.id);
+                            if (!b || !b.applicable) {
+                              return (
+                                <td key={lt.id} className="px-2 py-2 text-center text-[11px] text-secondary space-y-0.5">
+                                  <p>not applicable</p>
+                                  {b && (b.taken > 0 || b.pending > 0) && <p>{b.taken} taken · {b.pending} pending</p>}
+                                </td>
+                              );
+                            }
+                            return (
+                              <td key={lt.id} className="px-2 py-2 text-center text-[11px] text-secondary space-y-0.5">
+                                <p>{b.taken} taken</p>
+                                <p>{b.pending} pending</p>
+                                <p className={b.source === 'default' ? 'text-amber-600' : ''}>
+                                  {b.source === 'default' ? 'default days' : 'allocated'}
+                                </p>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      )}
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        <div className="text-xs text-secondary space-y-1">
+          <p><span className="text-amber-600">*</span> Balance comes from the leave type&apos;s default days — this employee has no explicit allocation for the period.</p>
+          <p><span className="text-foreground">—</span> The leave type is restricted to departments this employee isn&apos;t in, so it cannot be applied for.</p>
+          <p>
+            Pending days are shown separately because they don&apos;t reduce <em>available</em> for employees with an
+            explicit allocation — only approved days do.
+          </p>
+        </div>
+      </div>
+    </AppShell>
+  );
+}

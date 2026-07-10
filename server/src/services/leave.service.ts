@@ -88,26 +88,77 @@ async function setConflicts(trx: Knex.Transaction, typeId: number, rawIds: any[]
   if (rows.length) await trx('leave_type_conflicts').insert(rows).onConflict(['leave_type_id', 'conflict_leave_type_id']).ignore();
 }
 
-/** Attach each type's `cannot_club_with` id list (one query, grouped) + map booleans. */
-async function withConflicts(types: any[]): Promise<any[]> {
-  if (!types.length) return types;
-  const all = await db('leave_type_conflicts').select('leave_type_id', 'conflict_leave_type_id');
-  const byType = new Map<number, number[]>();
-  for (const r of all) {
-    const list = byType.get(r.leave_type_id) ?? [];
-    list.push(r.conflict_leave_type_id);
-    byType.set(r.leave_type_id, list);
+/**
+ * Replace a type's allowed-department set. Unlike conflicts this is one-directional:
+ * no rows means "every department", so clearing the list lifts the restriction.
+ */
+async function setDepartments(trx: Knex.Transaction, typeId: number, rawIds: any[]) {
+  const ids = [...new Set((rawIds || []).map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+  const valid: number[] = ids.length ? await trx('departments').whereIn('id', ids).pluck('id') : [];
+  await trx('leave_type_departments').where('leave_type_id', typeId).del();
+  if (valid.length) {
+    await trx('leave_type_departments')
+      .insert(valid.map((department_id) => ({ leave_type_id: typeId, department_id })))
+      .onConflict(['leave_type_id', 'department_id']).ignore();
   }
-  return types.map((t) => ({ ...mapLeaveType(t), cannot_club_with: byType.get(t.id) ?? [] }));
 }
 
-export async function getLeaveTypes() {
-  return withConflicts(await db('leave_types').where('is_active', true).orderBy('name'));
+/** Employees carry their department as free text — resolve it to a departments.id. */
+async function departmentIdByName(name?: string | null): Promise<number | null> {
+  const trimmed = String(name || '').trim();
+  if (!trimmed) return null;
+  const dept = await db('departments').whereRaw('lower(name) = lower(?)', [trimmed]).first();
+  return dept?.id ?? null;
+}
+
+/** Attach each type's `cannot_club_with` + `departments` lists (one query each, grouped) + map booleans. */
+async function withRelations(types: any[]): Promise<any[]> {
+  if (!types.length) return types;
+  const [conflicts, depts] = await Promise.all([
+    db('leave_type_conflicts').select('leave_type_id', 'conflict_leave_type_id'),
+    db('leave_type_departments as ltd')
+      .join('departments as d', 'd.id', 'ltd.department_id')
+      .select('ltd.leave_type_id', 'ltd.department_id', 'd.name as department_name')
+      .orderBy('d.name'),
+  ]);
+  const conflictsByType = new Map<number, number[]>();
+  for (const r of conflicts) {
+    const list = conflictsByType.get(r.leave_type_id) ?? [];
+    list.push(r.conflict_leave_type_id);
+    conflictsByType.set(r.leave_type_id, list);
+  }
+  const deptsByType = new Map<number, { ids: number[]; names: string[] }>();
+  for (const r of depts) {
+    const entry = deptsByType.get(r.leave_type_id) ?? { ids: [], names: [] };
+    entry.ids.push(r.department_id);
+    entry.names.push(r.department_name);
+    deptsByType.set(r.leave_type_id, entry);
+  }
+  return types.map((t) => ({
+    ...mapLeaveType(t),
+    cannot_club_with: conflictsByType.get(t.id) ?? [],
+    departments: deptsByType.get(t.id)?.ids ?? [],
+    department_names: deptsByType.get(t.id)?.names ?? [],
+  }));
+}
+
+/**
+ * Active leave types. Given an employee, hide the types their department can't take
+ * — the apply screen is the only caller, so its dropdown only ever offers leave the
+ * employee is allowed to request. (The Control Panel reads `getAllLeaveTypes`, which
+ * stays unfiltered so admins keep seeing every type.)
+ */
+export async function getLeaveTypes(employeeId?: number) {
+  const types = await withRelations(await db('leave_types').where('is_active', true).orderBy('name'));
+  if (!employeeId) return types;
+  const emp = await db('employees').where('id', employeeId).select('dept_name').first();
+  const deptId = await departmentIdByName(emp?.dept_name);
+  return types.filter((t: any) => !t.departments.length || (deptId !== null && t.departments.includes(deptId)));
 }
 
 /** All leave types incl. inactive — for the Control Panel. */
 export async function getAllLeaveTypes() {
-  return withConflicts(await db('leave_types').orderBy('name'));
+  return withRelations(await db('leave_types').orderBy('name'));
 }
 
 export async function createLeaveType(data: {
@@ -130,6 +181,7 @@ export async function createLeaveType(data: {
       ...collectPolicy(data),
     });
     if ('cannot_club_with' in data) await setConflicts(trx, newId, (data as any).cannot_club_with);
+    if ('departments' in data) await setDepartments(trx, newId, (data as any).departments);
     return newId;
   });
   return (await getAllLeaveTypes()).find((t: any) => t.id === id);
@@ -159,6 +211,7 @@ export async function updateLeaveType(id: number, data: any) {
   await db.transaction(async (trx) => {
     await trx('leave_types').where('id', id).update({ ...patch, updated_at: trx.fn.now() });
     if ('cannot_club_with' in data) await setConflicts(trx, id, data.cannot_club_with);
+    if ('departments' in data) await setDepartments(trx, id, data.departments);
   });
   return (await getAllLeaveTypes()).find((t: any) => t.id === id);
 }
@@ -334,18 +387,194 @@ export async function bulkAllocate(data: {
 
 // ─── Leave Balances ───
 
+export type BalanceSource = 'entitlement' | 'default';
+
+export interface EffectiveBalance {
+  employee_id: number;
+  leave_type_id: number;
+  leave_type: string;
+  is_paid: boolean;
+  /** False when the type is restricted to departments this employee isn't in (migration 070). */
+  applicable: boolean;
+  /** Where `allocated` came from: an explicit entitlement row, or the type's default_days. */
+  source: BalanceSource;
+  allocated: number;
+  /** Days on approved requests starting in this period. */
+  taken: number;
+  /** Days on pending requests starting in this period. */
+  pending: number;
+  /** Exactly the number applyLeave gates on — see the note below. */
+  available: number;
+  /** The stored counter, when an entitlement row exists. Null otherwise. */
+  used_days: number | null;
+}
+
+/**
+ * The one definition of "leave balance". applyLeave, getMyBalances and the admin
+ * balances overview all read this — there is no second copy.
+ *
+ * `available` reproduces applyLeave's gate exactly, which means it is deliberately
+ * asymmetric, because the underlying data is:
+ *
+ *   - entitlement row  → total_days − used_days. `used_days` is a stored counter
+ *     bumped only on approval (approveLeave) and on encashment approval, so
+ *     PENDING requests do not reduce it.
+ *   - no entitlement   → default_days − (approved + pending) days booked this period,
+ *     so PENDING requests DO reduce it.
+ *
+ * `taken` and `pending` are always summed from leave_requests, so a caller can see
+ * the difference rather than have it averaged away. For entitlement rows `used_days`
+ * and `taken` can legitimately disagree (encashment bumps the counter; an entitlement
+ * created after leave was approved starts at 0).
+ *
+ * Bulk by construction: a fixed number of queries regardless of how many employees
+ * are passed in.
+ */
+export async function getEffectiveBalances(
+  employeeIds: number[],
+  periodId: number,
+  opts: { leaveTypeIds?: number[] } = {},
+): Promise<EffectiveBalance[]> {
+  if (!employeeIds.length) return [];
+  const period = await db('leave_periods').where('id', periodId).first();
+  if (!period) throw new NotFoundError('Leave period');
+
+  // No leaveTypeIds = the types an employee could actually apply for (active only).
+  // applyLeave passes an explicit id so it keeps gating inactive types as it always has.
+  const typesQuery = db('leave_types').select('id', 'name', 'is_paid', 'default_days').orderBy('name');
+  if (opts.leaveTypeIds) typesQuery.whereIn('id', opts.leaveTypeIds);
+  else typesQuery.where('is_active', true);
+
+  const [employees, departments, leaveTypes, restrictions, entitlements, booked] = await Promise.all([
+    db('employees').whereIn('id', employeeIds).select('id', 'dept_name'),
+    db('departments').select('id', 'name'),
+    typesQuery,
+    db('leave_type_departments').select('leave_type_id', 'department_id'),
+    db('leave_entitlements').where('leave_period_id', periodId).whereIn('employee_id', employeeIds)
+      .select('employee_id', 'leave_type_id', 'total_days', 'used_days'),
+    // Same window applyLeave uses: requests whose start_date falls in the period.
+    db('leave_requests').whereIn('employee_id', employeeIds)
+      .whereIn('status', ['pending', 'approved'])
+      .whereBetween('start_date', [period.start_date, period.end_date])
+      .groupBy('employee_id', 'leave_type_id', 'status')
+      .select('employee_id', 'leave_type_id', 'status')
+      .sum({ total: 'days' }),
+  ]);
+
+  // Mirror departmentIdByName: trim the employee's text, compare case-insensitively.
+  const deptIdByName = new Map<string, number>();
+  for (const d of departments) deptIdByName.set(String(d.name).toLowerCase(), d.id);
+  const deptIdOf = (deptName: any): number | null => {
+    const trimmed = String(deptName || '').trim();
+    if (!trimmed) return null;
+    return deptIdByName.get(trimmed.toLowerCase()) ?? null;
+  };
+
+  const allowedByType = new Map<number, Set<number>>();
+  for (const r of restrictions) {
+    const set = allowedByType.get(r.leave_type_id) ?? new Set<number>();
+    set.add(r.department_id);
+    allowedByType.set(r.leave_type_id, set);
+  }
+
+  const key = (employeeId: number, leaveTypeId: number) => `${employeeId}:${leaveTypeId}`;
+  const entByKey = new Map<string, any>();
+  for (const e of entitlements) entByKey.set(key(e.employee_id, e.leave_type_id), e);
+  const takenByKey = new Map<string, number>();
+  const pendingByKey = new Map<string, number>();
+  for (const b of booked as any[]) {
+    const target = b.status === 'approved' ? takenByKey : pendingByKey;
+    target.set(key(b.employee_id, b.leave_type_id), Number(b.total || 0));
+  }
+
+  const out: EffectiveBalance[] = [];
+  for (const emp of employees) {
+    const deptId = deptIdOf(emp.dept_name);
+    for (const lt of leaveTypes) {
+      const allowed = allowedByType.get(lt.id);
+      const k = key(emp.id, lt.id);
+      const ent = entByKey.get(k);
+      const taken = takenByKey.get(k) ?? 0;
+      const pending = pendingByKey.get(k) ?? 0;
+      const allocated = ent ? Number(ent.total_days) : Number(lt.default_days || 0);
+      out.push({
+        employee_id: emp.id,
+        leave_type_id: lt.id,
+        leave_type: lt.name,
+        is_paid: !!lt.is_paid,
+        // No rows for a type = every department (migration 070). A restricted type stays
+        // unavailable when the employee's department is missing or unrecognised.
+        applicable: !allowed || (deptId !== null && allowed.has(deptId)),
+        source: ent ? 'entitlement' : 'default',
+        allocated,
+        taken,
+        pending,
+        available: ent ? Number(ent.total_days) - Number(ent.used_days) : allocated - taken - pending,
+        used_days: ent ? Number(ent.used_days) : null,
+      });
+    }
+  }
+  return out;
+}
+
+/** Self-service balances: every type the employee may apply for, allocation row or not. */
 export async function getMyBalances(employeeId: number) {
   const period = await getCurrentPeriod();
-  return db('leave_entitlements')
-    .join('leave_types', 'leave_types.id', 'leave_entitlements.leave_type_id')
-    .where('leave_entitlements.employee_id', employeeId)
-    .where('leave_entitlements.leave_period_id', period.id)
-    .select(
-      'leave_entitlements.*',
-      'leave_types.name as leave_type',
-      'leave_types.is_paid'
-    )
-    .orderBy('leave_types.name');
+  const balances = await getEffectiveBalances([employeeId], period.id);
+  return balances.filter((b) => b.applicable);
+}
+
+/**
+ * Admin grid: every active employee x every active leave type, for one period.
+ * Types a department can't take report applicable:false with null allocated/available,
+ * so the client can render "not applicable" rather than a misleading zero.
+ */
+export async function getBalancesOverview(filters: {
+  period_id?: number; search?: string; branch?: string; dept?: string;
+}) {
+  const period = filters.period_id
+    ? await db('leave_periods').where('id', filters.period_id).first()
+    : await getCurrentPeriod();
+  if (!period) throw new NotFoundError('Leave period');
+
+  const employeesQuery = db('employees as e')
+    .leftJoin('job_titles as jt', 'jt.id', 'e.job_title_id')
+    .where('e.is_active', true)
+    .select('e.id', 'e.employee_code', 'e.first_name', 'e.last_name', 'e.branch_name', 'e.dept_name', 'jt.title as designation')
+    .orderBy('e.first_name');
+  if (filters.branch) employeesQuery.where('e.branch_name', filters.branch);
+  if (filters.dept) employeesQuery.where('e.dept_name', filters.dept);
+  if (filters.search && filters.search.trim()) {
+    const term = `%${filters.search.trim()}%`;
+    employeesQuery.where(function (this: any) {
+      this.where('e.first_name', 'like', term)
+        .orWhere('e.last_name', 'like', term)
+        .orWhere('e.employee_code', 'like', term)
+        .orWhereRaw("(e.first_name || ' ' || e.last_name) like ?", [term]);
+    });
+  }
+  const employees = await employeesQuery;
+
+  // Column headers stand alone, so they survive an empty employee list.
+  const leaveTypes = await db('leave_types').where('is_active', true)
+    .select('id', 'name', 'is_paid').orderBy('name');
+
+  const balances = await getEffectiveBalances(employees.map((e: any) => e.id), period.id);
+  const byEmployee = new Map<number, any[]>();
+  for (const b of balances) {
+    const list = byEmployee.get(b.employee_id) ?? [];
+    list.push(b.applicable ? b : { ...b, allocated: null, available: null });
+    byEmployee.set(b.employee_id, list);
+  }
+
+  return {
+    period: {
+      id: period.id, name: period.name,
+      start_date: period.start_date, end_date: period.end_date, is_current: !!period.is_current,
+    },
+    leave_types: leaveTypes.map((t: any) => ({ id: t.id, name: t.name, is_paid: !!t.is_paid })),
+    employees: employees.map((e: any) => ({ ...e, balances: byEmployee.get(e.id) ?? [] })),
+  };
 }
 
 // ─── Leave Requests ───
@@ -411,6 +640,20 @@ async function checkLeavePolicy(
     && new Date().toISOString().slice(0, 10) < String(employee.probation_end_date).slice(0, 10)) {
     throw new ValidationError(`${name} is available only after your probation period ends.`);
   }
+  // Department applicability — no rows configured means every department. Unlike the
+  // gender/probation rules above this one is strict: a restricted type stays blocked
+  // when the employee's department is missing or unrecognised, so a typo in dept_name
+  // can never widen access.
+  const allowedDeptIds: number[] = await db('leave_type_departments').where('leave_type_id', leaveType.id).pluck('department_id');
+  if (allowedDeptIds.length) {
+    const empDeptId = await departmentIdByName(employee?.dept_name);
+    if (empDeptId === null || !allowedDeptIds.includes(empDeptId)) {
+      const allowed: string[] = await db('departments').whereIn('id', allowedDeptIds).orderBy('name').pluck('name');
+      throw new ValidationError(employee?.dept_name
+        ? `${name} isn't available to the ${employee.dept_name} department. It applies to: ${allowed.join(', ')}.`
+        : `${name} applies only to specific departments (${allowed.join(', ')}), and no department is set on this employee.`);
+    }
+  }
   // Cannot be clubbed with — adjacent (±1 day) or overlapping request of a conflicting type.
   const conflicts: number[] = await db('leave_type_conflicts').where('leave_type_id', leaveType.id).pluck('conflict_leave_type_id');
   if (conflicts.length) {
@@ -457,25 +700,14 @@ export async function applyLeave(employeeId: number, data: {
 
   const period = await getCurrentPeriod();
   const employee = await db('employees').where('id', employeeId)
-    .select('first_name', 'last_name', 'reporting_manager_id', 'gender', 'probation_end_date').first();
+    .select('first_name', 'last_name', 'reporting_manager_id', 'gender', 'probation_end_date', 'dept_name').first();
   if (!employee) throw new NotFoundError('Employee');
 
   // Balance (rule 1): an explicit allocation wins; otherwise the leave type's
   // "Default days per year" is the balance, less what's already taken this period.
-  const entitlement = await db('leave_entitlements')
-    .where({ employee_id: employeeId, leave_type_id, leave_period_id: period.id })
-    .first();
-  let available: number;
-  if (entitlement) {
-    available = Number(entitlement.total_days) - Number(entitlement.used_days);
-  } else {
-    const takenRow = await db('leave_requests')
-      .where({ employee_id: employeeId, leave_type_id })
-      .whereIn('status', ['pending', 'approved'])
-      .whereBetween('start_date', [period.start_date, period.end_date])
-      .sum({ t: 'days' }).first();
-    available = Number(leaveType.default_days || 0) - Number((takenRow as any)?.t || 0);
-  }
+  // getEffectiveBalances is the single definition — see its doc comment.
+  const [balance] = await getEffectiveBalances([employeeId], period.id, { leaveTypeIds: [leave_type_id] });
+  const available = balance ? balance.available : 0;
   if (days > available) {
     throw new ValidationError(`Insufficient ${leaveType.name} balance. Available: ${available} day(s), requested: ${days} day(s).`);
   }

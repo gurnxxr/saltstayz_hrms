@@ -3,8 +3,10 @@ import { AuthRequest } from '../types';
 import * as leaveService from '../services/leave.service';
 import * as encashmentService from '../services/leaveEncashment.service';
 
+// Scoped to the caller: types their department can't take are hidden from the
+// apply screen's dropdown. Users without an employee record see the full list.
 export async function getLeaveTypes(req: AuthRequest, res: Response, next: NextFunction) {
-  try { res.json(await leaveService.getLeaveTypes()); } catch (err) { next(err); }
+  try { res.json(await leaveService.getLeaveTypes(req.user!.employeeId ?? undefined)); } catch (err) { next(err); }
 }
 
 export async function getLeavePeriods(req: AuthRequest, res: Response, next: NextFunction) {
@@ -13,6 +15,17 @@ export async function getLeavePeriods(req: AuthRequest, res: Response, next: Nex
 
 export async function getMyBalances(req: AuthRequest, res: Response, next: NextFunction) {
   try { res.json(await leaveService.getMyBalances(req.user!.employeeId!)); } catch (err) { next(err); }
+}
+
+export async function getBalancesOverview(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json(await leaveService.getBalancesOverview({
+      period_id: req.query.period_id ? Number(req.query.period_id) : undefined,
+      search: req.query.search as string,
+      branch: req.query.branch as string,
+      dept: req.query.dept as string,
+    }));
+  } catch (err) { next(err); }
 }
 
 export async function getMyLeaves(req: AuthRequest, res: Response, next: NextFunction) {
