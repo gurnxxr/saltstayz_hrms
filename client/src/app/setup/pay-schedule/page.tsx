@@ -10,17 +10,6 @@ import api from '@/lib/api';
 import { useUnsavedChangesWarning } from '@/hooks/useUnsavedChangesWarning';
 import { CalendarClock, Info, Save, Loader2 } from 'lucide-react';
 
-// Weekday indices 0=Sun … 6=Sat (matches the server's work_week storage).
-const DAYS = [
-  { i: 0, label: 'SUN' },
-  { i: 1, label: 'MON' },
-  { i: 2, label: 'TUE' },
-  { i: 3, label: 'WED' },
-  { i: 4, label: 'THU' },
-  { i: 5, label: 'FRI' },
-  { i: 6, label: 'SAT' },
-];
-
 const Req = () => <span className="text-red-600">*</span>;
 
 export default function PaySchedulePage() {
@@ -31,7 +20,6 @@ export default function PaySchedulePage() {
     queryFn: () => api.get('/pay-schedule').then((r) => r.data),
   });
 
-  const [workWeek, setWorkWeek] = useState<number[]>([1, 2, 3, 4, 5]);
   const [method, setMethod] = useState<'actual_days' | 'fixed_days'>('actual_days');
   const [payType, setPayType] = useState<'last_day' | 'fixed_day'>('last_day');
   const [payDay, setPayDay] = useState(1);
@@ -50,7 +38,6 @@ export default function PaySchedulePage() {
   // Hydrate the form once settings load.
   useEffect(() => {
     if (!data) return;
-    setWorkWeek(Array.isArray(data.work_week) ? data.work_week : [1, 2, 3, 4, 5]);
     setMethod(data.salary_calculation_method === 'fixed_days' ? 'fixed_days' : 'actual_days');
     setPayType(data.pay_date_type === 'fixed_day' ? 'fixed_day' : 'last_day');
     setPayDay(Number(data.pay_date_day) || 1);
@@ -68,15 +55,9 @@ export default function PaySchedulePage() {
 
   useUnsavedChangesWarning(dirty);
 
-  const toggleDay = (i: number) => {
-    setDirty(true);
-    setWorkWeek((prev) => (prev.includes(i) ? prev.filter((d) => d !== i) : [...prev, i].sort((a, b) => a - b)));
-  };
-
   const save = useMutation({
     mutationFn: () =>
       api.put('/pay-schedule', {
-        work_week: workWeek,
         salary_calculation_method: method,
         pay_date_type: payType,
         pay_date_day: payDay,
@@ -98,13 +79,7 @@ export default function PaySchedulePage() {
     onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to save'),
   });
 
-  const onSave = () => {
-    if (workWeek.length === 0) {
-      toast.error('Select at least one working day.');
-      return;
-    }
-    save.mutate();
-  };
+  const onSave = () => save.mutate();
 
   return (
     <AppShell>
@@ -114,7 +89,7 @@ export default function PaySchedulePage() {
           <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center"><CalendarClock className="text-primary" size={20} /></div>
           <div>
             <h1 className="text-2xl font-bold text-foreground">Pay Schedule</h1>
-            <p className="text-secondary text-sm">Set your working week, salary calculation method, and pay date.</p>
+            <p className="text-secondary text-sm">Set your salary calculation method, pay date, and attendance policies.</p>
           </div>
         </div>
 
@@ -124,32 +99,15 @@ export default function PaySchedulePage() {
           <div className="bg-card rounded-xl border border-border"><LoadError message="Couldn't load the pay schedule." onRetry={() => refetch()} /></div>
         ) : (
           <div className="bg-card rounded-xl border border-border p-6 space-y-10">
-            {/* ── Work Week ── */}
-            <section className="space-y-3">
-              <h2 className="text-base font-semibold text-foreground">Work Week <Req /></h2>
-              <div>
-                <p className="text-sm text-secondary">Select your organisation&apos;s working days.<Req /></p>
-                <p className="text-sm text-secondary">These days will be considered when calculating payable days and loss of pay.</p>
-              </div>
-              <div className="grid grid-cols-7 max-w-lg overflow-hidden rounded-lg border border-border">
-                {DAYS.map((d, idx) => {
-                  const on = workWeek.includes(d.i);
-                  return (
-                    <button
-                      key={d.i}
-                      type="button"
-                      onClick={() => toggleDay(d.i)}
-                      aria-pressed={on}
-                      className={`py-2.5 text-xs font-semibold text-center transition-colors ${idx > 0 ? 'border-l border-border' : ''} ${
-                        on ? 'bg-primary/10 text-primary' : 'bg-card text-foreground hover:bg-muted'
-                      }`}
-                    >
-                      {d.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
+            {/* Payable days come from each employee's own published roster, so there is
+                no org-wide working-week to select here. */}
+            <div className="flex items-start gap-2.5 rounded-lg border border-border bg-muted/40 p-3">
+              <Info size={15} className="text-secondary mt-0.5 shrink-0" />
+              <p className="text-xs text-secondary">
+                Payable days and loss of pay are calculated from each employee&apos;s attendance against the days
+                assigned in their <span className="font-medium text-foreground">published roster</span> — no organisation-wide working week is set here.
+              </p>
+            </div>
 
             {/* ── Salary Calculation Method ── */}
             <section className="space-y-3">

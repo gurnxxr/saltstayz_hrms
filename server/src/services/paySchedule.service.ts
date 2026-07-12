@@ -81,12 +81,17 @@ export async function getPaySchedule() {
 }
 
 export async function updatePaySchedule(input: any, userId?: number) {
-  // ── Work week: at least one day, all valid 0–6, de-duplicated & sorted ──
-  const days: number[] = Array.isArray(input.work_week)
-    ? Array.from(new Set(input.work_week.map(Number)))
-    : [];
-  if (days.length === 0) throw new ValidationError('Select at least one working day.');
-  if (days.some((d) => !Number.isInteger(d) || d < 0 || d > 6)) throw new ValidationError('Invalid working day.');
+  // Work week is no longer user-configurable — payable days are driven by each
+  // employee's published roster (see payableDays.service). The stored value is kept
+  // only as the fallback for weeks with no published roster, so preserve it (or seed
+  // the Mon–Fri default) rather than requiring it on save.
+  const existing = await db(TABLE).orderBy('id').first();
+  let workWeekJson: string = existing?.work_week ?? JSON.stringify(DEFAULTS.work_week);
+  if (Array.isArray(input.work_week) && input.work_week.length) {
+    const days = Array.from(new Set(input.work_week.map(Number))) as number[];
+    if (days.some((d) => !Number.isInteger(d) || d < 0 || d > 6)) throw new ValidationError('Invalid working day.');
+    workWeekJson = JSON.stringify(days.sort((a, b) => a - b));
+  }
 
   // ── Salary calculation method ──
   const method = String(input.salary_calculation_method);
@@ -152,7 +157,7 @@ export async function updatePaySchedule(input: any, userId?: number) {
   }
 
   const patch = {
-    work_week: JSON.stringify(days.sort((a, b) => a - b)),
+    work_week: workWeekJson,
     salary_calculation_method: method,
     fixed_working_days: fixedDays,
     pay_date_type: payType,
@@ -170,8 +175,7 @@ export async function updatePaySchedule(input: any, userId?: number) {
     updated_at: db.fn.now(),
   };
 
-  // Singleton upsert.
-  const existing = await db(TABLE).orderBy('id').first();
+  // Singleton upsert (existing fetched above).
   if (existing) await db(TABLE).where('id', existing.id).update(patch);
   else await db(TABLE).insert(patch);
 
