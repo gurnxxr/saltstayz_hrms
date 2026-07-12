@@ -14,19 +14,27 @@ function validState(state?: string | null): string {
   return s;
 }
 
+// The Add/Edit Property form requires Name, Category, Address, State and City;
+// Hotel ID stays optional. This enforces that server-side too (a client can't
+// bypass the required attribute). CSV bulk import stays lenient by design.
+function requiredField(value: string | null | undefined, label: string): string {
+  const s = String(value ?? '').trim();
+  if (!s) throw new ValidationError(`${label} is required`);
+  return s;
+}
+
 export async function listProperties() {
   return db('properties').orderBy('name');
 }
 
 export async function createProperty(data: { name: string; hotel_id?: string; city?: string; state?: string; address?: string; category?: string }) {
-  if (!data.name?.trim()) throw new ValidationError('Property name is required');
   const [id] = await db('properties').insert({
-    name: data.name.trim(),
+    name: requiredField(data.name, 'Property name'),
     hotel_id: data.hotel_id?.trim() || null,
-    city: data.city?.trim() || null,
+    city: requiredField(data.city, 'City'),
     state: validState(data.state),
-    address: data.address?.trim() || null,
-    category: data.category?.trim() || null,
+    address: requiredField(data.address, 'Address'),
+    category: requiredField(data.category, 'Category'),
   });
   return db('properties').where('id', id).first();
 }
@@ -35,7 +43,13 @@ export async function updateProperty(id: number, data: Partial<{ name: string; h
   const row = await db('properties').where('id', id).first();
   if (!row) throw new NotFoundError('Property');
   const patch: any = { ...data, updated_at: db.fn.now() };
+  // Validate whichever of the five mandatory fields are present, so a partial patch
+  // (e.g. toggling is_active alone) is left untouched but a full form save is enforced.
+  if ('name' in data) patch.name = requiredField(data.name, 'Property name');
+  if ('city' in data) patch.city = requiredField(data.city, 'City');
   if ('state' in data) patch.state = validState(data.state);
+  if ('address' in data) patch.address = requiredField(data.address, 'Address');
+  if ('category' in data) patch.category = requiredField(data.category, 'Category');
   await db('properties').where('id', id).update(patch);
   return db('properties').where('id', id).first();
 }
@@ -115,6 +129,49 @@ export async function deleteDepartment(id: number) {
   const empCount = await db('employees').where('dept_name', row.name).count('* as c').first();
   if (empCount && Number(empCount.c) > 0) throw new ValidationError('Cannot delete department with employees assigned. Reassign them to another department first.');
   await db('departments').where('id', id).delete();
+}
+
+// ─── Property Categories (managed pick-list for the property "Category" field) ───
+
+export async function listPropertyCategories() {
+  return db('property_categories').orderBy('name');
+}
+
+export async function createPropertyCategory(data: { name: string }) {
+  const name = data.name?.trim();
+  if (!name) throw new ValidationError('Category name is required');
+  const existing = await db('property_categories').whereRaw('lower(name) = lower(?)', [name]).first();
+  if (existing) throw new ValidationError('A category with this name already exists');
+  const [id] = await db('property_categories').insert({ name });
+  return db('property_categories').where('id', id).first();
+}
+
+export async function updatePropertyCategory(id: number, data: Partial<{ name: string }>) {
+  const row = await db('property_categories').where('id', id).first();
+  if (!row) throw new NotFoundError('Property category');
+  const name = data.name?.trim();
+  if (!name) throw new ValidationError('Category name is required');
+  const dup = await db('property_categories').whereRaw('lower(name) = lower(?)', [name]).whereNot('id', id).first();
+  if (dup) throw new ValidationError('A category with this name already exists');
+
+  // Properties carry a free-text category string; cascade the rename so existing
+  // properties keep pointing at the renamed category (mirrors the department rename).
+  await db.transaction(async (trx) => {
+    await trx('property_categories').where('id', id).update({ name, updated_at: trx.fn.now() });
+    if (row.name !== name) {
+      await trx('properties').where('category', row.name).update({ category: name, updated_at: trx.fn.now() });
+    }
+  });
+  return db('property_categories').where('id', id).first();
+}
+
+export async function deletePropertyCategory(id: number) {
+  const row = await db('property_categories').where('id', id).first();
+  if (!row) throw new NotFoundError('Property category');
+  // Properties reference a category by free-text name — block so none is orphaned.
+  const inUse = await db('properties').where('category', row.name).count('* as c').first();
+  if (inUse && Number(inUse.c) > 0) throw new ValidationError('Cannot delete a category in use by a property. Reassign those properties first.');
+  await db('property_categories').where('id', id).delete();
 }
 
 // ─── Job Titles ───

@@ -7,7 +7,6 @@ import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import LoadError from '@/components/ui/LoadError';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import Pagination from '@/components/ui/Pagination';
@@ -26,7 +25,6 @@ export default function EmployeeDetailsPage() {
   const debouncedSearch = useDebouncedValue(search, 300);
   const [statusFilter, setStatusFilter] = useState('active');
   const [page, setPage] = useState(1);
-  const [deactivateTarget, setDeactivateTarget] = useState<any>(null);
   const [showBulk, setShowBulk] = useState(false);
   const [bulkResult, setBulkResult] = useState<any>(null);
   const bulkFileRef = useRef<HTMLInputElement>(null);
@@ -54,17 +52,6 @@ export default function EmployeeDetailsPage() {
     if (file) { setBulkResult(null); bulkUpload.mutate(file); }
     if (bulkFileRef.current) bulkFileRef.current.value = '';
   }
-
-  const toggleStatusMutation = useMutation({
-    mutationFn: ({ empId, active }: { empId: number; active: boolean }) =>
-      api.put(`/employees/${empId}`, { is_active: active }).then(r => r.data),
-    onSuccess: (_data, { active }) => {
-      queryClient.invalidateQueries({ queryKey: ['employees-list'] });
-      toast.success(`Employee marked as ${active ? 'Active' : 'Inactive'}`);
-      setDeactivateTarget(null);
-    },
-    onError: (err: any) => { toast.error(err.response?.data?.error || 'Status update failed'); setDeactivateTarget(null); },
-  });
 
   const { data, isLoading, isFetching, isError, refetch } = useQuery({
     queryKey: ['employees-list', debouncedSearch, statusFilter, page],
@@ -160,7 +147,6 @@ export default function EmployeeDetailsPage() {
                     <th className="hidden sm:table-cell text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Reporting Manager</th>
                     <th className="hidden sm:table-cell text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Phone Number</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Email Address</th>
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Status</th>
                     <th className="text-right px-4 py-3 text-xs font-semibold text-secondary uppercase">Actions</th>
                   </tr>
                 </thead>
@@ -193,30 +179,6 @@ export default function EmployeeDetailsPage() {
                         <td className="hidden sm:table-cell px-4 py-3 text-sm text-foreground">{manager || '—'}</td>
                         <td className="hidden sm:table-cell px-4 py-3 text-sm text-foreground">{emp.phone || '—'}</td>
                         <td className="px-4 py-3 text-sm text-foreground">{emp.email || '—'}</td>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2">
-                            {canEditStatus && (
-                              <button
-                                role="switch"
-                                aria-checked={emp.is_active}
-                                aria-label={`Toggle status — currently ${emp.is_active ? 'Active' : 'Inactive'}`}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  if (emp.is_active) setDeactivateTarget(emp);
-                                  else toggleStatusMutation.mutate({ empId: emp.id, active: true });
-                                }}
-                                disabled={toggleStatusMutation.isPending}
-                                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 ${emp.is_active ? 'bg-green-500' : 'bg-gray-400'} ${toggleStatusMutation.isPending ? 'opacity-50' : 'cursor-pointer'}`}
-                                title={`Click to mark ${emp.is_active ? 'Inactive' : 'Active'}`}
-                              >
-                                <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${emp.is_active ? 'translate-x-[18px]' : 'translate-x-[3px]'}`} />
-                              </button>
-                            )}
-                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${emp.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                              {emp.is_active ? 'Active' : 'Inactive'}
-                            </span>
-                          </div>
-                        </td>
                         <td className="px-4 py-3 text-right">
                           <div className="inline-flex items-center gap-1">
                             <button
@@ -257,15 +219,6 @@ export default function EmployeeDetailsPage() {
 
         {canEditStatus && <UploadHistory />}
       </div>
-      <ConfirmDialog
-        open={!!deactivateTarget}
-        title="Mark employee inactive?"
-        message={<><strong className="text-foreground">{deactivateTarget?.first_name} {deactivateTarget?.last_name}</strong> will be moved to Inactive and excluded from active rosters, payroll, and headcount.</>}
-        confirmLabel="Mark inactive"
-        loading={toggleStatusMutation.isPending}
-        onConfirm={() => deactivateTarget && toggleStatusMutation.mutate({ empId: deactivateTarget.id, active: false })}
-        onCancel={() => setDeactivateTarget(null)}
-      />
 
       {showBulk && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setShowBulk(false)}>

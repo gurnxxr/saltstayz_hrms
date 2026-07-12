@@ -46,6 +46,12 @@ export const createDepartment = async (req: AuthRequest, res: Response, next: Ne
 export const updateDepartment = async (req: AuthRequest, res: Response, next: NextFunction) => { try { res.json(await orgService.updateDepartment(Number(req.params.id), req.body)); } catch (e) { next(e); } };
 export const deleteDepartment = async (req: AuthRequest, res: Response, next: NextFunction) => { try { await orgService.deleteDepartment(Number(req.params.id)); res.json({ message: 'Deleted' }); } catch (e) { next(e); } };
 
+// Property Categories
+export const listPropertyCategories = async (_r: AuthRequest, res: Response, next: NextFunction) => { try { res.json(await orgService.listPropertyCategories()); } catch (e) { next(e); } };
+export const createPropertyCategory = async (req: AuthRequest, res: Response, next: NextFunction) => { try { res.status(201).json(await orgService.createPropertyCategory(req.body)); } catch (e) { next(e); } };
+export const updatePropertyCategory = async (req: AuthRequest, res: Response, next: NextFunction) => { try { res.json(await orgService.updatePropertyCategory(Number(req.params.id), req.body)); } catch (e) { next(e); } };
+export const deletePropertyCategory = async (req: AuthRequest, res: Response, next: NextFunction) => { try { await orgService.deletePropertyCategory(Number(req.params.id)); res.json({ message: 'Deleted' }); } catch (e) { next(e); } };
+
 // Job Titles
 export const listJobTitles = async (_r: AuthRequest, res: Response, next: NextFunction) => { try { res.json(await orgService.listJobTitles()); } catch (e) { next(e); } };
 export const createJobTitle = async (req: AuthRequest, res: Response, next: NextFunction) => { try { res.status(201).json(await orgService.createJobTitle(req.body)); } catch (e) { next(e); } };

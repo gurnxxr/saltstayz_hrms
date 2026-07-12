@@ -19,6 +19,7 @@ router.use(authenticate);
 
 router.get('/properties', orgCtrl.listProperties);
 router.get('/departments', orgCtrl.listDepartments);
+router.get('/property-categories', orgCtrl.listPropertyCategories);
 router.get('/job-titles', orgCtrl.listJobTitles);
 router.get('/employee-categories', orgCtrl.listCategories);
 router.get('/pay-grades', orgCtrl.listPayGrades);
@@ -34,6 +35,10 @@ router.delete('/properties/:id', authorize('admin', 'delete'), orgCtrl.deletePro
 router.post('/departments', authorize('admin', 'create'), orgCtrl.createDepartment);
 router.put('/departments/:id', authorize('admin', 'update'), orgCtrl.updateDepartment);
 router.delete('/departments/:id', authorize('admin', 'delete'), orgCtrl.deleteDepartment);
+
+router.post('/property-categories', authorize('admin', 'create'), orgCtrl.createPropertyCategory);
+router.put('/property-categories/:id', authorize('admin', 'update'), orgCtrl.updatePropertyCategory);
+router.delete('/property-categories/:id', authorize('admin', 'delete'), orgCtrl.deletePropertyCategory);
 
 router.post('/job-titles', authorize('admin', 'create'), orgCtrl.createJobTitle);
 router.put('/job-titles/:id', authorize('admin', 'update'), orgCtrl.updateJobTitle);

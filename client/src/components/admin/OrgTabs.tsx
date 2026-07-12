@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import api from '@/lib/api';
@@ -8,6 +8,7 @@ import { formatINR } from '@/lib/utils';
 import { INDIAN_STATES } from '@/lib/constants';
 import { Plus, Pencil, Trash2, X, Upload } from 'lucide-react';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import Pagination, { pageSlice } from '@/components/ui/Pagination';
 
 // ─── Properties Tab ───
 
@@ -17,11 +18,18 @@ export function PropertiesTab() {
   const [form, setForm] = useState({ name: '', hotel_id: '', city: '', state: '', address: '', category: '' });
   const [showForm, setShowForm] = useState(false);
   const [delTarget, setDelTarget] = useState<any>(null);
+  const [page, setPage] = useState(1);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const { data: items = [] } = useQuery({
     queryKey: ['org-properties'],
     queryFn: () => api.get('/admin/properties').then(r => r.data),
+  });
+
+  // Category is a managed pick-list (Admin → Organization → Property Categories).
+  const { data: categories = [] } = useQuery({
+    queryKey: ['org-property-categories'],
+    queryFn: () => api.get('/admin/property-categories').then(r => r.data),
   });
 
   const saveMutation = useMutation({
@@ -67,6 +75,18 @@ export function PropertiesTab() {
     if (fileRef.current) fileRef.current.value = '';
   }
 
+  // Options for the Category dropdown: the managed list, plus the property's current
+  // category if it's an off-list value (older data), so editing never drops it.
+  const catOptions: string[] = categories.map((c: any) => c.name as string);
+  const curCategory = (form.category ?? '').trim();
+  if (curCategory && !catOptions.includes(curCategory)) catOptions.push(curCategory);
+
+  // ── Pagination: 10 properties per page ──
+  const PAGE_SIZE = 10;
+  const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+  useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
+  const visible = pageSlice(items, Math.min(page, totalPages), PAGE_SIZE);
+
   return (
     <div className="space-y-4">
       <div className="flex justify-between">
@@ -97,8 +117,8 @@ export function PropertiesTab() {
               <input value={form.hotel_id} onChange={e => setForm(p => ({ ...p, hotel_id: e.target.value }))} className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm" />
             </div>
             <div>
-              <label className="block text-xs font-medium mb-1">City</label>
-              <input value={form.city} onChange={e => setForm(p => ({ ...p, city: e.target.value }))} className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm" />
+              <label className="block text-xs font-medium mb-1">City *</label>
+              <input required value={form.city} onChange={e => setForm(p => ({ ...p, city: e.target.value }))} className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm" />
             </div>
             <div>
               <label className="block text-xs font-medium mb-1">State *</label>
@@ -109,12 +129,15 @@ export function PropertiesTab() {
               <p className="mt-1 text-[11px] text-secondary">Statutory rules (LWF, PT, minimum wage) follow this state.</p>
             </div>
             <div className="col-span-2">
-              <label className="block text-xs font-medium mb-1">Address</label>
-              <input value={form.address} onChange={e => setForm(p => ({ ...p, address: e.target.value }))} className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm" />
+              <label className="block text-xs font-medium mb-1">Address *</label>
+              <input required value={form.address} onChange={e => setForm(p => ({ ...p, address: e.target.value }))} className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm" />
             </div>
             <div>
-              <label className="block text-xs font-medium mb-1">Category</label>
-              <input value={form.category} onChange={e => setForm(p => ({ ...p, category: e.target.value }))} className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm" />
+              <label className="block text-xs font-medium mb-1">Category *</label>
+              <select required value={form.category} onChange={e => setForm(p => ({ ...p, category: e.target.value }))} className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm">
+                <option value="">Select category…</option>
+                {catOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
             </div>
             <div className="col-span-3 flex gap-2">
               <button type="submit" disabled={saveMutation.isPending} className="px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium disabled:opacity-50">{editing ? 'Update' : 'Create'}</button>
@@ -137,7 +160,7 @@ export function PropertiesTab() {
             <th className="text-right px-4 py-3 text-xs font-medium text-secondary uppercase">Actions</th>
           </tr></thead>
           <tbody className="divide-y divide-border">
-            {items.map((item: any) => (
+            {visible.map((item: any) => (
               <tr key={item.id} className="hover:bg-muted/30">
                 <td className="px-4 py-3 text-sm font-medium text-foreground">{item.name}</td>
                 <td className="px-4 py-3 text-sm text-secondary">{item.hotel_id || '—'}</td>
@@ -159,6 +182,7 @@ export function PropertiesTab() {
           </tbody>
         </table>
         {items.length === 0 && <p className="text-center py-8 text-secondary text-sm">No properties found</p>}
+        <Pagination total={items.length} page={page} pageSize={PAGE_SIZE} onPageChange={setPage} shown={visible.length} itemLabel="properties" />
       </div>
 
       <ConfirmDialog

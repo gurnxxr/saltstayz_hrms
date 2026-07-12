@@ -7,6 +7,7 @@ export async function seed(knex: Knex): Promise<void> {
   await knex('job_titles').del();
   await knex('pay_grades').del();
   await knex('employment_statuses').del();
+  if (await knex.schema.hasTable('property_categories')) await knex('property_categories').del();
 
   await knex('properties').insert([
     { name: 'SaltStayz Hauz Khas', address: 'Hauz Khas Village', city: 'New Delhi', state: 'Delhi' },
@@ -31,6 +32,15 @@ export async function seed(knex: Knex): Promise<void> {
     { name: 'Property Manager' },
     { name: 'Corporate' },
   ]);
+
+  // Managed pick-list for a property's Category field. Editable in
+  // Admin → Organization → Property Categories.
+  if (await knex.schema.hasTable('property_categories')) {
+    await knex('property_categories').insert([
+      { name: 'Premier' }, { name: 'Select' }, { name: 'Autograph' },
+      { name: 'Boutique' }, { name: 'Grand' }, { name: 'Standard' },
+    ]);
+  }
 
   await knex('job_titles').insert([
     { title: 'Housekeeping Attendant' },
