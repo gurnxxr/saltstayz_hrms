@@ -5,6 +5,7 @@ import {
   type AttendanceContext,
 } from './payslip.calc';
 import { getStatutoryRates, getStatutoryBonus, getEmployeeState, getMinimumWageFor, resolveStatutoryState } from './statutory.service';
+import { listSalaryComponents } from './salaryComponent.service';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Salary Structures v2: a structure is a named template of salary_components
@@ -461,6 +462,91 @@ export async function getCtcRegister() {
     rows.push({ ...r, gross, net, ctc });
   }
   return { rows, totals };
+}
+
+/**
+ * Salary Details overview: one row per active employee carrying every configured salary
+ * component amount plus the statutory deductions, employer costs and Total CTC — each from
+ * a live full-month breakdown. `columns` is the ordered column set (dynamic from the
+ * component catalog + computed statutory + totals); each row has a `values` map keyed by
+ * column. Unconfigured employees appear with empty values (blank cells), never dropped.
+ */
+export async function getSalaryOverview() {
+  const catalog = await listSalaryComponents();
+  const earnings = catalog.earnings.filter((c: any) => c.status === 'active');
+  const deductions = catalog.deductions.filter((c: any) => c.status === 'active');
+  const benefits = catalog.benefits.filter((c: any) => c.status === 'active');
+  const reimbursements = catalog.reimbursements.filter((c: any) => c.status === 'active');
+
+  // Ordered columns: earnings → gross → statutory + component deductions + TDS → net →
+  // employer costs → CTC. Catalog components key on `c<id>`; computed ones on a name.
+  const columns: Array<{ key: string; label: string; group: string }> = [
+    ...earnings.map((c: any) => ({ key: `c${c.id}`, label: c.name_in_payslip, group: 'earning' })),
+    { key: 'stat_bonus', label: 'Statutory Bonus', group: 'earning' },
+    { key: 'gross', label: 'Gross Earnings', group: 'subtotal' },
+    { key: 'epf', label: 'EPF (employee)', group: 'deduction' },
+    { key: 'esi', label: 'ESI (employee)', group: 'deduction' },
+    { key: 'pt', label: 'Professional Tax', group: 'deduction' },
+    { key: 'lwf', label: 'Labour Welfare Fund', group: 'deduction' },
+    ...deductions.map((c: any) => ({ key: `c${c.id}`, label: c.name_in_payslip, group: 'deduction' })),
+    { key: 'tds', label: 'TDS', group: 'deduction' },
+    { key: 'net', label: 'Net Pay', group: 'subtotal' },
+    { key: 'employer_epf', label: 'Employer EPF', group: 'employer' },
+    { key: 'employer_esi', label: 'Employer ESI', group: 'employer' },
+    { key: 'employer_lwf', label: 'Employer LWF', group: 'employer' },
+    ...benefits.map((c: any) => ({ key: `c${c.id}`, label: c.name_in_payslip, group: 'employer' })),
+    ...reimbursements.map((c: any) => ({ key: `c${c.id}`, label: c.name_in_payslip, group: 'reimbursement' })),
+    { key: 'ctc', label: 'Total CTC', group: 'total' },
+  ];
+
+  const round = (n: number) => Math.round(n);
+  const lineAmt = (lines: any[], componentId: number) => {
+    const l = lines.find((x: any) => x.component_id === componentId);
+    return l ? round(l.amount) : 0;
+  };
+
+  const base = await listEmployeeSalary();
+  const rows: any[] = [];
+  const totals: Record<string, number> = {};
+  let configured = 0;
+
+  for (const r of base) {
+    const row: any = {
+      employee_id: r.employee_id,
+      employee_code: r.employee_code,
+      name: `${r.first_name} ${r.last_name}`.trim(),
+      designation: r.designation || null,
+      branch_name: r.branch_name || null,
+      dept_name: r.dept_name || null,
+      configured: !!r.configured,
+      values: {} as Record<string, number>,
+    };
+    if (r.configured) {
+      try {
+        const asg = await db('salary_structure_assignments').where('employee_id', r.employee_id).first();
+        const structureRow = await getStructureRow(asg.structure_id);
+        const state = await getEmployeeState(r.employee_id);
+        const bd = await computeForStructure(structureRow, num(asg.base), null, undefined, { state });
+        const v = row.values;
+        for (const c of earnings) v[`c${c.id}`] = lineAmt(bd.earnings, c.id);
+        v.stat_bonus = round(bd.earnings.find((l: any) => l.component_id == null && l.name === 'Statutory Bonus')?.amount ?? 0);
+        v.gross = round(bd.gross_earnings);
+        v.epf = round(bd.employee_pf); v.esi = round(bd.esi); v.pt = round(bd.pt); v.lwf = round(bd.lwf);
+        for (const c of deductions) v[`c${c.id}`] = lineAmt(bd.other_deductions, c.id);
+        v.tds = round(num(asg.tds_amount));
+        v.net = round(bd.net_pay);
+        v.employer_epf = round(bd.employer_pf); v.employer_esi = round(bd.employer_esi); v.employer_lwf = round(bd.employer_lwf);
+        for (const c of benefits) v[`c${c.id}`] = lineAmt(bd.employer_costs, c.id);
+        for (const c of reimbursements) v[`c${c.id}`] = lineAmt(bd.reimbursements, c.id);
+        v.ctc = round(bd.ctc);
+        configured += 1;
+        for (const col of columns) totals[col.key] = (totals[col.key] ?? 0) + (v[col.key] ?? 0);
+      } catch { /* leave values empty for a structure that can't resolve */ }
+    }
+    rows.push(row);
+  }
+
+  return { columns, rows, totals, configured, total_employees: rows.length };
 }
 
 /** An employee's full salary config (lines + base + TDS + city) with a live breakdown. */

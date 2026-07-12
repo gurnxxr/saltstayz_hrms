@@ -5,11 +5,12 @@ import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { Building2, ClipboardList, ShieldCheck, ScrollText, DatabaseBackup, Play, Wallet, SlidersHorizontal, AlertTriangle, Users, Landmark, CalendarDays } from 'lucide-react';
+import { Building2, ClipboardList, ShieldCheck, ScrollText, DatabaseBackup, Play, Wallet, SlidersHorizontal, AlertTriangle, Users, Landmark, CalendarDays, Coins } from 'lucide-react';
 
 const adminModules = [
   { label: 'Employee Details', href: '/employees', icon: Users, description: 'Full employee directory — profiles, contacts & org details', roles: ['admin', 'chro', 'hr', 'hr_manager', 'property_manager'] },
   { label: 'Financial Details', href: '/finance', icon: Landmark, description: 'Employee bank details and statutory financial records', roles: ['admin', 'chro', 'hr', 'finance'] },
+  { label: 'Salary Details', href: '/admin/salary-overview', icon: Coins, description: 'Every employee’s salary components & CTC in one table', roles: ['admin'] },
   { label: 'Property Configuration', href: '/admin/property-config', icon: SlidersHorizontal, description: 'Per-property workers, salaries, spend, budget & status', roles: ['admin'] },
   { label: 'Budget Control', href: '/admin/budget-control', icon: Wallet, description: 'Set sanctioned budget & headcount per property', roles: ['admin'] },
   { label: 'Module Access', href: '/admin/access', icon: ShieldCheck, description: 'Grant or revoke module access per employee', roles: ['admin'] },

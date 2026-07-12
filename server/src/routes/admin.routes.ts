@@ -80,6 +80,7 @@ router.delete('/salary-structures/:id', authorize('admin', 'delete'), salaryStru
 // ─── Per-employee salary structures (admin only) ───
 router.get('/employee-salary', authorize('admin', 'read'), salaryStructureCtrl.listEmployeeSalary);
 router.get('/employee-salary-register', authorize('admin', 'read'), salaryStructureCtrl.getCtcRegister);
+router.get('/salary-overview', authorize('admin', 'read'), salaryStructureCtrl.getSalaryOverview);
 router.get('/employee-salary/:employeeId', authorize('admin', 'read'), salaryStructureCtrl.getEmployeeSalary);
 router.put('/employee-salary/:employeeId', authorize('admin', 'update'), salaryStructureCtrl.saveEmployeeSalary);
 router.post('/employee-salary/:employeeId/reset', authorize('admin', 'update'), salaryStructureCtrl.resetEmployeeSalary);

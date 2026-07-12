@@ -38,6 +38,10 @@ export async function getCtcRegister(_req: AuthRequest, res: Response, next: Nex
   try { res.json(await service.getCtcRegister()); } catch (err) { next(err); }
 }
 
+export async function getSalaryOverview(_req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await service.getSalaryOverview()); } catch (err) { next(err); }
+}
+
 export async function getEmployeeSalary(req: AuthRequest, res: Response, next: NextFunction) {
   try { res.json(await service.getEmployeeStructure(Number(req.params.employeeId))); } catch (err) { next(err); }
 }
