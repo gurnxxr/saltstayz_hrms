@@ -8,6 +8,7 @@ import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import LoadError from '@/components/ui/LoadError';
+import Breadcrumb from '@/components/ui/Breadcrumb';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import Pagination from '@/components/ui/Pagination';
 import {
@@ -80,6 +81,7 @@ export default function EmployeeDetailsPage() {
       <div className="space-y-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
+            <Breadcrumb className="mb-2" items={[{ label: 'Admin', href: '/admin' }, { label: 'Employee Details' }]} />
             <h1 className="text-2xl font-bold text-foreground">Employee Details</h1>
             <p className="text-secondary mt-1">View and manage all employees</p>
           </div>
