@@ -14,12 +14,15 @@ export async function seed(knex: Knex): Promise<void> {
     { name: 'SaltStayz Gurgaon', address: 'Sector 29', city: 'Gurgaon', state: 'Haryana' },
   ]);
 
-  // Departments are organization-wide (shared across all properties)
+  // Departments are organization-wide (shared across all properties). This list
+  // must cover every dept_name the employee seeds use (see 09_property_employees),
+  // so the catalog matches reality out of the box — "Security" included.
   await knex('departments').insert([
     { name: 'Housekeeping' },
     { name: 'Food & Beverage' },
     { name: 'Front Desk' },
     { name: 'Management' },
+    { name: 'Security' },
   ]);
 
   await knex('employee_categories').insert([

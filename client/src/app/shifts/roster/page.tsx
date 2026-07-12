@@ -81,15 +81,18 @@ export default function RosterPage() {
   const hasPublished = status === 'published' || status === 'partial';
 
   // ── Department filter ──
-  // Options come from the rostered employees themselves, not from the departments
-  // table: dept_name is free text and some employees sit in departments that table
-  // doesn't contain, so sourcing options there would silently hide them.
+  // The server hands us the real department names for this property's filter — the
+  // official catalog unioned with the department names its staff actually carry —
+  // so a department created in Admin appears here immediately, even before anyone
+  // is assigned to it, and off-catalog names already on staff never disappear.
+  // We only add the "No department" bucket ourselves, for staff with a blank
+  // dept_name (the server list carries real names only).
   const NO_DEPT = '__none__';
   const departments = useMemo(() => {
-    const seen = new Set<string>();
-    for (const e of allEmployees) seen.add(e.dept_name?.trim() || NO_DEPT);
-    return [...seen].sort((a, b) => (a === NO_DEPT ? 1 : b === NO_DEPT ? -1 : a.localeCompare(b)));
-  }, [allEmployees]);
+    const list: string[] = roster?.departments ?? [];
+    const hasBlank = allEmployees.some((e) => !e.dept_name?.trim());
+    return hasBlank ? [...list, NO_DEPT] : list;
+  }, [roster?.departments, allEmployees]);
 
   const employees = useMemo(
     () => (deptFilter ? allEmployees.filter((e) => (e.dept_name?.trim() || NO_DEPT) === deptFilter) : allEmployees),
@@ -230,7 +233,7 @@ export default function RosterPage() {
             value={deptFilter}
             onChange={(e) => setDeptFilter(e.target.value)}
             disabled={departments.length <= 1}
-            title={departments.length <= 1 ? 'This property has only one department' : 'Filter the roster by department'}
+            title={departments.length <= 1 ? 'Only one department to filter by' : 'Filter the roster by department'}
             className="px-3 py-2 border border-border rounded-lg bg-background text-sm disabled:opacity-50"
           >
             <option value="">All Departments{allEmployees.length ? ` (${allEmployees.length})` : ''}</option>

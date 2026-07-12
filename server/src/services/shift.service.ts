@@ -190,6 +190,18 @@ export async function getWeeklyRoster(propertyId: number, weekStart: string, wee
 
   const status = total === 0 ? 'empty' : published === total ? 'published' : published === 0 ? 'draft' : 'partial';
 
+  // Department filter options for the roster. The official catalog (departments
+  // table) unioned with any department names this property's active staff actually
+  // carry — dept_name is free text, so some staff sit in departments the catalog
+  // doesn't list, and a freshly-created catalog department has nobody in it yet.
+  // Taking both means a department created in Admin shows up here immediately, and
+  // off-catalog values already on staff never disappear.
+  const catalog: string[] = await db('departments').orderBy('name').pluck('name');
+  const deptSet = new Set<string>();
+  for (const name of catalog) { const n = (name ?? '').trim(); if (n) deptSet.add(n); }
+  for (const e of employees) { const d = (e.dept_name ?? '').trim(); if (d) deptSet.add(d); }
+  const departments = [...deptSet].sort((a, b) => a.localeCompare(b));
+
   return {
     property_id: propertyId,
     property_name: property.name,
@@ -198,6 +210,7 @@ export async function getWeeklyRoster(propertyId: number, weekStart: string, wee
     status,
     total_cells: total,
     published_cells: published,
+    departments,
     published_at: publishedAt,
     published_by_name: publishedByName,
     employees: employees.map((e: any) => ({ ...e, cells: cellsByEmp.get(e.id) ?? {} })),

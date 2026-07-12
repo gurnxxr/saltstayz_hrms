@@ -42,6 +42,13 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
     queryFn: () => api.get('/employees/managers').then(r => r.data),
   });
 
+  // Department is a pick-list, sourced from the official catalog (same list every
+  // other screen uses) so a department created in Admin is immediately selectable.
+  const { data: departments = [] } = useQuery({
+    queryKey: ['departments'],
+    queryFn: () => api.get('/admin/departments').then(r => r.data),
+  });
+
   const updateMutation = useMutation({
     mutationFn: (data: any) => api.put(`/employees/${id}`, data).then(r => r.data),
     onSuccess: () => {
@@ -144,6 +151,14 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
 
   const managerName = [emp.manager_first_name, emp.manager_last_name].filter(Boolean).join(' ') || 'N/A';
 
+  // Department options: the catalog, plus the employee's current department if it's
+  // an off-catalog value (e.g. "Security") — so switching to a dropdown never
+  // silently drops a value the record already holds.
+  const deptNames: string[] = departments.map((d: any) => d.name as string);
+  const currentDept = (form.dept_name ?? '').trim();
+  if (currentDept && !deptNames.includes(currentDept)) deptNames.push(currentDept);
+  const deptOptions = deptNames.map((n) => ({ value: n, label: n }));
+
   return (
     <AppShell>
       <div className="space-y-6 max-w-5xl">
@@ -224,7 +239,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
               <FormField label="Date of Joining" value={form.date_of_joining} onChange={(v) => setForm((p: any) => ({ ...p, date_of_joining: v }))} type="date" />
               <FormField label="Phone Number" value={form.phone} onChange={(v) => setForm((p: any) => ({ ...p, phone: v }))} />
               <FormField label="Aadhaar Card No" value={form.aadhaar_number} onChange={(v) => setForm((p: any) => ({ ...p, aadhaar_number: v.replace(/\D/g, '') }))} maxLength={12} />
-              <FormField label="Dept Name" value={form.dept_name} onChange={(v) => setForm((p: any) => ({ ...p, dept_name: v }))} />
+              <SelectField label="Dept Name" value={form.dept_name} onChange={(v) => setForm((p: any) => ({ ...p, dept_name: v }))} options={deptOptions} />
               <SelectField label="Designation Name" value={form.job_title_id} onChange={(v) => setForm((p: any) => ({ ...p, job_title_id: v ? Number(v) : null }))} options={jobTitles.map((j: any) => ({ value: j.id, label: j.title || j.name }))} />
               <FormField label="Branch Name" value={form.branch_name} onChange={(v) => setForm((p: any) => ({ ...p, branch_name: v }))} />
               {canEditStatus && (
