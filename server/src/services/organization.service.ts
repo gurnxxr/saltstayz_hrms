@@ -90,16 +90,24 @@ export async function listDepartments() {
   return db('departments').orderBy('name');
 }
 
-export async function createDepartment(data: { name: string }) {
+// A department's standard working hours per day (e.g. 8, 8.5, 9) — optional, 0–24.
+function validWorkingHours(v: unknown): number | null {
+  if (v === undefined || v === null || v === '') return null;
+  const h = Number(v);
+  if (!Number.isFinite(h) || h <= 0 || h > 24) throw new ValidationError('Working hours per day must be between 0 and 24');
+  return h;
+}
+
+export async function createDepartment(data: { name: string; working_hours_per_day?: number | string | null }) {
   const name = data.name?.trim();
   if (!name) throw new ValidationError('Department name is required');
   const existing = await db('departments').whereRaw('lower(name) = lower(?)', [name]).first();
   if (existing) throw new ValidationError('A department with this name already exists');
-  const [id] = await db('departments').insert({ name });
+  const [id] = await db('departments').insert({ name, working_hours_per_day: validWorkingHours(data.working_hours_per_day) });
   return db('departments').where('id', id).first();
 }
 
-export async function updateDepartment(id: number, data: Partial<{ name: string }>) {
+export async function updateDepartment(id: number, data: Partial<{ name: string; working_hours_per_day: number | string | null }>) {
   const row = await db('departments').where('id', id).first();
   if (!row) throw new NotFoundError('Department');
   const name = data.name?.trim();
@@ -107,12 +115,15 @@ export async function updateDepartment(id: number, data: Partial<{ name: string 
   const dup = await db('departments').whereRaw('lower(name) = lower(?)', [name]).whereNot('id', id).first();
   if (dup) throw new ValidationError('A department with this name already exists');
 
+  const patch: any = { name, updated_at: db.fn.now() };
+  if ('working_hours_per_day' in data) patch.working_hours_per_day = validWorkingHours(data.working_hours_per_day);
+
   // The department table is the single source of truth. Employees carry a free-text
   // dept_name (property convention — employees.department_id was dropped in mig 011),
   // so cascade the rename to every employee that referenced the old name, keeping the
   // Manpower console, analytics and every other module in sync.
   await db.transaction(async (trx) => {
-    await trx('departments').where('id', id).update({ name, updated_at: trx.fn.now() });
+    await trx('departments').where('id', id).update(patch);
     if (row.name !== name) {
       await trx('employees').where('dept_name', row.name).update({ dept_name: name, updated_at: trx.fn.now() });
     }

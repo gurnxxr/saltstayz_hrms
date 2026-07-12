@@ -285,6 +285,120 @@ export function SimpleListTab({ endpoint, label, fieldName = 'name', queryKey }:
   );
 }
 
+// ─── Departments Tab ───
+// Like SimpleListTab but each department also carries a standard working-hours-per-day.
+
+export function DepartmentsTab() {
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState<any>(null);
+  const [form, setForm] = useState({ name: '', working_hours_per_day: '' });
+  const [showForm, setShowForm] = useState(false);
+  const [delTarget, setDelTarget] = useState<any>(null);
+
+  const { data: items = [] } = useQuery({
+    queryKey: ['org-departments'],
+    queryFn: () => api.get('/admin/departments').then(r => r.data),
+  });
+
+  const saveMutation = useMutation({
+    mutationFn: (data: typeof form) => {
+      const body = { name: data.name, working_hours_per_day: data.working_hours_per_day === '' ? null : Number(data.working_hours_per_day) };
+      return editing ? api.put(`/admin/departments/${editing.id}`, body) : api.post('/admin/departments', body);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['org-departments'] });
+      qc.invalidateQueries({ queryKey: ['departments'] }); // the app-wide department picker
+      toast.success('Saved'); closeForm();
+    },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed'),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => api.delete(`/admin/departments/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['org-departments'] });
+      qc.invalidateQueries({ queryKey: ['departments'] });
+      toast.success('Deleted'); setDelTarget(null);
+    },
+    onError: (e: any) => { toast.error(e.response?.data?.error || 'Cannot delete'); setDelTarget(null); },
+  });
+
+  function openEdit(item: any) {
+    setEditing(item);
+    setForm({ name: item.name, working_hours_per_day: item.working_hours_per_day != null ? String(Number(item.working_hours_per_day)) : '' });
+    setShowForm(true);
+  }
+  function closeForm() { setShowForm(false); setEditing(null); setForm({ name: '', working_hours_per_day: '' }); }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        <button onClick={() => { closeForm(); setShowForm(true); }} className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium">
+          <Plus size={16} /> Add Department
+        </button>
+      </div>
+
+      {showForm && (
+        <div className="bg-card rounded-xl border border-border p-5">
+          <div className="flex justify-between mb-3">
+            <h3 className="font-semibold text-foreground">{editing ? 'Edit Department' : 'New Department'}</h3>
+            <button onClick={closeForm}><X size={16} className="text-secondary" /></button>
+          </div>
+          <form onSubmit={(e) => { e.preventDefault(); saveMutation.mutate(form); }} className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium mb-1">Name *</label>
+              <input required value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium mb-1">Working Hours / Day</label>
+              <input type="number" step="0.5" min="0" max="24" value={form.working_hours_per_day}
+                onChange={e => setForm(p => ({ ...p, working_hours_per_day: e.target.value }))}
+                placeholder="e.g. 8" className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm" />
+            </div>
+            <div className="col-span-2 flex gap-2">
+              <button type="submit" disabled={saveMutation.isPending} className="px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium disabled:opacity-50">{editing ? 'Update' : 'Create'}</button>
+              <button type="button" onClick={closeForm} className="px-4 py-2 border border-border rounded-lg text-sm">Cancel</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      <div className="bg-card rounded-xl border border-border overflow-hidden">
+        <table className="w-full">
+          <thead><tr className="border-b border-border bg-muted/50">
+            <th className="text-left px-4 py-3 text-xs font-medium text-secondary uppercase">Department</th>
+            <th className="text-left px-4 py-3 text-xs font-medium text-secondary uppercase">Working Hours / Day</th>
+            <th className="text-right px-4 py-3 text-xs font-medium text-secondary uppercase">Actions</th>
+          </tr></thead>
+          <tbody className="divide-y divide-border">
+            {items.map((item: any) => (
+              <tr key={item.id} className="hover:bg-muted/30">
+                <td className="px-4 py-3 text-sm font-medium text-foreground">{item.name}</td>
+                <td className="px-4 py-3 text-sm text-secondary">{item.working_hours_per_day != null ? `${Number(item.working_hours_per_day)} hrs` : <span className="text-secondary/60">Not set</span>}</td>
+                <td className="px-4 py-3 text-right">
+                  <button onClick={() => openEdit(item)} className="p-1.5 text-secondary hover:text-foreground"><Pencil size={14} /></button>
+                  <button onClick={() => setDelTarget(item)} className="p-1.5 text-secondary hover:text-red-600"><Trash2 size={14} /></button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {items.length === 0 && <p className="text-center py-8 text-secondary text-sm">No departments found</p>}
+      </div>
+
+      <ConfirmDialog
+        open={!!delTarget}
+        title="Delete department?"
+        message={<>This permanently deletes <strong className="text-foreground">{delTarget?.name}</strong>. This action cannot be undone.</>}
+        confirmLabel="Delete department"
+        loading={deleteMutation.isPending}
+        onConfirm={() => delTarget && deleteMutation.mutate(delTarget.id)}
+        onCancel={() => setDelTarget(null)}
+      />
+    </div>
+  );
+}
+
 // ─── Pay Grades Tab ───
 
 export function PayGradesTab() {
