@@ -1,13 +1,15 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import LoadError from '@/components/ui/LoadError';
-import { Briefcase, Users, TrendingUp, CheckCircle2, Plus, User, ListChecks, ChevronDown, ChevronRight } from 'lucide-react';
+import { Briefcase, Users, TrendingUp, CheckCircle2, Plus, User, ListChecks, ChevronDown, ChevronRight, Upload, X } from 'lucide-react';
 
 // The server (recruitment.service.ts) is authoritative for the funnel — GET
 // /recruitment/stages mirrors it. These locals are the fallback vocabulary so the
@@ -58,6 +60,47 @@ export default function RecruitmentPage() {
     queryFn: () => api.get('/recruitment/candidates?archived=all').then(r => r.data),
   });
 
+  // ── Bulk candidate upload (CSV → Shortlisting) ──
+  const queryClient = useQueryClient();
+  const { can } = useAuth();
+  const [showUpload, setShowUpload] = useState(false);
+  const [uploadVacancyId, setUploadVacancyId] = useState('');
+  const [uploadResult, setUploadResult] = useState<any>(null);
+  const uploadFileRef = useRef<HTMLInputElement>(null);
+
+  const { data: vacancies = [] } = useQuery({
+    queryKey: ['vacancies'],
+    queryFn: () => api.get('/recruitment/vacancies').then(r => r.data),
+  });
+  const openVacancies = vacancies.filter((v: any) => v.status !== 'closed');
+
+  const uploadMutation = useMutation({
+    mutationFn: ({ file, vacancyId }: { file: File; vacancyId: string }) => {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('vacancy_id', vacancyId);
+      return api.post('/recruitment/candidates/bulk-upload', fd).then(r => r.data);
+    },
+    onSuccess: (data) => {
+      setUploadResult(data);
+      // Refresh every view that reads candidates for this vacancy — the board, the stat
+      // cards, All Candidates, the per-vacancy applicants tables, the vacancy header, and
+      // the by-stage counts — so uploaded rows show up without a hard reload.
+      ['pipeline-candidates', 'vacancy-stats', 'all-candidates', 'vacancy-candidates',
+        'vacancy-candidates-archived', 'vacancy', 'candidates-by-stage', 'vacancies']
+        .forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
+      toast.success(`${data.created} candidate(s) added to Shortlisting${data.skipped ? `, ${data.skipped} skipped` : ''}`);
+    },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Upload failed'),
+  });
+
+  function handleUploadFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (file && uploadVacancyId) { setUploadResult(null); uploadMutation.mutate({ file, vacancyId: uploadVacancyId }); }
+    if (uploadFileRef.current) uploadFileRef.current.value = '';
+  }
+  function closeUpload() { setShowUpload(false); setUploadResult(null); setUploadVacancyId(''); }
+
   const funnelOrder: string[] = stages?.funnel_order ?? FUNNEL_ORDER;
   const offRamps: string[] = stages?.off_ramps ?? OFF_RAMPS;
   const labels: Record<string, string> = stages?.labels ?? STAGE_LABELS;
@@ -82,7 +125,7 @@ export default function RecruitmentPage() {
   function Column({ stage }: { stage: string }) {
     const rows = byStage[stage] ?? [];
     return (
-      <div className="w-72 shrink-0 flex flex-col rounded-xl border border-border bg-muted/40">
+      <div className="flex flex-col rounded-xl border border-border bg-muted/40">
         <div className="px-3 py-2.5 border-b border-border">
           <div className="flex items-center gap-2">
             <span className={`w-2 h-2 rounded-full shrink-0 ${STAGE_DOT[stage] || 'bg-gray-400'}`} />
@@ -97,7 +140,7 @@ export default function RecruitmentPage() {
             </p>
           )}
         </div>
-        <div className="p-2 space-y-2 min-h-[80px] max-h-[calc(100vh-360px)] overflow-y-auto">
+        <div className="p-2 space-y-2 min-h-[80px] max-h-72 overflow-y-auto">
           {rows.length === 0 ? (
             <p className="text-center text-xs text-secondary py-6">No candidates</p>
           ) : (
@@ -127,7 +170,7 @@ export default function RecruitmentPage() {
 
   return (
     <AppShell>
-      <div className="space-y-6">
+      <div className="space-y-4">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-bold text-foreground">Recruitment Pipeline</h1>
@@ -146,6 +189,14 @@ export default function RecruitmentPage() {
             >
               All Candidates
             </Link>
+            {can('recruitment', 'create') && (
+              <button
+                onClick={() => { setUploadResult(null); setShowUpload(true); }}
+                className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted transition-colors"
+              >
+                <Upload size={16} /> Upload Candidates
+              </button>
+            )}
             <button
               onClick={() => router.push('/recruitment/vacancies/new')}
               className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
@@ -158,7 +209,7 @@ export default function RecruitmentPage() {
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           {statCards.map((card) => (
-            <div key={card.label} className="bg-card rounded-xl border border-border p-5">
+            <div key={card.label} className="bg-card rounded-xl border border-border p-4">
               <div className="flex items-center gap-3">
                 <div className={`p-2.5 rounded-lg ${card.color}`}>
                   <card.icon size={20} />
@@ -193,14 +244,70 @@ export default function RecruitmentPage() {
             <LoadError message="Couldn't load the pipeline." onRetry={() => refetch()} />
           </div>
         ) : (
-          <div className="overflow-x-auto pb-4">
-            <div className="flex gap-4 min-w-max">
-              {funnelOrder.map((stage) => <Column key={stage} stage={stage} />)}
-              {showOffRamp && offRamps.map((stage) => <Column key={stage} stage={stage} />)}
-            </div>
+          <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 pb-4">
+            {funnelOrder.map((stage) => <Column key={stage} stage={stage} />)}
+            {showOffRamp && offRamps.map((stage) => <Column key={stage} stage={stage} />)}
           </div>
         )}
       </div>
+
+      {showUpload && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={closeUpload}>
+          <div className="bg-card rounded-xl border border-border w-full max-w-lg p-5 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-foreground">Upload Candidates</h3>
+              <button onClick={closeUpload}><X size={16} className="text-secondary" /></button>
+            </div>
+            <p className="text-sm text-secondary">
+              Import a CSV of applicants for a vacancy — each row is added under{' '}
+              <strong className="text-foreground">Shortlisting</strong>. Columns:{' '}
+              <span className="font-medium text-foreground">Name</span> (required), Phone Number, Address, Resume Link, Email Address.
+            </p>
+            <div>
+              <label className="block text-xs font-medium mb-1">Vacancy *</label>
+              <select
+                value={uploadVacancyId}
+                onChange={(e) => setUploadVacancyId(e.target.value)}
+                disabled={uploadMutation.isPending}
+                className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm disabled:opacity-50"
+              >
+                <option value="">Select vacancy…</option>
+                {openVacancies.map((v: any) => (
+                  <option key={v.id} value={v.id}>{v.job_title} — {v.property_name}</option>
+                ))}
+              </select>
+              {openVacancies.length === 0 && (
+                <p className="mt-1 text-xs text-amber-600">No open vacancies — create or reopen one first.</p>
+              )}
+            </div>
+            <input ref={uploadFileRef} type="file" accept=".csv" className="hidden" onChange={handleUploadFile} />
+            <button
+              onClick={() => uploadFileRef.current?.click()}
+              disabled={!uploadVacancyId || uploadMutation.isPending}
+              className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+            >
+              <Upload size={16} /> {uploadMutation.isPending ? 'Processing…' : 'Choose CSV file'}
+            </button>
+            {!uploadVacancyId && <p className="text-xs text-secondary text-center">Pick a vacancy to enable upload.</p>}
+            {uploadResult && (
+              <div className="rounded-lg border border-border p-3 text-sm space-y-2">
+                <p className="font-medium text-foreground">{uploadResult.total} row(s) processed</p>
+                <div className="flex flex-wrap gap-4 text-xs">
+                  <span className="text-green-600">{uploadResult.created} added</span>
+                  {uploadResult.skipped > 0 && <span className="text-yellow-600">{uploadResult.skipped} skipped</span>}
+                </div>
+                {uploadResult.errors?.length > 0 && (
+                  <div className="max-h-40 overflow-y-auto rounded bg-red-50 border border-red-200 p-2 space-y-0.5">
+                    {uploadResult.errors.map((err: string, i: number) => (
+                      <p key={i} className="text-xs text-red-700">{err}</p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </AppShell>
   );
 }

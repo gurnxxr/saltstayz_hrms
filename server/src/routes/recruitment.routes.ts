@@ -1,10 +1,33 @@
-import { Router } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
+import multer from 'multer';
 import { authenticate } from '../middleware/auth';
 import { authorize } from '../middleware/rbac';
 import * as ctrl from '../controllers/recruitment.controller';
 
 const router = Router();
 router.use(authenticate);
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+    // accept=".csv" on the client is advisory; reject a non-CSV (e.g. an .xlsx) here too.
+    if (/\.csv$/i.test(file.originalname) || ['text/csv', 'application/csv', 'application/vnd.ms-excel'].includes(file.mimetype)) cb(null, true);
+    else cb(new Error('Please upload a .csv file'));
+  },
+});
+
+// Run multer but turn its size/type rejections into a clean 400 — otherwise a bare
+// MulterError falls through to the global handler as a generic 500.
+function uploadCsv(req: Request, res: Response, next: NextFunction) {
+  upload.single('file')(req, res, (err: any) => {
+    if (err) {
+      const msg = err.code === 'LIMIT_FILE_SIZE' ? 'CSV file is too large (max 5 MB)' : (err.message || 'Upload failed');
+      return res.status(400).json({ error: msg });
+    }
+    next();
+  });
+}
 
 // Stage vocabulary (steps 3-11) — the client mirrors this, it does not decide.
 router.get('/stages', authorize('recruitment', 'read'), ctrl.getStages);
@@ -32,6 +55,7 @@ router.get('/vacancies/:id/jd/pdf', authorize('recruitment', 'read'), ctrl.downl
 router.get('/candidates', authorize('recruitment', 'read'), ctrl.listCandidates);
 router.get('/candidates/:id', authorize('recruitment', 'read'), ctrl.getCandidate);
 router.post('/candidates', authorize('recruitment', 'create'), ctrl.createCandidate);
+router.post('/candidates/bulk-upload', authorize('recruitment', 'create'), upload.single('file'), ctrl.bulkUploadCandidates);
 router.put('/candidates/:id', authorize('recruitment', 'update'), ctrl.updateCandidate);
 router.put('/candidates/:id/stage', authorize('recruitment', 'update'), ctrl.moveCandidateStage);
 router.get('/candidates/:id/history', authorize('recruitment', 'read'), ctrl.getCandidateHistory);

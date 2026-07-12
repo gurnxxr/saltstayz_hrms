@@ -163,6 +163,19 @@ export async function createCandidate(req: AuthRequest, res: Response, next: Nex
   }
 }
 
+export async function bulkUploadCandidates(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'CSV file is required' });
+    const vacancyId = Number(req.body.vacancy_id);
+    if (!vacancyId) return res.status(400).json({ error: 'Select a vacancy for these candidates' });
+    const csv = req.file.buffer.toString('utf-8');
+    const result = await recruitmentService.bulkUploadCandidates(vacancyId, csv, req.user!.userId);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function updateCandidate(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     const candidate = await recruitmentService.updateCandidate(Number(req.params.id), req.body);

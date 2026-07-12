@@ -320,6 +320,137 @@ export async function createCandidate(data: {
   return getCandidate(id);
 }
 
+// ─── Bulk applicant upload (CSV → Shortlisting) ───
+
+// CSV header cell → canonical field. Applicants come in as Name / Phone Number /
+// Address / Resume Link / Email Address; accept common spellings of each.
+const CANDIDATE_HEADER_ALIASES: Record<string, string> = {
+  name: 'name', candidate_name: 'name', full_name: 'name', applicant_name: 'name',
+  phone: 'phone', phone_number: 'phone', mobile: 'phone', contact: 'phone', contact_number: 'phone', mobile_number: 'phone',
+  address: 'address', location: 'address',
+  email: 'email', email_address: 'email', email_id: 'email', mail: 'email',
+  resume_url: 'resume_url', resume: 'resume_url', resume_link: 'resume_url', cv: 'resume_url', cv_link: 'resume_url', resume_url_link: 'resume_url',
+};
+
+// Parse a whole CSV document (RFC-4180 style) into rows of trimmed cells. Double-quoted
+// fields may contain commas AND line breaks — an address typed with Alt+Enter is one
+// field, not two rows — and "" is an escaped quote. Handles \n, \r\n and lone-\r line
+// endings and strips a leading BOM. Parsing per physical line first (the naive way) tore
+// quoted newlines across rows and dropped CR-only files, so we tokenise the whole text.
+// (A stray unterminated quote will swallow to end-of-file; such a row then fails the
+// column-count check in bulkUploadCandidates and is reported rather than stored.)
+function parseCsv(text: string): string[][] {
+  const s = text.replace(/^﻿/, '');
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let inQuotes = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (s[i + 1] === '"') { field += '"'; i++; } // escaped ""
+        else inQuotes = false;
+      } else field += ch;
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ',') {
+      row.push(field); field = '';
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && s[i + 1] === '\n') i++; // CRLF counts as one break
+      row.push(field); field = ''; rows.push(row); row = [];
+    } else {
+      field += ch;
+    }
+  }
+  row.push(field); rows.push(row); // flush the final field/row
+  return rows
+    .map((r) => r.map((c) => c.trim()))
+    .filter((r) => r.some((c) => c !== '')); // drop blank / separator lines
+}
+
+/**
+ * Import a CSV list of applicants against one vacancy. Every valid row lands as a
+ * candidate at FUNNEL_ORDER[0] ('applied' = Shortlisting), exactly like a manually
+ * added applicant. Re-uploading the same list is safe: a repeat applicant on the same
+ * vacancy — matched on email or phone — is skipped rather than duplicated.
+ */
+export async function bulkUploadCandidates(vacancyId: number, csvContent: string, addedBy: number) {
+  const vacancy = await db('vacancies').where('id', vacancyId).first();
+  if (!vacancy) throw new ValidationError('Select a vacancy to upload candidates against');
+  if (vacancy.status === 'closed') throw new ValidationError('This vacancy is closed — reopen it before adding applicants');
+
+  const rows = parseCsv(csvContent);
+  if (rows.length < 2) throw new ValidationError('CSV must have a header row and at least one applicant row');
+
+  const header = rows[0].map((h) => {
+    const key = h.toLowerCase().replace(/\s+/g, '_');
+    return CANDIDATE_HEADER_ALIASES[key] || key;
+  });
+  if (!header.includes('name')) throw new ValidationError('CSV must have a "Name" column');
+
+  const results = { total: 0, created: 0, skipped: 0, errors: [] as string[] };
+  const seen = new Set<string>(); // in-file dedupe so one file can't list the same person twice
+
+  for (let r = 1; r < rows.length; r++) {
+    const cols = rows[r];
+    results.total++;
+    const rowNo = r + 1; // 1-based; the header is row 1
+
+    // A row whose column count doesn't match the header is malformed (e.g. an
+    // unbalanced quote merged fields) — report it rather than store garbage.
+    if (cols.length !== header.length) {
+      results.skipped++;
+      results.errors.push(`Row ${rowNo}: expected ${header.length} columns, found ${cols.length}`);
+      continue;
+    }
+
+    // First non-empty value wins when two header columns map to the same field
+    // (e.g. "Phone" + "Mobile"), so a trailing blank column can't erase real data.
+    const row: Record<string, string> = {};
+    header.forEach((h, idx) => { if (!row[h]) row[h] = cols[idx] ?? ''; });
+
+    const name = row.name?.trim();
+    if (!name) { results.skipped++; results.errors.push(`Row ${rowNo}: missing name`); continue; }
+
+    const emailRaw = row.email?.trim() || null;
+    const phone = row.phone?.trim() || null;
+    // De-dupe a repeat applicant on THIS vacancy, matched on email or phone (whichever
+    // the row carries), against both earlier rows in the file and rows already in the DB.
+    // The same person may legitimately apply to a different vacancy, so it's per-vacancy.
+    const dupKey = emailRaw ? `e:${emailRaw.toLowerCase()}` : phone ? `p:${phone}` : null;
+    if (dupKey) {
+      if (seen.has(dupKey)) { results.skipped++; results.errors.push(`Row ${rowNo}: duplicate of an earlier row in this file`); continue; }
+      const existing = await db('candidates').where('vacancy_id', vacancyId).where((q) => {
+        if (emailRaw) q.whereRaw('lower(email) = ?', [emailRaw.toLowerCase()]);
+        else q.where('phone', phone);
+      }).first();
+      if (existing) { results.skipped++; results.errors.push(`Row ${rowNo}: ${emailRaw || phone} already applied to this vacancy`); continue; }
+      seen.add(dupKey);
+    }
+
+    try {
+      await db('candidates').insert({
+        vacancy_id: vacancyId,
+        name,
+        email: emailRaw,
+        phone,
+        address: row.address?.trim() || null,
+        resume_url: row.resume_url?.trim() || null,
+        stage: FUNNEL_ORDER[0], // 'applied' → Shortlisting
+        added_by: addedBy,
+      });
+      results.created++;
+    } catch {
+      // Generic message only — never surface a raw driver/DB error to the client.
+      results.skipped++;
+      results.errors.push(`Row ${rowNo}: could not be saved`);
+    }
+  }
+
+  return results;
+}
+
 export async function updateCandidate(id: number, data: Partial<{
   name: string;
   email: string;
