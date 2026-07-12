@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
@@ -10,7 +10,7 @@ import LoadError from '@/components/ui/LoadError';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useAuth } from '@/lib/auth';
 import {
-  Plus, Package, X, Loader2, RotateCcw, Trash2, Pencil, Boxes, Search,
+  Plus, Package, X, Loader2, RotateCcw, Trash2, Pencil, Boxes, Search, Upload, History,
 } from 'lucide-react';
 
 const inputCls = 'w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50';
@@ -26,7 +26,7 @@ const STATUS_STYLE: Record<string, string> = {
 export default function CompanyAssetsPage() {
   const { user } = useAuth();
   const isAdmin = user?.roleName === 'admin';
-  const [tab, setTab] = useState<'register' | 'catalog'>('register');
+  const [tab, setTab] = useState<'register' | 'history' | 'catalog'>('register');
 
   return (
     <AppShell>
@@ -39,10 +39,11 @@ export default function CompanyAssetsPage() {
 
         <div className="flex gap-1 border-b border-border">
           <TabBtn active={tab === 'register'} onClick={() => setTab('register')} icon={Package} label="Asset Register" />
+          <TabBtn active={tab === 'history'} onClick={() => setTab('history')} icon={History} label="History" />
           {isAdmin && <TabBtn active={tab === 'catalog'} onClick={() => setTab('catalog')} icon={Boxes} label="Item Catalog" />}
         </div>
 
-        {tab === 'register' ? <RegisterTab isAdmin={isAdmin} /> : <CatalogTab />}
+        {tab === 'register' ? <RegisterTab isAdmin={isAdmin} /> : tab === 'history' ? <HistoryTab isAdmin={isAdmin} /> : <CatalogTab />}
       </div>
     </AppShell>
   );
@@ -60,17 +61,18 @@ function TabBtn({ active, onClick, icon: Icon, label }: { active: boolean; onCli
 // ─────────────────────────────── Register ───────────────────────────────
 
 function RegisterTab({ isAdmin }: { isAdmin: boolean }) {
-  const [statusFilter, setStatusFilter] = useState('');
   const [search, setSearch] = useState('');
   const [assigning, setAssigning] = useState(false);
   const [editing, setEditing] = useState<any | null>(null);
   const [returning, setReturning] = useState<any | null>(null);
   const [deleting, setDeleting] = useState<any | null>(null);
+  const [showUpload, setShowUpload] = useState(false);
   const queryClient = useQueryClient();
 
+  // Active register = currently-assigned items only; returned/lost live in the History tab.
   const { data: rows = [], isError, refetch } = useQuery({
-    queryKey: ['asset-assignments', statusFilter],
-    queryFn: () => api.get(`/employee-lifecycle/assets/assignments${statusFilter ? `?status=${statusFilter}` : ''}`).then(r => r.data),
+    queryKey: ['asset-assignments', 'assigned'],
+    queryFn: () => api.get('/employee-lifecycle/assets/assignments?status=assigned').then(r => r.data),
   });
 
   const filtered = useMemo(() => {
@@ -96,24 +98,21 @@ function RegisterTab({ isAdmin }: { isAdmin: boolean }) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="relative">
-            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-secondary" />
-            <input className={`${inputCls} pl-9 w-64`} placeholder="Search employee, item, serial…"
-              value={search} onChange={(e) => setSearch(e.target.value)} />
-          </div>
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
-            className="px-3 py-2 border border-border rounded-lg bg-background text-sm">
-            <option value="">All Status</option>
-            <option value="assigned">Assigned</option>
-            <option value="returned">Returned</option>
-            <option value="lost">Lost</option>
-          </select>
+        <div className="relative">
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-secondary" />
+          <input className={`${inputCls} pl-9 w-64`} placeholder="Search employee, item, serial…"
+            value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
-        <button onClick={() => setAssigning(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors">
-          <Plus size={16} /> Assign Asset
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setShowUpload(true)}
+            className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted transition-colors">
+            <Upload size={16} /> Upload Assets
+          </button>
+          <button onClick={() => setAssigning(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors">
+            <Plus size={16} /> Assign Asset
+          </button>
+        </div>
       </div>
 
       <div className="bg-card rounded-xl border border-border overflow-hidden">
@@ -192,10 +191,204 @@ function RegisterTab({ isAdmin }: { isAdmin: boolean }) {
       {assigning && <AssignDialog onClose={() => setAssigning(false)} />}
       {editing && <AssignDialog existing={editing} onClose={() => setEditing(null)} />}
       {returning && <ReturnDialog assignment={returning} onClose={() => setReturning(null)} />}
+      {showUpload && <UploadDialog onClose={() => setShowUpload(false)} />}
       <ConfirmDialog
         open={!!deleting}
         title="Delete asset record?"
         message={deleting && <>This permanently removes the <strong>{deleting.asset_name}</strong> record for {deleting.first_name} {deleting.last_name}. Use “Return” instead to keep the history.</>}
+        confirmLabel="Delete"
+        loading={deleteMutation.isPending}
+        onConfirm={() => deleting && deleteMutation.mutate(deleting.id)}
+        onCancel={() => setDeleting(null)}
+      />
+    </div>
+  );
+}
+
+// Bulk-import the assignment register from a CSV.
+function UploadDialog({ onClose }: { onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const [result, setResult] = useState<any>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const mutation = useMutation({
+    mutationFn: (file: File) => {
+      const fd = new FormData();
+      fd.append('file', file);
+      return api.post('/employee-lifecycle/assets/assignments/bulk-upload', fd).then(r => r.data);
+    },
+    onSuccess: (data) => {
+      setResult(data);
+      queryClient.invalidateQueries({ queryKey: ['asset-assignments'] });
+      queryClient.invalidateQueries({ queryKey: ['asset-types'] });
+      queryClient.invalidateQueries({ queryKey: ['asset-types-active'] });
+      toast.success(`${data.created} asset row(s) added${data.skipped ? `, ${data.skipped} skipped` : ''}`);
+    },
+    onError: (err: any) => toast.error(err.response?.data?.error || 'Upload failed'),
+  });
+
+  function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (file) { setResult(null); mutation.mutate(file); }
+    if (fileRef.current) fileRef.current.value = '';
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative bg-card rounded-xl border border-border shadow-xl w-full max-w-lg">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+          <h3 className="text-base font-semibold text-foreground">Upload Assets</h3>
+          <button onClick={onClose} className="p-1 rounded-lg text-secondary hover:text-foreground hover:bg-muted transition-colors"><X size={18} /></button>
+        </div>
+        <div className="p-5 space-y-4">
+          <p className="text-sm text-secondary">
+            Import a CSV of assets assigned per employee. Columns:{' '}
+            <span className="font-medium text-foreground">Employee Name, EmpCode, Property Name, Item, Serial/Tag, Assigned Date, Assigned By(Email), Status</span>.
+            EmpCode and Item are required. A row with Status <span className="font-medium text-foreground">returned</span> or <span className="font-medium text-foreground">lost</span> lands in the History tab; an item not in the catalog is added automatically.
+          </p>
+          <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={onFile} />
+          <button onClick={() => fileRef.current?.click()} disabled={mutation.isPending}
+            className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors">
+            {mutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+            {mutation.isPending ? 'Processing…' : 'Choose CSV file'}
+          </button>
+          {result && (
+            <div className="rounded-lg border border-border p-3 text-sm space-y-2">
+              <p className="font-medium text-foreground">{result.total} row(s) processed</p>
+              <div className="flex flex-wrap gap-4 text-xs">
+                <span className="text-green-600">{result.created} added</span>
+                {result.skipped > 0 && <span className="text-amber-600">{result.skipped} skipped</span>}
+              </div>
+              {result.errors?.length > 0 && (
+                <div className="max-h-40 overflow-y-auto rounded bg-red-50 border border-red-200 p-2 space-y-0.5">
+                  {result.errors.map((e: string, i: number) => <p key={i} className="text-xs text-red-700">{e}</p>)}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="flex justify-end gap-2 px-5 py-4 border-t border-border">
+          <button onClick={onClose} className="px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted transition-colors">Done</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────── History ───────────────────────────────
+// Returned & lost assets — the closed-out records, out of the active register.
+
+function HistoryTab({ isAdmin }: { isAdmin: boolean }) {
+  const [search, setSearch] = useState('');
+  const [outcome, setOutcome] = useState(''); // '' = returned & lost
+  const [deleting, setDeleting] = useState<any | null>(null);
+  const queryClient = useQueryClient();
+
+  const { data: rows = [], isError, refetch } = useQuery({
+    queryKey: ['asset-assignments', 'history'],
+    queryFn: () => api.get('/employee-lifecycle/assets/assignments').then(r => r.data),
+  });
+
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase().trim();
+    return rows.filter((r: any) =>
+      r.status !== 'assigned' &&
+      (!outcome || r.status === outcome) &&
+      (!q ||
+        `${r.first_name} ${r.last_name}`.toLowerCase().includes(q) ||
+        r.employee_code?.toLowerCase().includes(q) ||
+        r.asset_name?.toLowerCase().includes(q) ||
+        r.identifier?.toLowerCase().includes(q)));
+  }, [rows, search, outcome]);
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => api.delete(`/employee-lifecycle/assets/assignments/${id}`),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['asset-assignments'] }); toast.success('Record removed'); setDeleting(null); },
+    onError: (err: any) => toast.error(err.response?.data?.error || 'Failed to remove'),
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="relative">
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-secondary" />
+          <input className={`${inputCls} pl-9 w-64`} placeholder="Search employee, item, serial…"
+            value={search} onChange={(e) => setSearch(e.target.value)} />
+        </div>
+        <select value={outcome} onChange={(e) => setOutcome(e.target.value)}
+          className="px-3 py-2 border border-border rounded-lg bg-background text-sm">
+          <option value="">Returned & Lost</option>
+          <option value="returned">Returned</option>
+          <option value="lost">Lost</option>
+        </select>
+      </div>
+
+      <div className="bg-card rounded-xl border border-border overflow-hidden">
+        {isError ? (
+          <LoadError message="Couldn't load asset history." onRetry={() => refetch()} />
+        ) : filtered.length === 0 ? (
+          <div className="p-10 text-center text-secondary">
+            <History size={32} className="mx-auto mb-2 opacity-40" />
+            <p className="text-sm font-medium text-foreground">No returned assets yet</p>
+            <p className="text-xs mt-1">Once an asset is returned or marked lost, it moves here.</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-secondary">
+                  <th className="px-4 py-3 font-medium">Employee</th>
+                  <th className="px-4 py-3 font-medium">Item</th>
+                  <th className="px-4 py-3 font-medium">Serial / Tag</th>
+                  <th className="px-4 py-3 font-medium">Assigned</th>
+                  <th className="px-4 py-3 font-medium">Outcome</th>
+                  <th className="px-4 py-3 font-medium">Returned</th>
+                  {isAdmin && <th className="px-4 py-3 font-medium text-right"></th>}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {filtered.map((r: any) => (
+                  <tr key={r.id} className="hover:bg-muted/20">
+                    <td className="px-4 py-2.5">
+                      <p className="font-medium text-foreground">{r.first_name} {r.last_name}</p>
+                      <p className="text-xs text-secondary">{r.employee_code} · {r.branch_name || '—'}</p>
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <p className="text-foreground">{r.asset_name}</p>
+                      <p className="text-xs text-secondary">{r.asset_category}</p>
+                    </td>
+                    <td className="px-4 py-2.5 text-secondary">{r.identifier || '—'}</td>
+                    <td className="px-4 py-2.5 text-secondary">{fmt(r.assigned_date)}</td>
+                    <td className="px-4 py-2.5">
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_STYLE[r.status] || 'bg-muted text-secondary'}`}>{r.status}</span>
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <p className="text-secondary">{fmt(r.returned_date)}</p>
+                      {r.returned_by_email && <p className="text-xs text-secondary/70">by {r.returned_by_email}</p>}
+                    </td>
+                    {isAdmin && (
+                      <td className="px-4 py-2.5">
+                        <div className="flex items-center justify-end">
+                          <button onClick={() => setDeleting(r)} title="Delete record"
+                            className="p-1.5 rounded-lg text-secondary hover:text-red-600 hover:bg-red-50 transition-colors">
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <ConfirmDialog
+        open={!!deleting}
+        title="Delete asset record?"
+        message={deleting && <>This permanently removes the <strong>{deleting.asset_name}</strong> record for {deleting.first_name} {deleting.last_name}.</>}
         confirmLabel="Delete"
         loading={deleteMutation.isPending}
         onConfirm={() => deleting && deleteMutation.mutate(deleting.id)}

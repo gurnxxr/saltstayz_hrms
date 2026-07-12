@@ -1,4 +1,5 @@
-import { Router } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
+import multer from 'multer';
 import { authenticate } from '../middleware/auth';
 import { authorizeRoles } from '../middleware/rbac';
 import * as ctrl from '../controllers/employeeLifecycle.controller';
@@ -14,6 +15,24 @@ router.use(LIFECYCLE_ROLES);
 
 // Item catalog + assignment deletions are corrective, admin-only actions.
 const ADMIN_ONLY = authorizeRoles('admin');
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+    if (/\.csv$/i.test(file.originalname) || ['text/csv', 'application/csv', 'application/vnd.ms-excel'].includes(file.mimetype)) cb(null, true);
+    else cb(new Error('Please upload a .csv file'));
+  },
+});
+function uploadCsv(req: Request, res: Response, next: NextFunction) {
+  upload.single('file')(req, res, (err: any) => {
+    if (err) {
+      const msg = err.code === 'LIMIT_FILE_SIZE' ? 'CSV file is too large (max 5 MB)' : (err.message || 'Upload failed');
+      return res.status(400).json({ error: msg });
+    }
+    next();
+  });
+}
 
 router.get('/options', ctrl.getOptions);
 router.get('/employees', ctrl.listEmployees);
@@ -34,6 +53,7 @@ router.post('/assets/types', ADMIN_ONLY, ctrl.createAssetType);
 router.put('/assets/types/:id', ADMIN_ONLY, ctrl.updateAssetType);
 
 router.get('/assets/assignments', ctrl.listAssignments);
+router.post('/assets/assignments/bulk-upload', uploadCsv, ctrl.bulkUploadAssignments);
 router.post('/assets/assignments', ctrl.createAssignment);
 router.put('/assets/assignments/:id', ctrl.updateAssignment);
 router.put('/assets/assignments/:id/return', ctrl.returnAssignment);

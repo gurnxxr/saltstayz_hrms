@@ -87,3 +87,11 @@ export async function returnAssignment(req: AuthRequest, res: Response, next: Ne
 export async function deleteAssignment(req: AuthRequest, res: Response, next: NextFunction) {
   try { await assets.deleteAssignment(Number(req.params.id)); res.json({ ok: true }); } catch (err) { next(err); }
 }
+
+export async function bulkUploadAssignments(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'CSV file is required' });
+    const csv = req.file.buffer.toString('utf-8');
+    res.json(await assets.bulkUploadAssetAssignments(csv, req.user?.userId ?? null));
+  } catch (err) { next(err); }
+}

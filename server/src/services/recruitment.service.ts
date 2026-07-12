@@ -10,6 +10,7 @@ import { getVacancySanctionContext, getRoleBand } from './manpower.service';
 import * as checklist from './checklist.service';
 import { notifyEmployee } from './notification.service';
 import { nextJobId } from '../utils/jobId';
+import { parseCsv } from '../utils/csv';
 
 // ─── The eleven-step hiring process ───
 //
@@ -331,43 +332,6 @@ const CANDIDATE_HEADER_ALIASES: Record<string, string> = {
   email: 'email', email_address: 'email', email_id: 'email', mail: 'email',
   resume_url: 'resume_url', resume: 'resume_url', resume_link: 'resume_url', cv: 'resume_url', cv_link: 'resume_url', resume_url_link: 'resume_url',
 };
-
-// Parse a whole CSV document (RFC-4180 style) into rows of trimmed cells. Double-quoted
-// fields may contain commas AND line breaks — an address typed with Alt+Enter is one
-// field, not two rows — and "" is an escaped quote. Handles \n, \r\n and lone-\r line
-// endings and strips a leading BOM. Parsing per physical line first (the naive way) tore
-// quoted newlines across rows and dropped CR-only files, so we tokenise the whole text.
-// (A stray unterminated quote will swallow to end-of-file; such a row then fails the
-// column-count check in bulkUploadCandidates and is reported rather than stored.)
-function parseCsv(text: string): string[][] {
-  const s = text.replace(/^﻿/, '');
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let field = '';
-  let inQuotes = false;
-  for (let i = 0; i < s.length; i++) {
-    const ch = s[i];
-    if (inQuotes) {
-      if (ch === '"') {
-        if (s[i + 1] === '"') { field += '"'; i++; } // escaped ""
-        else inQuotes = false;
-      } else field += ch;
-    } else if (ch === '"') {
-      inQuotes = true;
-    } else if (ch === ',') {
-      row.push(field); field = '';
-    } else if (ch === '\n' || ch === '\r') {
-      if (ch === '\r' && s[i + 1] === '\n') i++; // CRLF counts as one break
-      row.push(field); field = ''; rows.push(row); row = [];
-    } else {
-      field += ch;
-    }
-  }
-  row.push(field); rows.push(row); // flush the final field/row
-  return rows
-    .map((r) => r.map((c) => c.trim()))
-    .filter((r) => r.some((c) => c !== '')); // drop blank / separator lines
-}
 
 /**
  * Import a CSV list of applicants against one vacancy. Every valid row lands as a
