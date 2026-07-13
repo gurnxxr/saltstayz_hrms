@@ -7,6 +7,7 @@ export async function listEmployees(req: AuthRequest, res: Response, next: NextF
     res.json(await employeeService.listEmployees({
       search: req.query.search as string,
       status: req.query.status as string,
+      branch: req.query.branch as string,
       page: req.query.page ? Number(req.query.page) : undefined,
       pageSize: req.query.pageSize ? Number(req.query.pageSize) : undefined,
     }));

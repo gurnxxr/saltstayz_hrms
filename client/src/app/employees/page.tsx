@@ -12,7 +12,7 @@ import Breadcrumb from '@/components/ui/Breadcrumb';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import Pagination from '@/components/ui/Pagination';
 import {
-  Search, Users, Filter, Eye, Pencil, ChevronDown, ChevronRight, Upload, X, History, Copy,
+  Search, Users, Filter, Eye, Pencil, ChevronDown, ChevronRight, Upload, X, History, Copy, Building2,
 } from 'lucide-react';
 
 const PAGE_SIZE = 10;
@@ -25,7 +25,15 @@ export default function EmployeeDetailsPage() {
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search, 300);
   const [statusFilter, setStatusFilter] = useState('active');
+  const [branch, setBranch] = useState('');
   const [page, setPage] = useState(1);
+
+  // Properties to populate the "filter by property" dropdown. Employees are tied to a
+  // property by their branch_name (plain text), so the option value is the property name.
+  const { data: properties = [] } = useQuery({
+    queryKey: ['properties-lookup'],
+    queryFn: () => api.get('/admin/properties').then(r => r.data),
+  });
   const [showBulk, setShowBulk] = useState(false);
   const [bulkResult, setBulkResult] = useState<any>(null);
   const bulkFileRef = useRef<HTMLInputElement>(null);
@@ -55,11 +63,12 @@ export default function EmployeeDetailsPage() {
   }
 
   const { data, isLoading, isFetching, isError, refetch } = useQuery({
-    queryKey: ['employees-list', debouncedSearch, statusFilter, page],
+    queryKey: ['employees-list', debouncedSearch, statusFilter, branch, page],
     queryFn: () => {
       const params = new URLSearchParams();
       if (debouncedSearch) params.set('search', debouncedSearch);
       if (statusFilter) params.set('status', statusFilter);
+      if (branch) params.set('branch', branch);
       params.set('page', String(page));
       params.set('pageSize', String(PAGE_SIZE));
       return api.get(`/employees?${params}`).then(r => r.data);
@@ -70,7 +79,7 @@ export default function EmployeeDetailsPage() {
   // Reset to first page whenever the filters change
   useEffect(() => {
     setPage(1);
-  }, [debouncedSearch, statusFilter]);
+  }, [debouncedSearch, statusFilter, branch]);
 
   const pageEmployees = data?.data ?? [];
   const total = data?.total ?? 0;
@@ -105,6 +114,21 @@ export default function EmployeeDetailsPage() {
               placeholder="Search by name, code, or email..."
               className="w-full pl-9 pr-3 py-2.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
             />
+          </div>
+
+          <div className="relative">
+            <Building2 size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-secondary" />
+            <select
+              value={branch}
+              onChange={(e) => setBranch(e.target.value)}
+              className="pl-8 pr-8 py-2.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 appearance-none max-w-[220px]"
+            >
+              <option value="">All Properties</option>
+              {properties.map((p: any) => (
+                <option key={p.id} value={p.name}>{p.name}</option>
+              ))}
+            </select>
+            <ChevronDown size={14} className="absolute right-2 top-1/2 -translate-y-1/2 text-secondary pointer-events-none" />
           </div>
 
           <div className="relative">

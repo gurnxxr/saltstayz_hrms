@@ -22,6 +22,7 @@ function normalizeGender(data: any) {
 export async function listEmployees(filters: {
   search?: string;
   status?: string;
+  branch?: string;
   page?: number;
   pageSize?: number;
 }) {
@@ -37,6 +38,8 @@ export async function listEmployees(filters: {
     }
     if (filters.status === 'active') q.where('e.is_active', true);
     else if (filters.status === 'inactive') q.where('e.is_active', false);
+    // Property filter: branch_name is the plain-text property this employee belongs to.
+    if (filters.branch) q.where('e.branch_name', filters.branch);
     return q;
   };
 
