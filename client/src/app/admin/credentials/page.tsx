@@ -1,17 +1,13 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import Breadcrumb from '@/components/ui/Breadcrumb';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { useDebouncedValue } from '@/hooks/useDebouncedValue';
-import {
-  KeyRound, Copy, Search, RefreshCw, UserPlus, Loader2, Eye, EyeOff,
-  ShieldAlert, X, Check, Info, ClipboardCopy,
-} from 'lucide-react';
+import { Copy, ClipboardCopy, RefreshCw, UserPlus, Loader2, ShieldAlert, X, Check } from 'lucide-react';
 
 const inputCls = 'w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50';
 
@@ -32,9 +28,6 @@ export default function CredentialsPage() {
   const { user } = useAuth();
   const isAdmin = user?.roleName === 'admin';
   const queryClient = useQueryClient();
-  const [search, setSearch] = useState('');
-  const debounced = useDebouncedValue(search, 250);
-  const [reveal, setReveal] = useState(true);
   const [resetFor, setResetFor] = useState<any | null>(null);
   const [creatingFor, setCreatingFor] = useState<number | null>(null);
 
@@ -59,14 +52,6 @@ export default function CredentialsPage() {
     queryClient.invalidateQueries({ queryKey: ['admin-unlinked-employees'] });
   };
 
-  const filtered = useMemo(() => {
-    const q = debounced.trim().toLowerCase();
-    if (!q) return credentials;
-    return credentials.filter((c: any) =>
-      [c.email, c.first_name, c.last_name, c.employee_code, c.role_name]
-        .filter(Boolean).some((v: string) => String(v).toLowerCase().includes(q)));
-  }, [credentials, debounced]);
-
   if (!isAdmin) {
     return (
       <AppShell>
@@ -85,31 +70,16 @@ export default function CredentialsPage() {
       <div className="space-y-6">
         <div>
           <Breadcrumb className="mb-2" items={[{ label: 'Admin', href: '/admin' }, { label: 'User Credentials' }]} />
-          <div className="flex items-start justify-between gap-3 flex-wrap">
-            <div>
-              <h1 className="text-2xl font-bold text-foreground">User Credentials</h1>
-              <p className="text-secondary mt-1">Login email &amp; shareable password for every HRMS user — copy and hand to a new hire.</p>
-            </div>
-            <button
-              onClick={() => setReveal((r) => !r)}
-              className="flex items-center gap-1.5 px-3 py-2 border border-border rounded-lg text-sm hover:bg-muted transition-colors shrink-0"
-            >
-              {reveal ? <EyeOff size={15} /> : <Eye size={15} />} {reveal ? 'Hide passwords' : 'Show passwords'}
-            </button>
-          </div>
+          <h1 className="text-2xl font-bold text-foreground">User Credentials</h1>
+          <p className="text-secondary mt-1">Login email &amp; password for every HRMS user.</p>
         </div>
 
-        <div className="flex items-start gap-2 text-sm text-secondary bg-muted/40 border border-border rounded-lg px-3.5 py-2.5">
-          <Info size={15} className="mt-0.5 shrink-0 text-primary" />
-          <p>Passwords shown are the initial credentials an admin set, kept so you can share them with the hire. The instant a user changes their own password it reads <span className="font-medium text-foreground">Changed by user</span> and can no longer be viewed — reset it here to issue a fresh one.</p>
-        </div>
-
-        {/* Pending logins — new hires transferred to their manager who still need a login */}
+        {/* New hires who still need a login (what the transfer-to-manager reminder points here for). */}
         {unlinked.length > 0 && (
-          <div className="bg-card rounded-xl border border-amber-300 overflow-hidden">
-            <div className="px-5 py-3 border-b border-border bg-amber-50 flex items-center gap-2">
-              <UserPlus size={16} className="text-amber-700" />
-              <h2 className="text-sm font-semibold text-amber-800">{unlinked.length} employee{unlinked.length === 1 ? '' : 's'} need a login</h2>
+          <div className="bg-card rounded-xl border border-border overflow-hidden">
+            <div className="px-5 py-3 border-b border-border flex items-center gap-2">
+              <UserPlus size={16} className="text-primary" />
+              <h2 className="text-sm font-semibold text-foreground">{unlinked.length} employee{unlinked.length === 1 ? '' : 's'} without a login</h2>
             </div>
             <div className="divide-y divide-border">
               {unlinked.map((emp: any) => (
@@ -124,7 +94,7 @@ export default function CredentialsPage() {
                         onClick={() => setCreatingFor(emp.id)}
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-primary text-white rounded-lg text-xs font-medium hover:bg-primary/90 transition-colors shrink-0"
                       >
-                        <KeyRound size={13} /> Set email &amp; password
+                        Set email &amp; password
                       </button>
                     )}
                   </div>
@@ -142,27 +112,14 @@ export default function CredentialsPage() {
           </div>
         )}
 
-        {/* All user logins */}
+        {/* The table: email + password for every user. */}
         <div className="bg-card rounded-xl border border-border overflow-hidden">
-          <div className="p-4 border-b border-border">
-            <div className="relative max-w-sm">
-              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-secondary" />
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search name, email, code or role…"
-                className="w-full pl-9 pr-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-              />
-            </div>
-          </div>
-
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border text-left text-xs text-secondary uppercase tracking-wide">
-                  <th className="px-4 py-3 font-medium">Employee</th>
+                  <th className="px-4 py-3 font-medium">User</th>
                   <th className="px-4 py-3 font-medium">Email</th>
-                  <th className="px-4 py-3 font-medium">Access level</th>
                   <th className="px-4 py-3 font-medium">Password</th>
                   <th className="px-4 py-3 font-medium text-right">Actions</th>
                 </tr>
@@ -170,15 +127,17 @@ export default function CredentialsPage() {
               <tbody className="divide-y divide-border">
                 {isLoading ? (
                   Array.from({ length: 6 }).map((_, i) => (
-                    <tr key={i}><td colSpan={5} className="px-4 py-3"><div className="h-6 bg-muted rounded animate-pulse" /></td></tr>
+                    <tr key={i}><td colSpan={4} className="px-4 py-3"><div className="h-6 bg-muted rounded animate-pulse" /></td></tr>
                   ))
-                ) : filtered.length === 0 ? (
-                  <tr><td colSpan={5} className="px-4 py-10 text-center text-secondary">No users found.</td></tr>
-                ) : filtered.map((c: any) => (
+                ) : credentials.length === 0 ? (
+                  <tr><td colSpan={4} className="px-4 py-10 text-center text-secondary">No users found.</td></tr>
+                ) : credentials.map((c: any) => (
                   <tr key={c.id} className={`hover:bg-muted/30 ${c.is_active ? '' : 'opacity-60'}`}>
                     <td className="px-4 py-3">
                       <p className="font-medium text-foreground">{name(c)}</p>
-                      <p className="text-xs text-secondary">{c.employee_code || 'No employee link'}{c.is_active ? '' : ' · inactive'}</p>
+                      <p className="text-xs text-secondary capitalize">
+                        {c.employee_code ? `${c.employee_code} · ` : ''}{String(c.role_name || '').replace(/_/g, ' ')}{c.is_active ? '' : ' · inactive'}
+                      </p>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1.5">
@@ -188,11 +147,10 @@ export default function CredentialsPage() {
                         </button>
                       </div>
                     </td>
-                    <td className="px-4 py-3"><span className="capitalize text-foreground">{String(c.role_name || '').replace(/_/g, ' ')}</span></td>
                     <td className="px-4 py-3">
                       {c.initial_password ? (
                         <div className="flex items-center gap-1.5">
-                          <span className="font-mono text-xs text-foreground">{reveal ? c.initial_password : '••••••••'}</span>
+                          <span className="font-mono text-xs text-foreground">{c.initial_password}</span>
                           <button onClick={() => copyText(c.initial_password, 'Password')} title="Copy password" className="p-1 rounded text-secondary hover:text-primary hover:bg-primary/5 shrink-0">
                             <Copy size={13} />
                           </button>
@@ -209,7 +167,7 @@ export default function CredentialsPage() {
                             title="Copy email + password to share"
                             className="inline-flex items-center gap-1 px-2.5 py-1.5 border border-border rounded-lg text-xs font-medium hover:bg-muted transition-colors"
                           >
-                            <ClipboardCopy size={13} /> Copy login
+                            <ClipboardCopy size={13} /> Copy
                           </button>
                         )}
                         <button
@@ -248,7 +206,7 @@ function CreateLoginForm({ employee, roles, onCancel, onCreated }: {
     mutationFn: () => api.post('/admin/users', {
       email: email.trim(), password, role_id: Number(roleId), employee_id: employee.id,
     }),
-    onSuccess: () => { toast.success('Login created — copy & share it below'); onCreated(); },
+    onSuccess: () => { toast.success('Login created'); onCreated(); },
     onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to create login'),
   });
 
@@ -265,7 +223,7 @@ function CreateLoginForm({ employee, roles, onCancel, onCreated }: {
         </select>
       </div>
       <div className="sm:col-span-2">
-        <label className="block text-xs text-secondary mb-1">Initial password (shareable)</label>
+        <label className="block text-xs text-secondary mb-1">Password (shareable)</label>
         <div className="flex gap-2">
           <input className={`${inputCls} font-mono`} value={password} onChange={(e) => setPassword(e.target.value)} />
           <button type="button" onClick={() => setPassword(genPassword())} title="Generate a new one"
@@ -295,7 +253,7 @@ function ResetPasswordModal({ user, onClose, onDone }: { user: any; onClose: () 
 
   const resetMutation = useMutation({
     mutationFn: () => api.put(`/admin/users/${user.id}/reset-password`, { password }),
-    onSuccess: () => { toast.success('Password reset — copy & share the new one'); onDone(); },
+    onSuccess: () => { toast.success('Password reset'); onDone(); },
     onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to reset password'),
   });
 
@@ -320,7 +278,7 @@ function ResetPasswordModal({ user, onClose, onDone }: { user: any; onClose: () 
               <RefreshCw size={14} />
             </button>
           </div>
-          <p className="text-[11px] text-amber-700 mt-2">This replaces the user&apos;s current password immediately. Share the new one with them.</p>
+          <p className="text-[11px] text-amber-700 mt-2">This replaces the user&apos;s current password immediately.</p>
         </div>
         <div className="flex justify-end gap-2">
           <button onClick={onClose} className="px-4 py-2 border border-border rounded-lg text-sm hover:bg-muted transition-colors">Cancel</button>
