@@ -190,6 +190,31 @@ export async function getWeeklyRoster(propertyId: number, weekStart: string, wee
 
   const status = total === 0 ? 'empty' : published === total ? 'published' : published === 0 ? 'draft' : 'partial';
 
+  // Approved leave overlapping this week, per employee. A day an employee is on
+  // leave can't be rostered — the client shows a locked "On Leave" tag there
+  // instead of the shift dropdown. One batched query for all property staff;
+  // the covered dates are found with the same string-range test payroll uses.
+  const leavesByEmp = new Map<number, Record<string, string>>();
+  const empIds = employees.map((e: any) => e.id);
+  if (empIds.length) {
+    const leaveRows = await db('leave_requests as lr')
+      .join('leave_types as lt', 'lt.id', 'lr.leave_type_id')
+      .whereIn('lr.employee_id', empIds)
+      .where('lr.status', 'approved')
+      .where('lr.start_date', '<=', weekEnd)
+      .where('lr.end_date', '>=', weekStart)
+      .select('lr.employee_id', 'lr.start_date', 'lr.end_date', 'lt.name as leave_type');
+    const weekDates: string[] = [];
+    for (let d = weekStart; d <= weekEnd; d = addDaysStr(d, 1)) weekDates.push(d);
+    for (const lr of leaveRows) {
+      const s = String(lr.start_date).slice(0, 10);
+      const e = String(lr.end_date).slice(0, 10);
+      const map = leavesByEmp.get(lr.employee_id) ?? {};
+      for (const date of weekDates) if (s <= date && e >= date) map[date] = lr.leave_type;
+      leavesByEmp.set(lr.employee_id, map);
+    }
+  }
+
   // Department filter options for the roster. The official catalog (departments
   // table) unioned with any department names this property's active staff actually
   // carry — dept_name is free text, so some staff sit in departments the catalog
@@ -213,7 +238,7 @@ export async function getWeeklyRoster(propertyId: number, weekStart: string, wee
     departments,
     published_at: publishedAt,
     published_by_name: publishedByName,
-    employees: employees.map((e: any) => ({ ...e, cells: cellsByEmp.get(e.id) ?? {} })),
+    employees: employees.map((e: any) => ({ ...e, cells: cellsByEmp.get(e.id) ?? {}, leaves: leavesByEmp.get(e.id) ?? {} })),
   };
 }
 
@@ -311,6 +336,27 @@ export async function saveRosterCells(propertyId: number, cells: RosterCellInput
   const sorted = cells.map((c) => c.date).sort();
   await assertWeekEditable(sorted[0], sorted[sorted.length - 1]);
   await assertNotPublished(propertyId, sorted[0], sorted[sorted.length - 1]);
+
+  // A day an employee has approved leave for can't be rostered into a shift or a
+  // weekly-off (the grid locks those cells; this is the server-side safety net).
+  // Clearing a cell is still allowed, so a stale assignment can be removed.
+  const guardCells = cells.filter((c) => c.day_type === 'working' || c.day_type === 'weekly_off');
+  if (guardCells.length) {
+    const gEmpIds = [...new Set(guardCells.map((c) => Number(c.employee_id)))];
+    const gDates = guardCells.map((c) => c.date).sort();
+    const leaveRows = await db('leave_requests')
+      .whereIn('employee_id', gEmpIds)
+      .where('status', 'approved')
+      .where('start_date', '<=', gDates[gDates.length - 1])
+      .where('end_date', '>=', gDates[0])
+      .select('employee_id', 'start_date', 'end_date');
+    const onLeave = (empId: number, date: string) =>
+      leaveRows.some((l) => l.employee_id === empId
+        && String(l.start_date).slice(0, 10) <= date && String(l.end_date).slice(0, 10) >= date);
+    for (const c of guardCells) {
+      if (onLeave(Number(c.employee_id), c.date)) throw new ValidationError('Cannot schedule a shift on an approved leave day.');
+    }
+  }
 
   let saved = 0, cleared = 0;
   await db.transaction(async (trx) => {

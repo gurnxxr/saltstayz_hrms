@@ -357,6 +357,22 @@ export default function RosterPage() {
                         </label>
                       </td>
                       {days.map((date) => {
+                        // Approved leave locks the day — no shift may be assigned. Show a
+                        // static tag with the leave name instead of the shift dropdown.
+                        const onLeave: string | undefined = emp.leaves?.[date];
+                        if (onLeave) {
+                          return (
+                            <td key={date} className="px-1.5 py-1.5 align-middle bg-amber-50">
+                              <span
+                                title={`On approved leave · ${onLeave}`}
+                                className="flex flex-col items-center justify-center rounded-md border border-amber-200 px-1.5 py-1 leading-tight text-amber-700"
+                              >
+                                <span className="text-[11px] font-medium">On Leave</span>
+                                <span className="max-w-[6rem] truncate text-[10px] text-amber-600/80">{onLeave}</span>
+                              </span>
+                            </td>
+                          );
+                        }
                         const cell = emp.cells?.[date];
                         const val = cellValue(emp.id, date, cell);
                         const edited = !!edits[`${emp.id}|${date}`];
