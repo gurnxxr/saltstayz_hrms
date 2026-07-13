@@ -85,7 +85,9 @@ export async function changePassword(userId: number, currentPassword: string, ne
   if (!isMatch) throw new UnauthorizedError('Current password is incorrect');
 
   const password_hash = await bcrypt.hash(newPassword, 12);
-  await db('users').where('id', userId).update({ password_hash, updated_at: db.fn.now() });
+  // The user has taken over their own password — the admin no longer knows it, so
+  // drop the shareable plaintext (Admin → User Credentials then shows "changed by user").
+  await db('users').where('id', userId).update({ password_hash, initial_password: null, updated_at: db.fn.now() });
   return { message: 'Password changed successfully' };
 }
 

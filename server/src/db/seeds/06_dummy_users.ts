@@ -36,6 +36,7 @@ export async function seed(knex: Knex): Promise<void> {
     await knex('users').insert({
       email,
       password_hash: passwordHash,
+      initial_password: '1234', // shareable seed credential for Admin → User Credentials
       role_id: roleId[role] ?? roleId['employee'],
       employee_id: emp.id,
     });

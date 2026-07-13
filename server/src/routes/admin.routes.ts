@@ -59,6 +59,8 @@ router.delete('/employment-statuses/:id', authorize('admin', 'delete'), orgCtrl.
 // ─── User Management (admin only) ───
 
 router.get('/users', authorize('admin.users', 'read'), userCtrl.listUsers);
+// Login email + shareable password for every user (Admin → User Credentials).
+router.get('/credentials', authorize('admin.users', 'read'), userCtrl.listCredentials);
 router.get('/users/roles', authorize('admin.users', 'read'), userCtrl.getRoles);
 router.get('/users/access-matrix', authorize('admin.users', 'read'), userCtrl.getAccessMatrix);
 router.get('/users/unlinked-employees', authorize('admin.users', 'read'), userCtrl.getUnlinkedEmployees);

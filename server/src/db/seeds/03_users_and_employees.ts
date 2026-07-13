@@ -120,13 +120,15 @@ export async function seed(knex: Knex): Promise<void> {
   const empMap: Record<string, number> = {};
   employees.forEach((e: any) => { empMap[e.email] = e.id; });
 
+  // initial_password mirrors the known seed password so Admin → User Credentials is
+  // populated out of the box; it's cleared once a user changes their own password.
   await knex('users').insert([
-    { email: 'gurnoor@saltstayz.com', password_hash: passwordHash, role_id: roleMap['admin'], employee_id: empMap['gurnoor@saltstayz.com'] },
-    { email: 'chro@saltstayz.com', password_hash: passwordHash, role_id: roleMap['chro'], employee_id: empMap['chro@saltstayz.com'] },
-    { email: 'hr@saltstayz.com', password_hash: passwordHash, role_id: roleMap['hr'], employee_id: empMap['hr@saltstayz.com'] },
-    { email: 'fo@saltstayz.com', password_hash: passwordHash, role_id: roleMap['property_manager'], employee_id: empMap['fo@saltstayz.com'] },
-    { email: 'employee@saltstayz.com', password_hash: passwordHash, role_id: roleMap['employee'], employee_id: empMap['employee@saltstayz.com'] },
-    { email: 'finance@saltstayz.com', password_hash: passwordHash, role_id: roleMap['finance'], employee_id: empMap['finance@saltstayz.com'] },
-    { email: 'clusterhr@saltstayz.com', password_hash: passwordHash, role_id: roleMap['cluster_hr'], employee_id: empMap['clusterhr@saltstayz.com'] },
+    { email: 'gurnoor@saltstayz.com', password_hash: passwordHash, initial_password: '1234', role_id: roleMap['admin'], employee_id: empMap['gurnoor@saltstayz.com'] },
+    { email: 'chro@saltstayz.com', password_hash: passwordHash, initial_password: '1234', role_id: roleMap['chro'], employee_id: empMap['chro@saltstayz.com'] },
+    { email: 'hr@saltstayz.com', password_hash: passwordHash, initial_password: '1234', role_id: roleMap['hr'], employee_id: empMap['hr@saltstayz.com'] },
+    { email: 'fo@saltstayz.com', password_hash: passwordHash, initial_password: '1234', role_id: roleMap['property_manager'], employee_id: empMap['fo@saltstayz.com'] },
+    { email: 'employee@saltstayz.com', password_hash: passwordHash, initial_password: '1234', role_id: roleMap['employee'], employee_id: empMap['employee@saltstayz.com'] },
+    { email: 'finance@saltstayz.com', password_hash: passwordHash, initial_password: '1234', role_id: roleMap['finance'], employee_id: empMap['finance@saltstayz.com'] },
+    { email: 'clusterhr@saltstayz.com', password_hash: passwordHash, initial_password: '1234', role_id: roleMap['cluster_hr'], employee_id: empMap['clusterhr@saltstayz.com'] },
   ]);
 }

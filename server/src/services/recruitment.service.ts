@@ -9,7 +9,7 @@ import { listSalaryComponents } from './salaryComponent.service';
 import { assertCtcMeetsMinimumWage } from './statutory.service';
 import { getVacancySanctionContext, getRoleBand } from './manpower.service';
 import * as checklist from './checklist.service';
-import { notifyEmployee } from './notification.service';
+import { notifyEmployee, notifyRole } from './notification.service';
 import { nextJobId } from '../utils/jobId';
 import { parseCsv } from '../utils/csv';
 
@@ -600,6 +600,18 @@ export async function transferToManager(id: number, userId: number, notes?: stri
       title: 'New team member joined',
       message: `${employee.first_name} ${employee.last_name} has joined and now reports to you.`,
       link: `/employees/${employee.id}`,
+    });
+  }
+
+  // The hire is now a full employee but has no HRMS login yet — remind admins to
+  // create their email + password on Admin → User Credentials, ready to share.
+  const hasLogin = await db('users').where({ employee_id: employee.id, is_active: true }).first();
+  if (!hasLogin) {
+    await notifyRole('admin', {
+      type: 'login_setup_required',
+      title: 'New hire needs an HRMS login',
+      message: `${employee.first_name} ${employee.last_name} has completed onboarding. Set their login email & password to share.`,
+      link: '/admin/credentials',
     });
   }
   return getCandidate(id);

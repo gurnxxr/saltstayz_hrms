@@ -93,6 +93,9 @@ export async function createUser(data: {
     password_hash,
     role_id: data.role_id,
     employee_id: data.employee_id || null,
+    // Keep the admin-set plaintext so it can be copied & shared with the new hire
+    // (Admin → User Credentials). Cleared once the user changes their own password.
+    initial_password: data.password,
   });
 
   return getUser(id);
@@ -173,8 +176,37 @@ export async function resetPassword(id: number, newPassword: string) {
   if (!user) throw new NotFoundError('User');
 
   const password_hash = await bcrypt.hash(newPassword, 12);
-  await db('users').where('id', id).update({ password_hash, updated_at: db.fn.now() });
+  await db('users').where('id', id).update({ password_hash, initial_password: newPassword, updated_at: db.fn.now() });
   return { message: 'Password reset successfully' };
+}
+
+/**
+ * Every login with its shareable onboarding credential, for Admin → User Credentials.
+ * `initial_password` is the plaintext the admin last set (or the known seed password);
+ * it is null once the user changes their own password — the UI shows that as
+ * "changed by user". Admin-only: the plaintext is returned by no other endpoint.
+ */
+export async function listCredentials() {
+  return db('users')
+    .join('roles', 'roles.id', 'users.role_id')
+    .leftJoin('employees', 'employees.id', 'users.employee_id')
+    .select(
+      'users.id',
+      'users.email',
+      'users.is_active',
+      'users.initial_password',
+      'users.updated_at',
+      'roles.name as role_name',
+      'employees.id as employee_id',
+      'employees.first_name',
+      'employees.last_name',
+      'employees.employee_code',
+    )
+    .orderBy([
+      { column: 'users.is_active', order: 'desc' },
+      { column: 'employees.first_name' },
+      { column: 'users.email' },
+    ]);
 }
 
 export async function deleteUser(id: number) {

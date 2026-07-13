@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { Building2, ClipboardList, ShieldCheck, ScrollText, DatabaseBackup, Play, Wallet, SlidersHorizontal, AlertTriangle, Users, Landmark, CalendarDays, Coins, FileText } from 'lucide-react';
+import { Building2, ClipboardList, ShieldCheck, ScrollText, DatabaseBackup, Play, Wallet, SlidersHorizontal, AlertTriangle, Users, Landmark, CalendarDays, Coins, FileText, KeyRound } from 'lucide-react';
 
 const adminModules = [
   { label: 'Employee Details', href: '/employees', icon: Users, description: 'Full employee directory — profiles, contacts & org details', roles: ['admin', 'chro', 'hr', 'hr_manager', 'property_manager'] },
@@ -14,6 +14,7 @@ const adminModules = [
   { label: 'Property Configuration', href: '/admin/property-config', icon: SlidersHorizontal, description: 'Per-property workers, salaries, spend, budget & status', roles: ['admin'] },
   { label: 'Budget Control', href: '/admin/budget-control', icon: Wallet, description: 'Set sanctioned budget & headcount per property', roles: ['admin'] },
   { label: 'Module Access', href: '/admin/access', icon: ShieldCheck, description: 'Grant or revoke module access per employee', roles: ['admin'] },
+  { label: 'User Credentials', href: '/admin/credentials', icon: KeyRound, description: 'Login email & password for every user — copy & share for new hires', roles: ['admin'] },
   { label: 'Payroll Runs', href: '/admin/payroll-runs', icon: Play, description: 'Run and lock monthly payroll', roles: ['admin'] },
   { label: 'Salary Slips', href: '/admin/salary-slips', icon: FileText, description: 'Generate & download any employee’s salary slip', roles: ['admin'] },
   { label: 'Audit Log', href: '/admin/audit-log', icon: ScrollText, description: 'Who changed what, when — full activity trail', roles: ['admin'] },

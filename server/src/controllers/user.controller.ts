@@ -40,6 +40,10 @@ export async function getUnlinkedEmployees(req: AuthRequest, res: Response, next
   try { res.json(await userService.getUnlinkedEmployees()); } catch (err) { next(err); }
 }
 
+export async function listCredentials(_req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await userService.listCredentials()); } catch (err) { next(err); }
+}
+
 export async function getAccessMatrix(_req: AuthRequest, res: Response, next: NextFunction) {
   try { res.json(await userService.getAccessMatrix()); } catch (err) { next(err); }
 }
