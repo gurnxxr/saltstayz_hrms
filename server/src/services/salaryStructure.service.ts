@@ -4,7 +4,7 @@ import {
   computeFromStructure, type StructureLineInput, type PayslipBreakdown, type LineCalcType,
   type AttendanceContext,
 } from './payslip.calc';
-import { getStatutoryRates, getStatutoryBonus, getEmployeeState, getMinimumWageFor, resolveStatutoryState } from './statutory.service';
+import { getStatutoryRates, getStatutoryBonus, getEmployeeState, getMinimumWageFor, resolveStatutoryState, assertCtcMeetsMinimumWage } from './statutory.service';
 import { listSalaryComponents } from './salaryComponent.service';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -630,6 +630,14 @@ export async function saveEmployeeStructure(
   // property state (payslips resolve rates from the property, never this field).
   const city = await getEmployeeState(employeeId);
   const payment_basis = data.payment_basis === 'hourly' ? 'hourly' : 'monthly';
+
+  // Statutory floor: a monthly salary's Total CTC can't be below the state's
+  // minimum wage. (Hourly rates aren't a monthly figure, so they're exempt —
+  // same carve-out the bonus/min-wage flag uses.)
+  if (payment_basis === 'monthly' && lines.length) {
+    const preview = await previewStructure({ lines, base, city });
+    await assertCtcMeetsMinimumWage(city, preview.ctc);
+  }
 
   await db.transaction(async (trx) => {
     let structure = await trx('salary_structures').where('employee_id', employeeId).first();

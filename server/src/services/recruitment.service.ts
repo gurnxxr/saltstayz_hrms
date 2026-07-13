@@ -6,6 +6,7 @@ import {
   editorLines, previewStructure, saveEmployeeStructure,
 } from './salaryStructure.service';
 import { listSalaryComponents } from './salaryComponent.service';
+import { assertCtcMeetsMinimumWage } from './statutory.service';
 import { getVacancySanctionContext, getRoleBand } from './manpower.service';
 import * as checklist from './checklist.service';
 import { notifyEmployee } from './notification.service';
@@ -763,6 +764,8 @@ async function buildOfferLetter(
         'Lower the base salary or raise the band in Admin → Budget Control.',
       );
     }
+    // Statutory floor: the offered monthly CTC can't be below the property state's minimum wage.
+    await assertCtcMeetsMinimumWage(c.property_state, ob.breakdown.ctc);
   }
 
   const pct = ob.structGross > 0 ? Math.round((ob.gross / ob.structGross - 1) * 10000) / 100 : 0;

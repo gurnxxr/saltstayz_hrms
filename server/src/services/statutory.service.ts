@@ -197,6 +197,25 @@ export async function getMinimumWageFor(state: string): Promise<number | null> {
   return valid.length ? Math.min(...valid) : null;
 }
 
+const inrAmount = (n: number) => Math.round(Number(n) || 0).toLocaleString('en-IN');
+
+/**
+ * Statutory floor: a monthly Total CTC may not be below the minimum wage of the
+ * employee's state (employee → property → state). No-op when the state has no
+ * minimum wage configured. `stateOrCity` is normalised first (property values are
+ * already states; legacy city values are mapped). Throws ValidationError (→ 400).
+ */
+export async function assertCtcMeetsMinimumWage(stateOrCity: string | null | undefined, monthlyCtc: number) {
+  const state = resolveStatutoryState(stateOrCity ?? null);
+  const minWage = await getMinimumWageFor(state);
+  if (minWage != null && Number.isFinite(monthlyCtc) && monthlyCtc < minWage) {
+    throw new ValidationError(
+      `Offered monthly CTC ₹${inrAmount(monthlyCtc)} is below the minimum wage of ₹${inrAmount(minWage)} per month for ${state}. ` +
+      'Raise the salary, or update the state minimum wage in Statutory Components → Minimum Wage.',
+    );
+  }
+}
+
 /** Statutory bonus setting for the payslip engine (Payment of Bonus Act line). */
 export async function getStatutoryBonus(): Promise<{ enabled: boolean; frequency: string; monthlyPercent: number }> {
   const row = await db(TABLE).where('component', 'bonus').whereNull('state').first();
