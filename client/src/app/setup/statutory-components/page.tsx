@@ -8,6 +8,7 @@ import Breadcrumb from '@/components/ui/Breadcrumb';
 import LoadError from '@/components/ui/LoadError';
 import api from '@/lib/api';
 import { formatINR } from '@/lib/utils';
+import { INDIAN_STATES } from '@/lib/constants';
 import { Landmark, IndianRupee, Ban, Info, Save, Loader2, Plus, X, PiggyBank, AlertTriangle } from 'lucide-react';
 
 const TABS = [
@@ -436,6 +437,7 @@ function PtStateCard({ row }: { row: any }) {
 const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 function LwfTab({ lwf }: { lwf: any[] }) {
+  const existing = new Set<string>(lwf.map((r) => r.state));
   return (
     <div className="space-y-4 max-w-2xl">
       <div>
@@ -444,6 +446,108 @@ function LwfTab({ lwf }: { lwf: any[] }) {
       </div>
       <div className="space-y-3">
         {lwf.map((row) => <LwfStateCard key={row.state} row={row} />)}
+      </div>
+      <AddLwfState existingStates={existing} />
+    </div>
+  );
+}
+
+// Introduce a state that isn't in the list yet, with its LWF rules. Mirrors the
+// LwfStateCard edit form; the backend upserts a row for any valid Indian state,
+// which then shows up as its own card on the next load.
+function AddLwfState({ existingStates }: { existingStates: Set<string> }) {
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [state, setState] = useState('');
+  const blank = { mode: 'percent', employeePct: '', employeeMaxAmount: '', employerMultiplier: '', employeeAmount: '', employerAmount: '', deductionMonths: [] as number[] };
+  const [cfg, setCfg] = useState<any>({ ...blank });
+
+  const reset = () => { setOpen(false); setState(''); setCfg({ ...blank }); };
+  const options = INDIAN_STATES.filter((s) => !existingStates.has(s));
+
+  const save = useMutation({
+    mutationFn: () => api.put(`/statutory/lwf/${encodeURIComponent(state)}`, {
+      enabled: true,
+      config: {
+        mode: cfg.mode === 'fixed' ? 'fixed' : 'percent',
+        employeePct: Number(cfg.employeePct) || 0,
+        employeeMaxAmount: Number(cfg.employeeMaxAmount) || 0,
+        employerMultiplier: Number(cfg.employerMultiplier) || 1,
+        employeeAmount: Number(cfg.employeeAmount) || 0,
+        employerAmount: Number(cfg.employerAmount) || 0,
+        deductionMonths: Array.isArray(cfg.deductionMonths) ? cfg.deductionMonths : [],
+      },
+    }),
+    onSuccess: () => { toast.success(`LWF added for ${state}`); qc.invalidateQueries({ queryKey: ['statutory'] }); reset(); },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to add state'),
+  });
+
+  const draftMonths: number[] = Array.isArray(cfg.deductionMonths) ? cfg.deductionMonths : [];
+  const toggleMonth = (m: number) => setCfg((p: any) => {
+    const cur: number[] = Array.isArray(p.deductionMonths) ? p.deductionMonths : [];
+    return { ...p, deductionMonths: cur.includes(m) ? cur.filter((x) => x !== m) : [...cur, m].sort((a, b) => a - b) };
+  });
+
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)} className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline">
+        <Plus size={15} /> Add a state
+      </button>
+    );
+  }
+
+  const mode = cfg.mode === 'fixed' ? 'fixed' : 'percent';
+  return (
+    <div className="bg-card rounded-xl border border-dashed border-border p-5 space-y-3 text-sm">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold text-foreground">Add a state</h3>
+        <button onClick={reset} className="p-1 text-secondary hover:text-foreground" aria-label="Close"><X size={16} /></button>
+      </div>
+
+      <label className="block text-xs text-secondary">State
+        <select value={state} onChange={(e) => setState(e.target.value)} className={`${inputCls} mt-1`}>
+          <option value="">Select a state…</option>
+          {options.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+      </label>
+
+      <div className="flex gap-4">
+        {(['percent', 'fixed'] as const).map((m) => (
+          <label key={m} className="flex items-center gap-1.5 cursor-pointer">
+            <input type="radio" className="accent-primary" checked={mode === m} onChange={() => setCfg((p: any) => ({ ...p, mode: m }))} />
+            <span className="capitalize">{m === 'percent' ? '% of gross (capped)' : 'Fixed amounts'}</span>
+          </label>
+        ))}
+      </div>
+      {mode === 'percent' ? (
+        <div className="grid grid-cols-3 gap-2">
+          <label className="text-xs text-secondary">Employee %<input type="number" step="any" value={cfg.employeePct} onChange={(e) => setCfg((p: any) => ({ ...p, employeePct: e.target.value }))} className="mt-1 w-full px-2 py-1.5 border border-border rounded-lg bg-background text-sm" /></label>
+          <label className="text-xs text-secondary">Max ₹<input type="number" step="any" value={cfg.employeeMaxAmount} onChange={(e) => setCfg((p: any) => ({ ...p, employeeMaxAmount: e.target.value }))} className="mt-1 w-full px-2 py-1.5 border border-border rounded-lg bg-background text-sm" /></label>
+          <label className="text-xs text-secondary">Employer ×<input type="number" step="any" value={cfg.employerMultiplier} onChange={(e) => setCfg((p: any) => ({ ...p, employerMultiplier: e.target.value }))} className="mt-1 w-full px-2 py-1.5 border border-border rounded-lg bg-background text-sm" /></label>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-2">
+          <label className="text-xs text-secondary">Employee ₹<input type="number" step="any" value={cfg.employeeAmount} onChange={(e) => setCfg((p: any) => ({ ...p, employeeAmount: e.target.value }))} className="mt-1 w-full px-2 py-1.5 border border-border rounded-lg bg-background text-sm" /></label>
+          <label className="text-xs text-secondary">Employer ₹<input type="number" step="any" value={cfg.employerAmount} onChange={(e) => setCfg((p: any) => ({ ...p, employerAmount: e.target.value }))} className="mt-1 w-full px-2 py-1.5 border border-border rounded-lg bg-background text-sm" /></label>
+        </div>
+      )}
+      <div>
+        <p className="text-xs text-secondary mb-1.5">Deduction months <span className="text-secondary/70">(none selected = every month)</span></p>
+        <div className="flex flex-wrap gap-1.5">
+          {MONTH_LABELS.map((label, i) => (
+            <button key={label} onClick={() => toggleMonth(i + 1)}
+              className={`px-2 py-1 rounded-lg text-xs font-medium border transition-colors ${draftMonths.includes(i + 1) ? 'bg-primary text-white border-primary' : 'border-border text-secondary hover:bg-muted'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="flex justify-end gap-2 pt-1">
+        <button onClick={reset} className="px-3 py-1.5 border border-border rounded-lg text-xs font-medium hover:bg-muted">Cancel</button>
+        <button onClick={() => save.mutate()} disabled={save.isPending || !state}
+          className="px-3 py-1.5 bg-primary text-white rounded-lg text-xs font-medium hover:bg-primary/90 disabled:opacity-50">
+          {save.isPending ? 'Adding…' : 'Add & Enable'}
+        </button>
       </div>
     </div>
   );
