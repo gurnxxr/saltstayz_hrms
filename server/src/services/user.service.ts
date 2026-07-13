@@ -181,32 +181,82 @@ export async function resetPassword(id: number, newPassword: string) {
 }
 
 /**
- * Every login with its shareable onboarding credential, for Admin → User Credentials.
- * `initial_password` is the plaintext the admin last set (or the known seed password);
- * it is null once the user changes their own password — the UI shows that as
- * "changed by user". Admin-only: the plaintext is returned by no other endpoint.
+ * Every active EMPLOYEE with their login and shareable password, for Admin → User
+ * Credentials. Employees without a login appear too (email/password null) so the admin
+ * can spot who still needs one. `initial_password` is the plaintext the admin last set
+ * (or the known seed password); it is null once the user changes their own password —
+ * the UI shows that as "changed by user". Admin-only: the plaintext is returned nowhere else.
  */
 export async function listCredentials() {
-  return db('users')
-    .join('roles', 'roles.id', 'users.role_id')
-    .leftJoin('employees', 'employees.id', 'users.employee_id')
+  const rows = await db('employees as e')
+    .leftJoin('users as u', 'u.employee_id', 'e.id')
+    .leftJoin('roles as r', 'r.id', 'u.role_id')
+    .where('e.is_active', true)
     .select(
-      'users.id',
-      'users.email',
-      'users.is_active',
-      'users.initial_password',
-      'users.updated_at',
-      'roles.name as role_name',
-      'employees.id as employee_id',
-      'employees.first_name',
-      'employees.last_name',
-      'employees.employee_code',
+      'e.id as employee_id', 'e.first_name', 'e.last_name', 'e.employee_code', 'e.email as employee_email',
+      'u.id as user_id', 'u.email as login_email', 'u.initial_password', 'u.is_active as user_active',
+      'r.name as role_name',
     )
-    .orderBy([
-      { column: 'users.is_active', order: 'desc' },
-      { column: 'employees.first_name' },
-      { column: 'users.email' },
-    ]);
+    .orderBy('e.first_name');
+
+  return rows.map((row: any) => ({
+    employee_id: row.employee_id,
+    user_id: row.user_id ?? null,
+    first_name: row.first_name,
+    last_name: row.last_name,
+    employee_code: row.employee_code,
+    email: row.login_email || row.employee_email || null,
+    role_name: row.role_name ?? null,
+    initial_password: row.initial_password ?? null,
+    has_login: !!row.user_id,
+    is_active: !!row.user_active,
+  }));
+}
+
+/** A unique, sensible login email for an employee who has none yet. */
+async function deriveUniqueEmail(emp: any): Promise<string> {
+  const clean = `${emp.first_name || ''}.${emp.last_name || ''}`.toLowerCase().replace(/[^a-z.]/g, '').replace(/^\.+|\.+$/g, '');
+  const code = String(emp.employee_code || emp.id).toLowerCase().replace(/[^a-z0-9]/g, '');
+  const base = clean || `emp${code}`;
+  const candidates = [
+    emp.email && String(emp.email).includes('@') ? String(emp.email).trim().toLowerCase() : null,
+    `${base}@saltstayz.com`,
+    `${base}.${code}@saltstayz.com`,
+    `emp${emp.id}@saltstayz.com`,
+  ].filter(Boolean) as string[];
+  for (const c of candidates) {
+    if (!(await db('users').where('email', c).first())) return c;
+  }
+  return `emp${emp.id}.${Date.now()}@saltstayz.com`;
+}
+
+/**
+ * Fill every gap on the credentials tab with the shared demo password 1234: create a
+ * login (role "employee") for any active employee who has none, and set 1234 as the
+ * shareable password for any login whose password isn't known (never set, or the user
+ * changed it). Logins that already have a known password are left untouched. Idempotent.
+ */
+export async function fillMissingCredentials() {
+  const employees = await db('employees').where('is_active', true)
+    .select('id', 'first_name', 'last_name', 'employee_code', 'email');
+  const role = await db('roles').where('name', 'employee').first();
+  if (!role) throw new ValidationError('The "employee" role is missing.');
+  // One hash, reused — everyone here shares the demo password 1234.
+  const password_hash = await bcrypt.hash('1234', 12);
+
+  let created = 0, updated = 0;
+  for (const emp of employees) {
+    const user = await db('users').where('employee_id', emp.id).first();
+    if (!user) {
+      const email = await deriveUniqueEmail(emp);
+      await db('users').insert({ email, password_hash, initial_password: '1234', role_id: role.id, employee_id: emp.id });
+      created += 1;
+    } else if (!user.initial_password) {
+      await db('users').where('id', user.id).update({ password_hash, initial_password: '1234', updated_at: db.fn.now() });
+      updated += 1;
+    }
+  }
+  return { created, updated, total: employees.length };
 }
 
 export async function deleteUser(id: number) {

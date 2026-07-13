@@ -61,6 +61,8 @@ router.delete('/employment-statuses/:id', authorize('admin', 'delete'), orgCtrl.
 router.get('/users', authorize('admin.users', 'read'), userCtrl.listUsers);
 // Login email + shareable password for every user (Admin → User Credentials).
 router.get('/credentials', authorize('admin.users', 'read'), userCtrl.listCredentials);
+// Backfill 1234 for employees with no login / no known password.
+router.post('/credentials/fill-missing', authorize('admin.users', 'update'), userCtrl.fillMissingCredentials);
 router.get('/users/roles', authorize('admin.users', 'read'), userCtrl.getRoles);
 router.get('/users/access-matrix', authorize('admin.users', 'read'), userCtrl.getAccessMatrix);
 router.get('/users/unlinked-employees', authorize('admin.users', 'read'), userCtrl.getUnlinkedEmployees);
