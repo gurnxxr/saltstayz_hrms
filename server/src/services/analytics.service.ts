@@ -86,13 +86,22 @@ export async function getWorkforceOverview() {
     .groupBy('branch_name')
     .orderBy('count', 'desc');
 
-  const byDepartment = await db('employees')
-    .where('is_active', true)
-    .whereNotNull('dept_name')
-    .select('dept_name as department')
-    .count('* as count')
-    .groupBy('dept_name')
-    .orderBy('count', 'desc');
+  // Headcount by department, seeded with the whole Departments catalog so the
+  // chart tracks the catalog: a newly created department shows immediately (at 0)
+  // and a deleted one drops off. Unioned with any off-catalog dept_name employees
+  // still carry, so no headcount is lost — same catalog ∪ staff pattern the roster
+  // department filter uses (shift.service getWeeklyRoster).
+  const [deptCatalog, deptCounts] = await Promise.all([
+    db('departments').whereNotNull('name').pluck('name'),
+    db('employees').where('is_active', true).whereNotNull('dept_name')
+      .select('dept_name as department').count('* as count').groupBy('dept_name'),
+  ]);
+  const deptMap = new Map<string, number>();
+  for (const name of deptCatalog) { const n = String(name ?? '').trim(); if (n && !deptMap.has(n)) deptMap.set(n, 0); }
+  for (const r of deptCounts as any[]) { const n = String(r.department ?? '').trim(); if (n) deptMap.set(n, (deptMap.get(n) ?? 0) + Number(r.count)); }
+  const byDepartment = [...deptMap.entries()]
+    .map(([department, count]) => ({ department, count }))
+    .sort((a, b) => b.count - a.count || a.department.localeCompare(b.department));
 
   const propertyCount = await db('employees')
     .where('is_active', true)
