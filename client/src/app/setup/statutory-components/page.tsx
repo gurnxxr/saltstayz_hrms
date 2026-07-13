@@ -676,6 +676,9 @@ function BonusTab({ bonus, states, minimumWages }: { bonus: any; states: string[
   const [cfg, setCfg] = useState(bonus.config);
   const [addState, setAddState] = useState<string | null>(null);
   const [wageInput, setWageInput] = useState('');
+  const [addingNewState, setAddingNewState] = useState(false);
+  const [newState, setNewState] = useState('');
+  const [newWage, setNewWage] = useState('');
   useEffect(() => setCfg(bonus.config), [bonus.config]);
   const set = (k: string, v: any) => setCfg((c: any) => ({ ...c, [k]: v }));
 
@@ -685,10 +688,16 @@ function BonusTab({ bonus, states, minimumWages }: { bonus: any; states: string[
     onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to save'),
   });
 
-  const addWage = useMutation({
-    mutationFn: (state: string) => api.post('/statutory/minimum-wage', { state, monthly_wage: Number(wageInput) }),
-    onSuccess: () => { toast.success('Minimum wage added'); setAddState(null); setWageInput(''); qc.invalidateQueries({ queryKey: ['statutory'] }); },
-    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed'),
+  // Upsert a per-state minimum wage. Used for both the inline per-state add/edit
+  // and the "Add a state" form below (any Indian state, not just operating ones).
+  const saveWage = useMutation({
+    mutationFn: (v: { state: string; wage: string }) => api.post('/statutory/minimum-wage', { state: v.state, monthly_wage: Number(v.wage) }),
+    onSuccess: () => {
+      toast.success('Minimum wage saved');
+      setAddState(null); setWageInput(''); setAddingNewState(false); setNewState(''); setNewWage('');
+      qc.invalidateQueries({ queryKey: ['statutory'] });
+    },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to save'),
   });
 
   if (!bonus.enabled && !editing) {
@@ -738,13 +747,16 @@ function BonusTab({ bonus, states, minimumWages }: { bonus: any; states: string[
               return (
                 <div key={s} className="border border-border rounded-lg p-4">
                   <h4 className="text-sm font-semibold text-foreground mb-2">{s}</h4>
-                  {w ? (
-                    <p className="text-sm text-foreground">Minimum wage: <span className="font-medium">{formatINR(w.monthly_wage)}</span> / month</p>
-                  ) : addState === s ? (
+                  {addState === s ? (
                     <div className="flex items-center gap-2">
                       <input type="number" autoFocus value={wageInput} onChange={(e) => setWageInput(e.target.value)} placeholder="Monthly minimum wage" className={`${inputCls} max-w-xs`} />
-                      <button onClick={() => addWage.mutate(s)} disabled={addWage.isPending || !wageInput} className="px-3 py-2 bg-primary text-white rounded-lg text-sm font-medium disabled:opacity-50">Add</button>
+                      <button onClick={() => saveWage.mutate({ state: s, wage: wageInput })} disabled={saveWage.isPending || !wageInput} className="px-3 py-2 bg-primary text-white rounded-lg text-sm font-medium disabled:opacity-50">{w ? 'Save' : 'Add'}</button>
                       <button onClick={() => { setAddState(null); setWageInput(''); }} className="p-2 text-secondary hover:text-foreground"><X size={16} /></button>
+                    </div>
+                  ) : w ? (
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm text-foreground">Minimum wage: <span className="font-medium">{formatINR(w.monthly_wage)}</span> / month</p>
+                      <button onClick={() => { setAddState(s); setWageInput(String(w.monthly_wage)); }} className="text-sm text-primary hover:underline whitespace-nowrap">Edit</button>
                     </div>
                   ) : (
                     <div className="flex items-center justify-between gap-3">
@@ -755,6 +767,38 @@ function BonusTab({ bonus, states, minimumWages }: { bonus: any; states: string[
                 </div>
               );
             })}
+          </div>
+
+          {/* Configure a state that isn't listed above (any Indian state). */}
+          <div className="pt-3">
+            {!addingNewState ? (
+              <button onClick={() => setAddingNewState(true)} className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline">
+                <Plus size={15} /> Add a state
+              </button>
+            ) : (
+              <div className="border border-dashed border-border rounded-lg p-4 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <h4 className="text-sm font-semibold text-foreground">Add a state</h4>
+                  <button onClick={() => { setAddingNewState(false); setNewState(''); setNewWage(''); }} className="p-1 text-secondary hover:text-foreground" aria-label="Close"><X size={16} /></button>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <label className="text-xs text-secondary">State
+                    <select value={newState} onChange={(e) => setNewState(e.target.value)} className={`${inputCls} mt-1`}>
+                      <option value="">Select a state…</option>
+                      {INDIAN_STATES.filter((st) => !states.includes(st)).map((st) => <option key={st} value={st}>{st}</option>)}
+                    </select>
+                  </label>
+                  <label className="text-xs text-secondary">Monthly minimum wage ₹
+                    <input type="number" value={newWage} onChange={(e) => setNewWage(e.target.value)} placeholder="e.g. 12000" className={`${inputCls} mt-1`} />
+                  </label>
+                </div>
+                <div className="flex justify-end">
+                  <button onClick={() => saveWage.mutate({ state: newState, wage: newWage })} disabled={saveWage.isPending || !newState || !newWage} className="px-3 py-2 bg-primary text-white rounded-lg text-sm font-medium disabled:opacity-50">
+                    {saveWage.isPending ? 'Adding…' : 'Add'}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
