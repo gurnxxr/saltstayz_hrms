@@ -557,6 +557,23 @@ export async function moveCandidateStage(id: number, toStage: string, userId: nu
 }
 
 /**
+ * The candidate's checklists for the detail page. When the candidate is in a checklist
+ * phase (Document Collection / Pre-joining / Joining Day), the phase's instance is
+ * ensured to exist and reconciled to its template first, so the list always matches the
+ * current Checklist Template — completed items and uploaded documents are preserved.
+ */
+export async function getCandidateChecklists(candidateId: number, userId?: number | null) {
+  const candidate = await db('candidates').where('id', candidateId).first();
+  if (!candidate) throw new NotFoundError('Candidate');
+  const key = STAGE_CHECKLIST[candidate.stage];
+  if (key) {
+    const instance = await checklist.ensureInstance(key, { candidate_id: candidateId }, userId ?? null);
+    await checklist.reconcileInstanceToTemplate(instance.id);
+  }
+  return checklist.listForSubject({ candidate_id: candidateId });
+}
+
+/**
  * Step 11. Activates the employee created at acceptance and hands them to their
  * reporting manager. The joining-day checklist gate applies (see `transition`).
  */

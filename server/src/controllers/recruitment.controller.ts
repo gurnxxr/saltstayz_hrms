@@ -1,7 +1,6 @@
 import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../types';
 import * as recruitmentService from '../services/recruitment.service';
-import * as checklistService from '../services/checklist.service';
 import { generateJdPdf } from '../services/jdPdf.service';
 import { generateOfferLetterPdf } from '../services/offerLetterPdf.service';
 import { getCtcRange } from '../services/salaryStructure.service';
@@ -240,7 +239,7 @@ export function getStages(_req: AuthRequest, res: Response, next: NextFunction) 
 
 export async function getCandidateChecklists(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    res.json(await checklistService.listForSubject({ candidate_id: Number(req.params.id) }));
+    res.json(await recruitmentService.getCandidateChecklists(Number(req.params.id), req.user?.userId ?? null));
   } catch (err) {
     next(err);
   }

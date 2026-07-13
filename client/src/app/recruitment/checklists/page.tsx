@@ -35,7 +35,7 @@ export default function ChecklistTemplatesPage() {
 
         <div className="flex items-start gap-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3.5 py-2.5">
           <Info size={15} className="mt-0.5 shrink-0" />
-          <p>Editing a template only affects checklists created <span className="font-medium">afterwards</span>. Hires already in the joining queue keep the checklist they were given.</p>
+          <p>Edits apply live to anyone <span className="font-medium">currently in this phase</span> — a candidate&apos;s Document Collection list always matches this template. Items already ticked or with an uploaded document are kept, and checklists a hire has already moved past stay as they were.</p>
         </div>
 
         {isError ? (
@@ -176,7 +176,7 @@ function TemplateCard({ template, canEdit }: { template: any; canEdit: boolean }
         title="Delete checklist item?"
         danger
         confirmLabel="Delete"
-        message={confirmDelete ? <>This removes <span className="font-medium text-foreground">{confirmDelete.label}</span> from the <span className="font-medium text-foreground">{template.name}</span> template. Checklists already created keep it.</> : undefined}
+        message={confirmDelete ? <>This removes <span className="font-medium text-foreground">{confirmDelete.label}</span> from the <span className="font-medium text-foreground">{template.name}</span> template, and from anyone currently in this phase who hasn&apos;t actioned it yet. Copies already ticked or with an uploaded document are kept.</> : undefined}
         loading={deleteMutation.isPending}
         onConfirm={() => confirmDelete && deleteMutation.mutate(confirmDelete.id)}
         onCancel={() => setConfirmDelete(null)}

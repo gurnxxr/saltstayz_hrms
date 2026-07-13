@@ -31,6 +31,23 @@ function sanitizeName(name: string) {
   return String(name || 'file').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120);
 }
 
+/**
+ * Candidate checklist instances that should track their template live: the candidate
+ * is still sitting in the phase this template gates (`checklist_templates.phase` equals
+ * `candidates.stage`). A candidate who has already advanced past the phase — or an
+ * onboarding employee instance — is NOT open, so their finished checklist stays frozen
+ * as a record. Template edits propagate only to these open instances.
+ */
+async function openCandidateInstanceIds(templateId: number, cx: Knex | Knex.Transaction): Promise<number[]> {
+  return cx('checklist_instances as ci')
+    .join('checklist_templates as ct', 'ct.id', 'ci.template_id')
+    .join('candidates as c', 'c.id', 'ci.candidate_id')
+    .where('ci.template_id', templateId)
+    .whereNotNull('ci.candidate_id')
+    .whereRaw('c.stage = ct.phase')
+    .pluck('ci.id');
+}
+
 // ─── Templates (admin) ───
 
 export async function listTemplates() {
@@ -49,12 +66,26 @@ export async function addTemplateItem(templateId: number, data: { label: string;
   if (!template) throw new NotFoundError('Checklist template');
   const label = String(data.label || '').trim();
   if (!label) throw new ValidationError('Item label is required');
-  const max = await db('checklist_template_items').where('template_id', templateId).max({ m: 'sort_order' }).first();
-  const [id] = await db('checklist_template_items').insert({
-    template_id: templateId, label, category: data.category || 'General',
-    sort_order: Number((max as any)?.m || 0) + 1, is_active: true,
+  const category = data.category || 'General';
+
+  return db.transaction(async (trx) => {
+    const max = await trx('checklist_template_items').where('template_id', templateId).max({ m: 'sort_order' }).first();
+    const sort = Number((max as any)?.m || 0) + 1;
+    const [id] = await trx('checklist_template_items').insert({
+      template_id: templateId, label, category, sort_order: sort, is_active: true,
+    });
+    // Live-sync: hand this new item to every candidate still in this checklist's phase,
+    // so an in-flight document-collection list stays matched to the template. A newly
+    // added, unticked item re-opens the phase — the stage gate re-blocks advancement.
+    const openIds = await openCandidateInstanceIds(templateId, trx);
+    if (openIds.length) {
+      await trx('checklist_instance_items').insert(openIds.map((instance_id) => ({
+        instance_id, template_item_id: id, label, category, sort_order: sort,
+      })));
+      for (const instanceId of openIds) await recomputeStatus(instanceId, trx);
+    }
+    return trx('checklist_template_items').where('id', id).first();
   });
-  return db('checklist_template_items').where('id', id).first();
 }
 
 export async function updateTemplateItem(itemId: number, data: { label?: string; category?: string; is_active?: boolean }) {
@@ -68,20 +99,59 @@ export async function updateTemplateItem(itemId: number, data: { label?: string;
   }
   if ('category' in data) patch.category = data.category || 'General';
   if ('is_active' in data) patch.is_active = !!data.is_active;
-  await db('checklist_template_items').where('id', itemId).update({ ...patch, updated_at: db.fn.now() });
-  return db('checklist_template_items').where('id', itemId).first();
+
+  return db.transaction(async (trx) => {
+    await trx('checklist_template_items').where('id', itemId).update({ ...patch, updated_at: trx.fn.now() });
+
+    const openIds = await openCandidateInstanceIds(item.template_id, trx);
+    if (openIds.length) {
+      // A rename / re-category flows through to the matching items in still-open
+      // checklists so they keep matching the template.
+      const relabel: any = {};
+      if ('label' in patch) relabel.label = patch.label;
+      if ('category' in patch) relabel.category = patch.category;
+      if (Object.keys(relabel).length) {
+        relabel.updated_at = trx.fn.now();
+        await trx('checklist_instance_items')
+          .whereIn('instance_id', openIds).where('template_item_id', itemId).update(relabel);
+      }
+      // Deactivating an item removes it from open checklists where it hasn't been
+      // actioned yet (mirrors deleteTemplateItem); actioned copies are kept.
+      if (patch.is_active === false) {
+        await trx('checklist_instance_items')
+          .whereIn('instance_id', openIds).where('template_item_id', itemId)
+          .where('is_completed', false).whereNull('document_url').del();
+      }
+      for (const instanceId of openIds) await recomputeStatus(instanceId, trx);
+    }
+    return trx('checklist_template_items').where('id', itemId).first();
+  });
 }
 
 /**
- * Deleting a template item only removes it from FUTURE instances. Items already
- * handed to a candidate keep their row (template_item_id goes null via SET NULL),
- * so a checklist someone already worked can't lose entries under them.
+ * Deleting a template item drops it from still-open checklists too, so an in-flight
+ * document-collection list keeps matching the template — but only where the candidate
+ * hasn't actioned it yet. A copy that's already ticked or has an uploaded document is
+ * kept (its `template_item_id` goes null via SET NULL when the template row is deleted),
+ * so nothing a hire already worked is lost. Completed / advanced-past checklists are
+ * frozen and untouched.
  */
 export async function deleteTemplateItem(itemId: number) {
   const item = await db('checklist_template_items').where('id', itemId).first();
   if (!item) throw new NotFoundError('Checklist template item');
-  await db('checklist_template_items').where('id', itemId).del();
-  return { id: itemId };
+  return db.transaction(async (trx) => {
+    const openIds = await openCandidateInstanceIds(item.template_id, trx);
+    // Remove the unworked copies BEFORE deleting the template row — after the delete,
+    // SET NULL detaches the surviving (worked) copies and we can no longer match them.
+    if (openIds.length) {
+      await trx('checklist_instance_items')
+        .whereIn('instance_id', openIds).where('template_item_id', itemId)
+        .where('is_completed', false).whereNull('document_url').del();
+    }
+    await trx('checklist_template_items').where('id', itemId).del();
+    if (openIds.length) for (const instanceId of openIds) await recomputeStatus(instanceId, trx);
+    return { id: itemId };
+  });
 }
 
 // ─── Instances ───
@@ -110,6 +180,44 @@ export async function ensureInstance(
     })));
   }
   return cx('checklist_instances').where('id', instanceId).first();
+}
+
+/**
+ * Bring one open instance in line with its template's current ACTIVE items: append any
+ * template item it's missing and refresh the label/category of the ones it has. This is
+ * the read-path catch-up for the eager propagation in the template mutations above — it
+ * covers instances created before that propagation existed, so opening a candidate always
+ * shows a document list matching the template. It never deletes (removals are handled at
+ * edit time) and never touches custom (template_item_id null) items. Idempotent.
+ */
+export async function reconcileInstanceToTemplate(instanceId: number, trx?: Knex.Transaction) {
+  const cx = trx || db;
+  const instance = await cx('checklist_instances').where('id', instanceId).first();
+  if (!instance) return;
+  const templateItems = await cx('checklist_template_items')
+    .where({ template_id: instance.template_id, is_active: true }).orderBy('sort_order');
+  const instItems = await cx('checklist_instance_items').where('instance_id', instanceId);
+  const linked = new Map<number, any>(
+    instItems.filter((i: any) => i.template_item_id != null).map((i: any) => [i.template_item_id, i]),
+  );
+
+  let changed = false;
+  const missing = templateItems.filter((ti: any) => !linked.has(ti.id));
+  if (missing.length) {
+    await cx('checklist_instance_items').insert(missing.map((ti: any) => ({
+      instance_id: instanceId, template_item_id: ti.id, label: ti.label, category: ti.category, sort_order: ti.sort_order,
+    })));
+    changed = true;
+  }
+  for (const ti of templateItems) {
+    const existing = linked.get(ti.id);
+    if (existing && (existing.label !== ti.label || existing.category !== ti.category)) {
+      await cx('checklist_instance_items').where('id', existing.id)
+        .update({ label: ti.label, category: ti.category, updated_at: cx.fn.now() });
+      changed = true;
+    }
+  }
+  if (changed) await recomputeStatus(instanceId, trx);
 }
 
 export async function getInstance(instanceId: number) {
