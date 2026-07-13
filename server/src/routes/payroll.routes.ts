@@ -10,13 +10,15 @@ router.use(authenticate);
 // restricted to payroll staff. Employees use /me/* for their own data.
 const PAYROLL_STAFF = authorizeRoles('admin', 'chro', 'hr', 'finance');
 
-// ─── Self-service (any role with payroll:read) ───
-router.get('/me/setup', authorize('payroll', 'read'), ctrl.getMySetup);
-router.get('/me/structure', authorize('payroll', 'read'), ctrl.getMyStructure);
-router.get('/me/payslip', authorize('payroll', 'read'), ctrl.computeMyPayslip);
-router.get('/me/payslip/pdf', authorize('payroll', 'read'), ctrl.downloadMyPayslip);
-router.get('/me/history', authorize('payroll', 'read'), ctrl.listMyHistory);
-router.get('/me/history/:id/pdf', authorize('payroll', 'read'), ctrl.downloadMyHistoryPdf);
+// ─── Self-service: the signed-in user's OWN salary (the "Salary" tab) ───
+// Gated by the `salary` module so Admin → Module Access can grant/revoke a person's
+// access to their own salary independently of the Payroll config module.
+router.get('/me/setup', authorize('salary', 'read'), ctrl.getMySetup);
+router.get('/me/structure', authorize('salary', 'read'), ctrl.getMyStructure);
+router.get('/me/payslip', authorize('salary', 'read'), ctrl.computeMyPayslip);
+router.get('/me/payslip/pdf', authorize('salary', 'read'), ctrl.downloadMyPayslip);
+router.get('/me/history', authorize('salary', 'read'), ctrl.listMyHistory);
+router.get('/me/history/:id/pdf', authorize('salary', 'read'), ctrl.downloadMyHistoryPdf);
 
 // ─── Structure assignments (employee → structure + base) — Admin only ───
 const ADMIN_ONLY = authorizeRoles('admin');

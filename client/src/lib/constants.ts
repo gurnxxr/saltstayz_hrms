@@ -6,6 +6,10 @@ export const NAVIGATION: NavItem[] = [
     href: '/dashboard',
     icon: 'LayoutDashboard',
     roles: ['admin', 'chro', 'hr', 'hr_manager', 'property_manager', 'employee', 'finance'],
+    // Role-matched: staff see the admin dashboard (dashboard_admin), employees the
+    // self-service one (dashboard_employee). Admin → Module Access toggles each.
+    module: 'dashboard_admin',
+    moduleForEmployee: 'dashboard_employee',
   },
   {
     label: 'Analytics',
@@ -33,10 +37,12 @@ export const NAVIGATION: NavItem[] = [
     href: '/leaves/my',
     icon: 'CalendarDays',
     // Everyone gets the merged Leaves page (apply / approvals / holidays);
-    // admin/CHRO/HR also get Encashment + Control Panel.
+    // admin/CHRO/HR also get Encashment + Control Panel. `leave` gates the whole
+    // group (deny hides it); the admin sub-tools below stay role-restricted.
     roles: ['admin', 'chro', 'hr', 'property_manager', 'employee'],
+    module: 'leave',
     children: [
-      { label: 'Leaves', href: '/leaves/my', icon: 'CalendarCheck', roles: ['admin', 'chro', 'hr', 'property_manager', 'employee'] },
+      { label: 'Leaves', href: '/leaves/my', icon: 'CalendarCheck', roles: ['admin', 'chro', 'hr', 'property_manager', 'employee'], module: 'leave' },
       { label: 'Balances', href: '/leaves/balances', icon: 'Scale', roles: ['admin', 'chro', 'hr'] },
       { label: 'Encashment', href: '/leaves/encashment', icon: 'Coins', roles: ['admin', 'chro', 'hr'] },
       { label: 'Control Panel', href: '/leaves/control-panel', icon: 'SlidersHorizontal', roles: ['admin', 'chro', 'hr'] },
@@ -49,6 +55,7 @@ export const NAVIGATION: NavItem[] = [
     href: '/shifts/my',
     icon: 'CalendarClock',
     roles: ['admin', 'chro', 'hr', 'hr_manager', 'cluster_hr', 'property_manager', 'employee', 'finance'],
+    module: 'my_shifts',
   },
   {
     label: 'Recruitment',
@@ -67,13 +74,15 @@ export const NAVIGATION: NavItem[] = [
     label: 'Employee Lifecycle',
     href: '/offboarding',
     icon: 'UserCog',
+    // One module gates the whole group (Offboarding + Promotion/Transfer/Exit/Assets).
     roles: ['admin', 'chro', 'hr', 'hr_manager'],
+    module: 'employee_lifecycle',
     children: [
-      { label: 'Offboarding', href: '/offboarding', icon: 'UserMinus', roles: ['admin', 'chro', 'hr', 'hr_manager'], module: 'onboarding' },
-      { label: 'Employee Promotion', href: '/employee-lifecycle/promotion', icon: 'TrendingUp', roles: ['admin', 'chro', 'hr', 'hr_manager'] },
-      { label: 'Employee Transfer', href: '/employee-lifecycle/transfer', icon: 'ArrowRightLeft', roles: ['admin', 'chro', 'hr', 'hr_manager'] },
-      { label: 'Exit Interview', href: '/employee-lifecycle/exit-interview', icon: 'ClipboardList', roles: ['admin', 'chro', 'hr', 'hr_manager'] },
-      { label: 'Company Assets', href: '/employee-lifecycle/assets', icon: 'Package', roles: ['admin', 'chro', 'hr', 'hr_manager'] },
+      { label: 'Offboarding', href: '/offboarding', icon: 'UserMinus', roles: ['admin', 'chro', 'hr', 'hr_manager'], module: 'employee_lifecycle' },
+      { label: 'Employee Promotion', href: '/employee-lifecycle/promotion', icon: 'TrendingUp', roles: ['admin', 'chro', 'hr', 'hr_manager'], module: 'employee_lifecycle' },
+      { label: 'Employee Transfer', href: '/employee-lifecycle/transfer', icon: 'ArrowRightLeft', roles: ['admin', 'chro', 'hr', 'hr_manager'], module: 'employee_lifecycle' },
+      { label: 'Exit Interview', href: '/employee-lifecycle/exit-interview', icon: 'ClipboardList', roles: ['admin', 'chro', 'hr', 'hr_manager'], module: 'employee_lifecycle' },
+      { label: 'Company Assets', href: '/employee-lifecycle/assets', icon: 'Package', roles: ['admin', 'chro', 'hr', 'hr_manager'], module: 'employee_lifecycle' },
     ],
   },
   {
@@ -83,18 +92,19 @@ export const NAVIGATION: NavItem[] = [
     href: '/salary',
     icon: 'FileText',
     roles: ['admin', 'chro', 'hr', 'finance', 'employee'],
-    module: 'payroll',
+    module: 'salary',
   },
   {
     label: 'Payroll',
     href: '/setup/salary-structure',
     icon: 'Wallet',
     roles: ['admin', 'finance'],
+    module: 'payroll',
     children: [
-      { label: 'Salary Structures', href: '/setup/salary-structure', icon: 'IndianRupee', roles: ['admin'] },
-      { label: 'Pay Schedule', href: '/setup/pay-schedule', icon: 'CalendarClock', roles: ['admin', 'finance'] },
-      { label: 'Statutory Components', href: '/setup/statutory-components', icon: 'Landmark', roles: ['admin', 'finance'] },
-      { label: 'Salary Components', href: '/setup/salary-components', icon: 'Coins', roles: ['admin', 'finance'] },
+      { label: 'Salary Structures', href: '/setup/salary-structure', icon: 'IndianRupee', roles: ['admin'], module: 'payroll' },
+      { label: 'Pay Schedule', href: '/setup/pay-schedule', icon: 'CalendarClock', roles: ['admin', 'finance'], module: 'payroll' },
+      { label: 'Statutory Components', href: '/setup/statutory-components', icon: 'Landmark', roles: ['admin', 'finance'], module: 'payroll' },
+      { label: 'Salary Components', href: '/setup/salary-components', icon: 'Coins', roles: ['admin', 'finance'], module: 'payroll' },
     ],
   },
   {
@@ -102,13 +112,14 @@ export const NAVIGATION: NavItem[] = [
     href: '/shifts/roster',
     icon: 'Clock',
     roles: ['admin', 'chro', 'hr', 'property_manager'],
+    module: 'shifts',
     children: [
       // Roster: build + publish the weekly plan. Property managers roster their own site.
-      { label: 'Roster', href: '/shifts/roster', icon: 'CalendarDays', roles: ['admin', 'chro', 'hr', 'property_manager'] },
+      { label: 'Roster', href: '/shifts/roster', icon: 'CalendarDays', roles: ['admin', 'chro', 'hr', 'property_manager'], module: 'shifts' },
       // Approve/decline the shift-change requests employees raise from "My Shifts".
-      { label: 'Change Requests', href: '/shifts/change-requests', icon: 'ClipboardList', roles: ['admin', 'chro', 'hr', 'property_manager'] },
+      { label: 'Change Requests', href: '/shifts/change-requests', icon: 'ClipboardList', roles: ['admin', 'chro', 'hr', 'property_manager'], module: 'shifts' },
       // Shift-type definitions (the old "Shift Setup", admin/CHRO/HR).
-      { label: 'Shift Types', href: '/shift-setup/type', icon: 'Tag', roles: ['admin', 'chro', 'hr'] },
+      { label: 'Shift Types', href: '/shift-setup/type', icon: 'Tag', roles: ['admin', 'chro', 'hr'], module: 'shifts' },
     ],
   },
   {

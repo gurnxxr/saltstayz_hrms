@@ -174,5 +174,12 @@ export interface NavItem {
   icon: string;
   roles: RoleName[];
   module?: string;
+  /**
+   * Role-matched gating: the module used to gate this item when the signed-in
+   * user's role is 'employee' (falls back to `module` for every other role). Lets
+   * a single Dashboard item be gated by `dashboard_employee` for employees and
+   * `dashboard_admin` for staff.
+   */
+  moduleForEmployee?: string;
   children?: NavItem[];
 }

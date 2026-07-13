@@ -1,10 +1,14 @@
 import db from '../config/database';
 import { NotFoundError, ValidationError } from '../utils/errors';
 
-// Modules whose access can be configured per employee (mirrors the sidebar modules).
+// The final list of modules whose access an admin can grant/revoke per employee
+// (mirrors the sidebar). Keys that gate API routes (analytics, attendance, leave,
+// recruitment, payroll, salary, shifts, admin) enforce at both nav and API; the
+// nav-only keys (dashboard_admin, dashboard_employee, employee_lifecycle, my_shifts)
+// gate sidebar visibility. See migration 077 / seed 01 for the role defaults.
 export const ACCESS_MODULES = [
-  'employees', 'attendance', 'leave', 'shifts', 'onboarding',
-  'recruitment', 'analytics', 'reports', 'payroll', 'finance', 'admin',
+  'dashboard_admin', 'dashboard_employee', 'analytics', 'attendance', 'leave',
+  'recruitment', 'employee_lifecycle', 'payroll', 'salary', 'shifts', 'my_shifts', 'admin',
 ] as const;
 
 /** Raw per-employee overrides as granted/denied module-name lists. */

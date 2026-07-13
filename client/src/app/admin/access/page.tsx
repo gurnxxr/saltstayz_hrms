@@ -11,15 +11,17 @@ import Breadcrumb from '@/components/ui/Breadcrumb';
 import { Search, User, ShieldCheck, RotateCcw, AlertTriangle } from 'lucide-react';
 
 const MODULE_LABELS: Record<string, string> = {
-  employees: 'Employee Details',
-  attendance: 'Leave & Attendance',
-  shifts: 'Shifts',
-  onboarding: 'Onboarding',
-  recruitment: 'Recruitment',
+  dashboard_admin: 'Dashboard (Admin)',
+  dashboard_employee: 'Dashboard (Employee)',
   analytics: 'Analytics',
-  reports: 'Reports',
+  attendance: 'Attendance',
+  leave: 'Leaves',
+  recruitment: 'Recruitment',
+  employee_lifecycle: 'Employee Lifecycle',
   payroll: 'Payroll',
-  finance: 'Financial Details',
+  salary: 'Salary',
+  shifts: 'Shift Management',
+  my_shifts: 'My Shift',
   admin: 'Admin',
 };
 

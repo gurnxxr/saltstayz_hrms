@@ -43,6 +43,20 @@ export async function seed(knex: Knex): Promise<void> {
   // Org-only analytics access (attrition, headcount, org-wide attendance).
   permRows.push({ module: 'analytics', action: 'read_org' });
 
+  // Task 23 — the final Module Access list adds nav / self-service module keys that
+  // aren't route-gating modules above. Each needs a `read` permission granted to the
+  // roles that see it by default, so Admin → Module Access shows the right role
+  // default (and the deny toggle works). Mirrored idempotently in migration
+  // 077_module_access_final.ts so a migrated DB matches a freshly seeded one.
+  const NAV_MODULE_ROLES: Record<string, string[]> = {
+    dashboard_admin: ['admin', 'chro', 'hr', 'hr_manager', 'property_manager', 'finance'],
+    dashboard_employee: ['employee'],
+    employee_lifecycle: ['admin', 'chro', 'hr', 'hr_manager'],
+    salary: ['admin', 'chro', 'hr', 'finance', 'employee'],
+    my_shifts: ['admin', 'chro', 'hr', 'hr_manager', 'cluster_hr', 'property_manager', 'employee', 'finance'],
+  };
+  Object.keys(NAV_MODULE_ROLES).forEach(mod => permRows.push({ module: mod, action: 'read' }));
+
   const perms = await knex('permissions').insert(permRows).returning('*');
   const permMap: Record<string, number> = {};
   perms.forEach((p: any) => { permMap[`${p.module}:${p.action}`] = p.id; });
@@ -110,6 +124,11 @@ export async function seed(knex: Knex): Promise<void> {
 
   // Org-level analytics — admin/CHRO/HR/HR-manager only (employees keep analytics:read for /me).
   ['admin', 'chro', 'hr', 'hr_manager'].forEach(role => grant(role, 'analytics', ['read_org']));
+
+  // Nav / self-service module read-access (final Module Access list, Task 23).
+  for (const [mod, rolesForMod] of Object.entries(NAV_MODULE_ROLES)) {
+    rolesForMod.forEach(role => grant(role, mod, ['read']));
+  }
 
   await knex('role_permissions').insert(rpRows);
 }

@@ -35,9 +35,11 @@ export default function Sidebar({ collapsed, onToggle }: { collapsed: boolean; o
   const denied = overrides?.denied ?? [];
   const visible = (item: NavItem) => {
     const roleAllowed = item.roles.includes(user.roleName as RoleName);
-    if (!item.module) return roleAllowed;
-    if (denied.includes(item.module)) return false;
-    return roleAllowed || granted.includes(item.module);
+    // Role-matched items (Dashboard) gate on a different module for employees.
+    const mod = item.moduleForEmployee && user.roleName === 'employee' ? item.moduleForEmployee : item.module;
+    if (!mod) return roleAllowed;
+    if (denied.includes(mod)) return false;
+    return roleAllowed || granted.includes(mod);
   };
   // Active-highlight by longest-prefix match: when several nav hrefs match the
   // current path (e.g. Calendar "/attendance" and Regularisation
