@@ -42,6 +42,34 @@ export async function login(email: string, password: string) {
   return { token, user: payload };
 }
 
+/**
+ * Live user identity straight from the DB. Email and role can change after the
+ * JWT was minted at login, so /auth/me reads them fresh rather than trusting the
+ * token's login-time snapshot. Returns null if the account is gone/deactivated.
+ */
+export async function getCurrentUser(userId: number): Promise<JwtPayload | null> {
+  const row = await db('users')
+    .join('roles', 'roles.id', 'users.role_id')
+    .where('users.id', userId)
+    .where('users.is_active', true)
+    .select(
+      'users.id as userId',
+      'users.email',
+      'users.employee_id',
+      'roles.id as roleId',
+      'roles.name as roleName'
+    )
+    .first();
+  if (!row) return null;
+  return {
+    userId: row.userId,
+    email: row.email,
+    roleId: row.roleId,
+    roleName: row.roleName,
+    employeeId: row.employee_id,
+  };
+}
+
 export async function changePassword(userId: number, currentPassword: string, newPassword: string) {
   const user = await db('users').where('id', userId).first();
   if (!user) throw new NotFoundError('User');

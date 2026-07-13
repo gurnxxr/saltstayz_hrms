@@ -42,10 +42,15 @@ export async function me(req: AuthRequest, res: Response, next: NextFunction) {
       return res.status(401).json({ error: 'Not authenticated' });
     }
 
-    const permissions = await authService.getUserPermissions(req.user.roleId, req.user.employeeId);
-    const overrides = req.user.employeeId ? await getEmployeeOverrides(req.user.employeeId) : { granted: [], denied: [] };
+    // Read identity live from the DB so a changed email/role surfaces without a
+    // re-login (the JWT only carries a login-time snapshot). Fall back to the
+    // token if the row is gone (e.g. just deactivated).
+    const user = (await authService.getCurrentUser(req.user.userId)) ?? req.user;
 
-    res.json({ user: req.user, permissions, overrides });
+    const permissions = await authService.getUserPermissions(user.roleId, user.employeeId);
+    const overrides = user.employeeId ? await getEmployeeOverrides(user.employeeId) : { granted: [], denied: [] };
+
+    res.json({ user, permissions, overrides });
   } catch (err) {
     next(err);
   }
