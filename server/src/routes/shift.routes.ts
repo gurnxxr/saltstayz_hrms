@@ -11,8 +11,11 @@ const SHIFT_STAFF = authorizeRoles('admin', 'chro', 'hr', 'property_manager');
 // Shift-type definitions (Shift Setup) are managed by admin/CHRO/HR only.
 const SHIFT_TYPE_MANAGE = authorizeRoles('admin', 'chro', 'hr');
 
-// Self-service — the employee's current shift (shown on their dashboard).
+// Self-service — the employee's own shifts + change requests (any logged-in user).
 router.get('/me', ctrl.getMyShift);
+router.get('/me/roster', ctrl.getMyRoster);
+router.get('/me/change-requests', ctrl.listMyChangeRequests);
+router.post('/me/change-requests', ctrl.createMyChangeRequest);
 
 // Shift types — read for all, management restricted to admin/CHRO/HR (Shift Setup)
 router.get('/types', authorize('shifts', 'read'), ctrl.listShiftTypes);
@@ -31,5 +34,10 @@ router.post('/roster/save', authorize('shifts', 'create'), SHIFT_STAFF, ctrl.sav
 router.post('/roster/copy-previous', authorize('shifts', 'create'), SHIFT_STAFF, ctrl.copyPreviousWeek);
 router.post('/roster/publish', authorize('shifts', 'create'), SHIFT_STAFF, ctrl.publishRoster);
 router.post('/roster/unpublish', authorize('shifts', 'create'), SHIFT_STAFF, ctrl.unpublishRoster);
+
+// Shift-change requests — employees apply via /me/change-requests; managers/HR
+// review here. Listing needs shifts:read; deciding writes the roster (shifts:create).
+router.get('/change-requests', authorize('shifts', 'read'), SHIFT_STAFF, ctrl.listChangeRequests);
+router.post('/change-requests/:id/decision', authorize('shifts', 'create'), SHIFT_STAFF, ctrl.decideChangeRequest);
 
 export default router;

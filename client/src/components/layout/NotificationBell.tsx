@@ -19,6 +19,9 @@ const ICONS: Record<string, React.ElementType> = {
   offer_letter: FileText,
   offboarding_initiated: UserMinus,
   promotion: TrendingUp,
+  shift_change_requested: CalendarClock,
+  shift_change_approved: CalendarCheck,
+  shift_change_rejected: CalendarX,
   info: Info,
 };
 
@@ -31,6 +34,9 @@ const ICON_TINT: Record<string, string> = {
   offer_letter: 'text-indigo-600 bg-indigo-100',
   offboarding_initiated: 'text-red-600 bg-red-100',
   promotion: 'text-emerald-600 bg-emerald-100',
+  shift_change_requested: 'text-amber-600 bg-amber-100',
+  shift_change_approved: 'text-green-600 bg-green-100',
+  shift_change_rejected: 'text-red-600 bg-red-100',
   info: 'text-secondary bg-muted',
 };
 

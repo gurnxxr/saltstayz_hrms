@@ -1,6 +1,7 @@
 import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../types';
 import * as shiftService from '../services/shift.service';
+import * as changeReq from '../services/shiftChangeRequest.service';
 
 // ─── Employee self-service: my current shift (shown on the dashboard) ───
 
@@ -95,6 +96,54 @@ export async function unpublishRoster(req: AuthRequest, res: Response, next: Nex
   try {
     const { property_id, week_start, week_end } = req.body;
     res.json(await shiftService.unpublishRoster(Number(property_id), week_start, week_end));
+  } catch (err) { next(err); }
+}
+
+// ─── Employee self-service: my roster + shift-change requests ───
+
+export async function getMyRoster(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    if (!req.user!.employeeId) return res.status(400).json({ error: 'No employee profile linked to this account' });
+    const [upcoming, shift_types] = await Promise.all([
+      changeReq.getMyUpcomingShifts(req.user!.employeeId),
+      changeReq.listActiveShiftTypes(),
+    ]);
+    res.json({ upcoming, shift_types });
+  } catch (err) { next(err); }
+}
+
+export async function listMyChangeRequests(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    if (!req.user!.employeeId) return res.json([]);
+    res.json(await changeReq.listMyChangeRequests(req.user!.employeeId));
+  } catch (err) { next(err); }
+}
+
+export async function createMyChangeRequest(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    if (!req.user!.employeeId) return res.status(400).json({ error: 'No employee profile linked to this account' });
+    res.status(201).json(await changeReq.createChangeRequest(req.user!.employeeId, req.body));
+  } catch (err) { next(err); }
+}
+
+// ─── Manager / HR: review shift-change requests ───
+
+export async function listChangeRequests(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const status = typeof req.query.status === 'string' ? req.query.status : 'pending';
+    res.json(await changeReq.listChangeRequestsForApprover(req.user!.employeeId, req.user!.roleName, status));
+  } catch (err) { next(err); }
+}
+
+export async function decideChangeRequest(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const approve = req.body.approve === true || req.body.decision === 'approve';
+    res.json(await changeReq.decideChangeRequest(
+      Number(req.params.id),
+      { employeeId: req.user!.employeeId, userId: req.user!.userId, roleName: req.user!.roleName },
+      approve,
+      req.body.note,
+    ));
   } catch (err) { next(err); }
 }
 

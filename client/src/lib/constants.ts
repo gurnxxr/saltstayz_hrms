@@ -43,6 +43,14 @@ export const NAVIGATION: NavItem[] = [
     ],
   },
   {
+    // Self-service: the signed-in user's own shifts + shift-change requests. Managing
+    // the roster / approving requests lives under Shift Management (staff only).
+    label: 'My Shifts',
+    href: '/shifts/my',
+    icon: 'CalendarClock',
+    roles: ['admin', 'chro', 'hr', 'hr_manager', 'cluster_hr', 'property_manager', 'employee', 'finance'],
+  },
+  {
     label: 'Recruitment',
     href: '/recruitment',
     icon: 'Briefcase',
@@ -97,6 +105,8 @@ export const NAVIGATION: NavItem[] = [
     children: [
       // Roster: build + publish the weekly plan. Property managers roster their own site.
       { label: 'Roster', href: '/shifts/roster', icon: 'CalendarDays', roles: ['admin', 'chro', 'hr', 'property_manager'] },
+      // Approve/decline the shift-change requests employees raise from "My Shifts".
+      { label: 'Change Requests', href: '/shifts/change-requests', icon: 'ClipboardList', roles: ['admin', 'chro', 'hr', 'property_manager'] },
       // Shift-type definitions (the old "Shift Setup", admin/CHRO/HR).
       { label: 'Shift Types', href: '/shift-setup/type', icon: 'Tag', roles: ['admin', 'chro', 'hr'] },
     ],
