@@ -80,7 +80,19 @@ export default function SalaryComponentsPage() {
   const [confirmDelete, setConfirmDelete] = useState<any | null>(null);
 
   const { data, isLoading, isError, refetch } = useQuery({ queryKey: ['salary-components'], queryFn: () => api.get('/salary-components').then((r) => r.data) });
-  const invalidate = () => qc.invalidateQueries({ queryKey: ['salary-components'] });
+  // Refresh this page AND every Salary Structure view that reads the component
+  // catalog — chiefly the editor's "Add component" picker (`['structure-components']`),
+  // plus the CTC register, per-employee editor and the Salary Details table whose
+  // columns are the active components. Each is a distinct query key, so editing a
+  // component here must invalidate them or they serve a 5-minute-stale list.
+  const invalidate = () => {
+    for (const key of [
+      ['salary-components'], ['structure-components'], ['ctc-register'],
+      ['employee-salary'], ['salary-overview'],
+    ]) {
+      qc.invalidateQueries({ queryKey: key });
+    }
+  };
 
   const setStatus = useMutation({
     mutationFn: ({ id, status }: { id: number; status: string }) => api.patch(`/salary-components/${id}/status`, { status }),
