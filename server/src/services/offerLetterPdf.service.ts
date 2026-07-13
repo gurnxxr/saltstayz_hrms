@@ -12,6 +12,30 @@ interface OfferLetterData {
   salaryBreakdown?: PayslipBreakdown;
 }
 
+/**
+ * The Compensation Structure rows for the offer letter, ITEMISED per component so
+ * every salary component edited in the offer editor (earnings, deductions, employer
+ * benefits, reimbursements) shows up as its own line — not just an aggregate.
+ * Returns `[label, amount, isBold?]`.
+ */
+export function buildCompensationRows(breakdown: PayslipBreakdown): [string, number, boolean?][] {
+  const b = legacyBreakdownToLines(breakdown);
+  const nonZero = (pairs: [string, number][]): [string, number][] => pairs.filter(([, v]) => Number(v) > 0);
+  const named = (arr: any[] | undefined): [string, number][] => (arr ?? []).map((l: any) => [l.name, l.amount]);
+  return [
+    ...named(b.earnings),
+    ['Gross Earnings', b.gross_earnings, true],
+    ...nonZero([['Provident Fund', b.employee_pf], ['ESI', b.esi], ['Professional Tax', b.pt], ['Labour Welfare Fund', b.lwf]]),
+    ...named(b.other_deductions),
+    ['Total Deductions', b.total_deduction, true],
+    ['Net In-Hand (approx.)', b.net_pay, true],
+    ...nonZero([['Employer PF', b.employer_pf], ['Employer ESI', b.employer_esi], ['Employer LWF', b.employer_lwf]]),
+    ...named(b.employer_costs),
+    ...named(b.reimbursements),
+    ['Cost to Company (CTC)', b.ctc, true],
+  ];
+}
+
 export function generateOfferLetterPdf(data: OfferLetterData): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: 'A4', margin: 60 });
@@ -87,20 +111,13 @@ export function generateOfferLetterPdf(data: OfferLetterData): Promise<Buffer> {
     // ─── Compensation Structure (from the designation's salary structure) ───
     doc.y = boxY + boxHeight + 18;
     if (data.salaryBreakdown) {
-      const b = legacyBreakdownToLines(data.salaryBreakdown);
       const inr = (n: number) => 'INR ' + Math.round(n).toLocaleString('en-IN');
       doc.fontSize(10).font('Helvetica-Bold').fillColor(darkColor).text('Compensation Structure (Monthly)', 60);
       doc.moveDown(0.4);
-      const rows: [string, number, boolean?][] = [
-        ...b.earnings.map((l): [string, number] => [l.name, l.amount]),
-        ['Gross Earnings', b.gross_earnings, true],
-        ['Total Deductions', b.total_deduction],
-        ['Net In-Hand (approx.)', b.net_pay, true],
-        ['Employer Contributions + Benefits', b.employer_pf + b.employer_esi + b.employer_lwf + b.employer_costs_total],
-        ['Cost to Company (CTC)', b.ctc, true],
-      ];
+      const rows = buildCompensationRows(data.salaryBreakdown);
       let y = doc.y;
       for (const [label, val, bold] of rows) {
+        if (y > doc.page.height - 110) { doc.addPage(); y = 60; } // longer structures flow onto a new page
         doc.fontSize(9).font(bold ? 'Helvetica-Bold' : 'Helvetica').fillColor(bold ? brandColor : darkColor)
           .text(label, 70, y, { width: pageWidth - 160 });
         doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fillColor(bold ? brandColor : darkColor)
