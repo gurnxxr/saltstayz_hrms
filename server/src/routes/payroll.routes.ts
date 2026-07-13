@@ -25,19 +25,18 @@ router.get('/assignments/:employeeId', authorize('payroll', 'read'), ADMIN_ONLY,
 router.put('/assignments/:employeeId', authorize('payroll', 'update'), ADMIN_ONLY, ctrl.upsertAssignment);
 router.delete('/assignments/:employeeId', authorize('payroll', 'update'), ADMIN_ONLY, ctrl.removeAssignment);
 
-// ─── Generate payslip for any employee (HR / Finance / Admin) ───
-// Minimal employee list for the "generate individual slip" dropdown.
-router.get('/employees', authorize('payroll', 'read'), PAYROLL_STAFF, ctrl.listPayrollEmployees);
-router.get('/employees/:employeeId/payslip', authorize('payroll', 'read'), PAYROLL_STAFF, ctrl.computeEmployeePayslip);
-router.get('/employees/:employeeId/payslip/pdf', authorize('payroll', 'read'), PAYROLL_STAFF, ctrl.downloadEmployeePayslip);
+// ─── Generate/download the salary slip of ANY employee — Admin only ───
+// (Everyone else uses /me/* for their own slip; this powers Admin → Salary Slips.)
+router.get('/employees', authorize('payroll', 'read'), ADMIN_ONLY, ctrl.listPayrollEmployees);
+router.get('/employees/:employeeId/payslip', authorize('payroll', 'read'), ADMIN_ONLY, ctrl.computeEmployeePayslip);
+router.get('/employees/:employeeId/payslip/pdf', authorize('payroll', 'read'), ADMIN_ONLY, ctrl.downloadEmployeePayslip);
 router.get('/employees/:employeeId/payable-days', authorize('payroll', 'read'), PAYROLL_STAFF, ctrl.getPayableDays);
 
-// ─── Payroll runs — bulk generation open to payroll staff; review & finalize
-//     (details/export/adjust/lock/unlock) stay Admin only. ───
+// ─── Payroll runs — Admin only (bulk generate + review & finalize). ───
 router.get('/runs', authorize('payroll', 'read'), PAYROLL_STAFF, ctrl.listRuns);
 router.get('/runs/details', authorize('payroll', 'read'), ADMIN_ONLY, ctrl.getRunDetails);
 router.get('/runs/export', authorize('payroll', 'read'), ADMIN_ONLY, ctrl.exportRegister);
-router.post('/runs', authorize('payroll', 'update'), PAYROLL_STAFF, ctrl.runPayroll);
+router.post('/runs', authorize('payroll', 'update'), ADMIN_ONLY, ctrl.runPayroll);
 router.put('/runs/adjustments/:employeeId', authorize('payroll', 'update'), ADMIN_ONLY, ctrl.upsertAdjustment);
 router.post('/runs/lock', authorize('payroll', 'update'), ADMIN_ONLY, ctrl.lockRun);
 router.post('/runs/unlock', authorize('payroll', 'approve'), ADMIN_ONLY, ctrl.unlockRun);

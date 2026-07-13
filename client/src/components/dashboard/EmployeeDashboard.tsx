@@ -115,7 +115,7 @@ export default function EmployeeDashboard() {
             { label: 'Apply for Leave', href: '/leaves/my', icon: CalendarPlus },
             { label: 'My Attendance', href: '/attendance', icon: CalendarCheck },
             { label: 'My Performance', href: '/analytics', icon: BarChart3 },
-            { label: 'My Payslips', href: '/payroll', icon: FileText },
+            { label: 'My Payslips', href: '/salary', icon: FileText },
             { label: 'My Profile', href: '/profile', icon: User },
           ].map(a => (
             <button key={a.label} onClick={() => router.push(a.href)}

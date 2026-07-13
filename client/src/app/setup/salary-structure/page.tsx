@@ -26,7 +26,7 @@ export default function SalaryStructurePage() {
     <AppShell>
       <div className="space-y-6">
         <div>
-          <Breadcrumb className="mb-2" items={[{ label: 'Payroll', href: '/payroll' }, { label: 'Salary Structures' }]} />
+          <Breadcrumb className="mb-2" items={[{ label: 'Payroll' }, { label: 'Salary Structures' }]} />
           <h1 className="text-2xl font-bold text-foreground">Salary Structures</h1>
           <p className="text-secondary mt-1">Configure each employee&apos;s own salary structure. Templates are the per-designation defaults that seed new hires and power recruitment offers.</p>
         </div>

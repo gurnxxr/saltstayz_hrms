@@ -335,7 +335,7 @@ export async function generatePayslip(
     type: 'payslip_ready',
     title: 'Payslip ready',
     message: `Your payslip for ${computed.monthLabel} is now available (net ₹${Math.round(computed.breakdown.net_pay).toLocaleString('en-IN')}).`,
-    link: '/payroll',
+    link: '/salary',
   });
 
   return { id, ...computed };

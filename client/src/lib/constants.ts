@@ -69,12 +69,20 @@ export const NAVIGATION: NavItem[] = [
     ],
   },
   {
-    label: 'Payroll',
-    href: '/payroll',
-    icon: 'Wallet',
+    // Self-service: the signed-in user's own salary structure + payslips. Downloading
+    // any employee's slip lives under Admin → Salary Slips (admin only).
+    label: 'Salary',
+    href: '/salary',
+    icon: 'FileText',
     roles: ['admin', 'chro', 'hr', 'finance', 'employee'],
+    module: 'payroll',
+  },
+  {
+    label: 'Payroll',
+    href: '/setup/salary-structure',
+    icon: 'Wallet',
+    roles: ['admin', 'finance'],
     children: [
-      { label: 'Salary Slips', href: '/payroll', icon: 'FileText', roles: ['admin', 'chro', 'hr', 'finance', 'employee'], module: 'payroll' },
       { label: 'Salary Structures', href: '/setup/salary-structure', icon: 'IndianRupee', roles: ['admin'] },
       { label: 'Pay Schedule', href: '/setup/pay-schedule', icon: 'CalendarClock', roles: ['admin', 'finance'] },
       { label: 'Statutory Components', href: '/setup/statutory-components', icon: 'Landmark', roles: ['admin', 'finance'] },
@@ -206,5 +214,5 @@ export const ROLE_DEFAULT_DASHBOARD: Record<RoleName, string> = {
   cluster_hr: '/manpower',
   property_manager: '/attendance',
   employee: '/dashboard',
-  finance: '/payroll',
+  finance: '/salary',
 };
