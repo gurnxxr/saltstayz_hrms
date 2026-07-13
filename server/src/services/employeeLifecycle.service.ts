@@ -2,6 +2,7 @@ import db from '../config/database';
 import { NotFoundError, ValidationError } from '../utils/errors';
 import { getAssignment, upsertAssignment, seedEmployeeStructureFromTemplate } from './salaryStructure.service';
 import { ASSET_CATEGORIES, markAssetsReturned } from './asset.service';
+import { notifyEmployee } from './notification.service';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Employee Lifecycle: Promotion / Transfer / Exit Interview.
@@ -111,6 +112,16 @@ export async function createPromotion(
       await seedEmployeeStructureFromTemplate(emp.id, { base: newBase }, userId ?? null);
     }
   }
+
+  // Congratulate the promoted employee in their in-app inbox. Fire-and-forget:
+  // it never throws, and runs after the promotion is committed, so it can't
+  // affect the promotion. No-ops quietly if they have no active user account.
+  await notifyEmployee(emp.id, {
+    type: 'promotion',
+    title: 'Congratulations on your promotion!',
+    message: `You've been promoted to ${toJobTitle.title}, effective ${data.promotion_date}. Congratulations on the new role!`,
+    link: '/profile',
+  });
 
   const rows = await listPromotions();
   return rows.find((r: any) => r.id === id);

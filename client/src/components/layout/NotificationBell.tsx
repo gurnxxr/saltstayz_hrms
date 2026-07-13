@@ -7,7 +7,7 @@ import api from '@/lib/api';
 import { formatDateTime } from '@/lib/utils';
 import {
   Bell, Check, CalendarCheck, CalendarX, CalendarClock, Wallet,
-  UserPlus, FileText, UserMinus, Info, CheckCheck,
+  UserPlus, FileText, UserMinus, Info, CheckCheck, TrendingUp,
 } from 'lucide-react';
 
 const ICONS: Record<string, React.ElementType> = {
@@ -18,6 +18,7 @@ const ICONS: Record<string, React.ElementType> = {
   onboarding_assigned: UserPlus,
   offer_letter: FileText,
   offboarding_initiated: UserMinus,
+  promotion: TrendingUp,
   info: Info,
 };
 
@@ -29,6 +30,7 @@ const ICON_TINT: Record<string, string> = {
   onboarding_assigned: 'text-primary bg-primary/10',
   offer_letter: 'text-indigo-600 bg-indigo-100',
   offboarding_initiated: 'text-red-600 bg-red-100',
+  promotion: 'text-emerald-600 bg-emerald-100',
   info: 'text-secondary bg-muted',
 };
 
