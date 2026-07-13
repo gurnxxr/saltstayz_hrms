@@ -17,7 +17,7 @@ import EmployeeStatusDialog from '@/components/employees/EmployeeStatusDialog';
 
 export default function PropertyConfigPage() {
   const router = useRouter();
-  const [city, setCity] = useState('');
+  const [stateFilter, setStateFilter] = useState('');
   const [propertyId, setPropertyId] = useState('');
 
   const { data: properties = [] } = useQuery({
@@ -36,13 +36,13 @@ export default function PropertyConfigPage() {
     [budgets]
   );
 
-  const cities = useMemo(
-    () => Array.from(new Set(properties.map((p: any) => p.city).filter(Boolean))).sort(),
+  const states = useMemo(
+    () => Array.from(new Set(properties.map((p: any) => p.state).filter(Boolean))).sort(),
     [properties]
   );
-  const propsInCity = useMemo(
-    () => properties.filter((p: any) => !city || p.city === city),
-    [properties, city]
+  const propsInState = useMemo(
+    () => properties.filter((p: any) => !stateFilter || p.state === stateFilter),
+    [properties, stateFilter]
   );
 
   return (
@@ -53,18 +53,18 @@ export default function PropertyConfigPage() {
           <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center"><SlidersHorizontal className="text-primary" size={20} /></div>
           <div>
             <h1 className="text-2xl font-bold text-foreground">Property Configuration</h1>
-            <p className="text-secondary text-sm">Pick a city and property to configure workers, salaries, spend, budget and status.</p>
+            <p className="text-secondary text-sm">Pick a state and property to configure workers, salaries, spend, budget and status.</p>
           </div>
         </div>
 
         {/* Selectors */}
         <div className="bg-card rounded-xl border border-border p-5 flex flex-wrap items-end gap-4">
           <div>
-            <label className="block text-xs font-medium text-secondary mb-1 flex items-center gap-1"><MapPin size={12} /> City</label>
-            <select value={city} onChange={e => { setCity(e.target.value); setPropertyId(''); }}
+            <label className="block text-xs font-medium text-secondary mb-1 flex items-center gap-1"><MapPin size={12} /> State</label>
+            <select value={stateFilter} onChange={e => { setStateFilter(e.target.value); setPropertyId(''); }}
               className="px-3 py-2 border border-border rounded-lg bg-background text-sm min-w-[200px]">
-              <option value="">All cities</option>
-              {cities.map((c: any) => <option key={c} value={c}>{c}</option>)}
+              <option value="">All states</option>
+              {states.map((s: any) => <option key={s} value={s}>{s}</option>)}
             </select>
           </div>
           <div>
@@ -72,7 +72,7 @@ export default function PropertyConfigPage() {
             <select value={propertyId} onChange={e => setPropertyId(e.target.value)}
               className="px-3 py-2 border border-border rounded-lg bg-background text-sm min-w-[280px]">
               <option value="">Select property</option>
-              {propsInCity.map((p: any) => <option key={p.id} value={p.id}>{p.name}{p.city ? ` — ${p.city}` : ''}</option>)}
+              {propsInState.map((p: any) => <option key={p.id} value={p.id}>{p.name}{p.state ? ` — ${p.state}` : ''}</option>)}
             </select>
           </div>
         </div>
@@ -91,7 +91,7 @@ export default function PropertyConfigPage() {
                   key={b.property_id}
                   onClick={() => {
                     const p = properties.find((x: any) => x.id === b.property_id);
-                    setCity(p?.city || '');
+                    setStateFilter(p?.state || '');
                     setPropertyId(String(b.property_id));
                   }}
                   className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-red-200 bg-white text-xs font-medium text-red-700 hover:bg-red-100 transition-colors"
@@ -133,13 +133,16 @@ function Console({ propertyId }: { propertyId: number }) {
   const hired = totals.worker_count;
   const sanctionedTotal = totals.total_sanctioned_workers;
   const overLimit = sanctionedTotal > 0 && hired > sanctionedTotal;
+  // With no sanctioned budget set, budget = ₹0; don't render actual spend as a
+  // scary negative "remaining" / over-budget state — show it as not configured.
+  const budgetSet = !!budget.configured;
 
   return (
     <div className="space-y-5">
       {/* Headline metrics */}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <Kpi icon={<Wallet size={16} />} label="Total Manpower Budget" value={formatINR(budget.sanctioned_budget_monthly)} sub={`${formatINR(budget.remaining)} remaining`} danger={budget.committed > budget.sanctioned_budget_monthly} />
-        <Kpi icon={<Users size={16} />} label="Sanctioned Employee Count" value={String(budget.sanctioned_headcount)} sub={`${budget.filled} filled`} />
+        <Kpi icon={<Wallet size={16} />} label="Total Manpower Budget" value={budgetSet ? formatINR(budget.sanctioned_budget_monthly) : 'Not set'} sub={budgetSet ? `${formatINR(budget.remaining)} remaining` : 'No budget sanctioned'} danger={budgetSet && budget.committed > budget.sanctioned_budget_monthly} />
+        <Kpi icon={<Users size={16} />} label="Sanctioned Employee Count" value={budgetSet ? String(budget.sanctioned_headcount) : '—'} sub={`${budget.filled} filled`} />
         <Kpi icon={<UserCheck size={16} />} label="Workers Hired" value={String(hired)} sub={sanctionedTotal > 0 ? `of ${sanctionedTotal} sanctioned` : 'no dept limits set'} danger={overLimit} />
         <Kpi icon={<IndianRupee size={16} />} label="Monthly Spend" value={formatINR(totals.total_spend)} sub={`${totals.worker_count} workers`} />
         <Kpi icon={<CalendarRange size={16} />} label="Yearly Spend" value={formatINR(totals.total_spend_yearly)} sub="monthly × 12" />

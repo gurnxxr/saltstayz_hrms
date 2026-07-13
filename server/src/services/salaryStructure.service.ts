@@ -465,6 +465,29 @@ export async function getCtcRegister() {
 }
 
 /**
+ * Actual monthly CTC (from each employee's live salary structure — the same figure
+ * the Salary Details register shows) for the given employees. Employees with no
+ * structure, or whose structure can't resolve, are omitted so callers fall back to
+ * whatever planning figure they hold. Used by the property console so spend/average
+ * reflect real pay rather than the sparse manpower `monthly_ctc` planning field.
+ */
+export async function getMonthlyCtcMap(employeeIds: number[]): Promise<Map<number, number>> {
+  const map = new Map<number, number>();
+  const ids = [...new Set(employeeIds.map(Number).filter(Boolean))];
+  if (!ids.length) return map;
+  const asgs = await db('salary_structure_assignments').whereIn('employee_id', ids).select('employee_id', 'structure_id', 'base');
+  for (const asg of asgs) {
+    try {
+      const structureRow = await getStructureRow(asg.structure_id);
+      const state = await getEmployeeState(asg.employee_id);
+      const bd = await computeForStructure(structureRow, num(asg.base), null, undefined, { state });
+      map.set(asg.employee_id, Math.round(bd.ctc));
+    } catch { /* skip a structure that can't resolve */ }
+  }
+  return map;
+}
+
+/**
  * Salary Details overview: one row per active employee carrying every configured salary
  * component amount plus the statutory deductions, employer costs and Total CTC — each from
  * a live full-month breakdown. `columns` is the ordered column set (dynamic from the

@@ -5,6 +5,7 @@ import { NotFoundError, ValidationError, ForbiddenError, GuardrailError } from '
 import { nextJobId } from '../utils/jobId';
 import { notifyRole } from './notification.service';
 import { LIVE_VACANCY_STATUSES } from './recruitment.service';
+import { getMonthlyCtcMap } from './salaryStructure.service';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Manpower & Budget Control
@@ -874,6 +875,17 @@ export async function getPropertyConsole(propertyId: number) {
   const manualMap = new Map<string, number>(manualRows.map((r: any) => [r.department, Number(r.worker_count)]));
   for (const dept of manualMap.keys()) if (!deptMap.has(dept)) deptMap.set(dept, { dept_name: dept, actual_workers: 0, spend: 0, salaried: 0 });
 
+  // Real pay for the spend/average: each employee's actual monthly CTC from their
+  // salary structure (the Salary Details figure), falling back to the manpower
+  // `monthly_ctc` planning field. Most staff have no monthly_ctc, so without this the
+  // console would report ₹0 spend for fully-staffed properties.
+  const ctcMap = await getMonthlyCtcMap((emps as any[]).map((e) => e.id));
+  const ctcFor = (e: any): number | null => {
+    const structured = ctcMap.get(e.id);
+    if (structured != null) return structured;
+    return e.monthly_ctc != null ? Number(e.monthly_ctc) : null;
+  };
+
   // Actual workers = non-Left headcount. Spend = Σ salaries; average is over workers
   // who actually have a salary set (so unpaid/unset rows don't drag the average to ₹0).
   let total_spend = 0, worker_count = 0, salaried = 0, on_pip = 0;
@@ -882,10 +894,10 @@ export async function getPropertyConsole(propertyId: number) {
     if (DEPARTED_STATUSES.includes(e.employment_status)) continue; // departed employees don't count toward workers/spend
     const dept = e.dept_name || 'Unassigned';
     if (!deptMap.has(dept)) deptMap.set(dept, { dept_name: dept, actual_workers: 0, spend: 0, salaried: 0 });
-    const ctc = Number(e.monthly_ctc || 0);
+    const ctc = ctcFor(e);
     const d = deptMap.get(dept)!;
     d.actual_workers += 1; worker_count += 1;
-    if (e.monthly_ctc != null) { d.salaried += 1; salaried += 1; d.spend = round2(d.spend + ctc); total_spend = round2(total_spend + ctc); }
+    if (ctc != null) { d.salaried += 1; salaried += 1; d.spend = round2(d.spend + ctc); total_spend = round2(total_spend + ctc); }
   }
 
   let total_sanctioned_workers = 0;
@@ -909,9 +921,11 @@ export async function getPropertyConsole(propertyId: number) {
     budget: {
       sanctioned_budget_monthly: pb.sanctioned_budget_monthly,
       sanctioned_headcount: pb.sanctioned_headcount,
-      committed: pb.committed_amount,
-      remaining: pb.remaining_budget,
-      filled: pb.filled_headcount,
+      // Committed/filled reflect the ACTUAL workforce and pay here (the reporting
+      // view), not the monthly_ctc planning figure the hire guardrail runs on.
+      committed: total_spend,
+      remaining: round2(pb.sanctioned_budget_monthly - total_spend),
+      filled: worker_count,
       configured: pb.configured,
     },
     totals: {
@@ -923,12 +937,15 @@ export async function getPropertyConsole(propertyId: number) {
       avg_salary: salaried > 0 ? round2(total_spend / salaried) : 0,
     },
     byDepartment,
-    employees: (emps as any[]).map(e => ({
-      id: e.id, job_id: e.job_id, employee_code: e.employee_code, name: `${e.first_name} ${e.last_name}`.trim(),
-      dept_name: e.dept_name || 'Unassigned', job_title: e.job_title,
-      monthly_ctc: e.monthly_ctc != null ? Number(e.monthly_ctc) : null,
-      employment_status: e.employment_status, last_working_day: e.last_working_day,
-    })),
+    employees: (emps as any[]).map(e => {
+      const ctc = ctcFor(e);
+      return {
+        id: e.id, job_id: e.job_id, employee_code: e.employee_code, name: `${e.first_name} ${e.last_name}`.trim(),
+        dept_name: e.dept_name || 'Unassigned', job_title: e.job_title,
+        monthly_ctc: ctc != null ? Math.round(ctc) : null,
+        employment_status: e.employment_status, last_working_day: e.last_working_day,
+      };
+    }),
   };
 }
 
