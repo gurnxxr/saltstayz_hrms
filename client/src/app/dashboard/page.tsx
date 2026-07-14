@@ -7,6 +7,7 @@ import LoadError from '@/components/ui/LoadError';
 import { usePermissions } from '@/hooks/usePermissions';
 import api from '@/lib/api';
 import EmployeeDashboard from '@/components/dashboard/EmployeeDashboard';
+import DashboardGreeting from '@/components/dashboard/DashboardGreeting';
 import { CalendarCheck, CalendarOff, Users, Clock, Briefcase, UserPlus } from 'lucide-react';
 
 export default function DashboardPage() {
@@ -37,10 +38,7 @@ function OrgDashboard() {
 
   return (
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
-          <p className="text-secondary mt-1">Organization overview</p>
-        </div>
+        <DashboardGreeting subtitle="Here’s what’s happening across your organization today." />
 
         {overviewError && <LoadError message="Couldn't load the dashboard overview." onRetry={() => refetchOverview()} />}
 

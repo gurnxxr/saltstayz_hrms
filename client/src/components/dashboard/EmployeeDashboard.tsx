@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
+import DashboardGreeting from '@/components/dashboard/DashboardGreeting';
 import { CalendarCheck, CalendarOff, Clock, Wallet, CalendarPlus, FileText, User, BarChart3 } from 'lucide-react';
 
 const fmt = (t?: string) => (t ? t.slice(0, 5) : '');
@@ -29,10 +30,7 @@ export default function EmployeeDashboard() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-foreground">My Dashboard</h1>
-        <p className="text-secondary mt-1">Your attendance and leave at a glance — {monthLabel}</p>
-      </div>
+      <DashboardGreeting subtitle={`Your attendance and leave at a glance — ${monthLabel}`} />
 
       {/* KPI cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
