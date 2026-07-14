@@ -69,7 +69,7 @@ export default function Sidebar({ collapsed, onToggle }: { collapsed: boolean; o
             {/* Company logo — white artwork, cropped tight and sized to fill the sidebar width. */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/logo.svg" alt="SaltStayz HRMS" className="w-full max-w-[200px] h-auto object-contain object-left" />
-            <span className="text-[13px] font-semibold uppercase tracking-[0.35em] text-sidebar-text/70 leading-none pl-0.5">HRMS</span>
+            <span className="text-[15px] font-semibold uppercase tracking-[0.12em] text-white leading-none pl-0.5">HRMS</span>
           </Link>
         )}
         <button
