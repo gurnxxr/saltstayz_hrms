@@ -65,10 +65,11 @@ export default function Sidebar({ collapsed, onToggle }: { collapsed: boolean; o
       {/* Brand + collapse toggle */}
       <div className={cn('border-b border-white/10 flex items-center h-16', collapsed ? 'justify-center' : 'justify-between px-4')}>
         {!collapsed && (
-          <Link href="/dashboard" className="flex items-center min-w-0 flex-1 mr-2">
+          <Link href="/dashboard" className="flex flex-col items-start justify-center gap-1 min-w-0 flex-1 mr-2">
             {/* Company logo — white artwork, cropped tight and sized to fill the sidebar width. */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/logo.svg" alt="SaltStayz HRMS" className="w-full max-w-[200px] h-auto object-contain object-left" />
+            <span className="text-[13px] font-semibold uppercase tracking-[0.35em] text-sidebar-text/70 leading-none pl-0.5">HRMS</span>
           </Link>
         )}
         <button
