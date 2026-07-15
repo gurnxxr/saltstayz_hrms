@@ -172,16 +172,28 @@ export async function ensureInstance(
   const existing = await cx('checklist_instances').where({ template_id: template.id, ...where }).first();
   if (existing) return existing;
 
-  const [instanceId] = await cx('checklist_instances').insert({
-    template_id: template.id, ...where, status: 'pending', initiated_by: userId ?? null,
-  });
+  // Two concurrent first-views can both pass the check above; the loser's insert then
+  // hits unique(template_id, subject). That must not 500 a read — hand back the
+  // winner's row instead.
+  let instanceId: number;
+  try {
+    [instanceId] = await cx('checklist_instances').insert({
+      template_id: template.id, ...where, status: 'pending', initiated_by: userId ?? null,
+    });
+  } catch (err) {
+    const winner = await cx('checklist_instances').where({ template_id: template.id, ...where }).first();
+    if (winner) return winner;
+    throw err;
+  }
   const templateItems = await cx('checklist_template_items')
     .where({ template_id: template.id, is_active: true }).orderBy('sort_order');
   if (templateItems.length) {
+    // Target-less ignore: if this creator stalls here, a concurrent view can find the
+    // instance and reconcile the same items in first — that must no-op, not throw.
     await cx('checklist_instance_items').insert(templateItems.map((ti: any, i: number) => ({
       instance_id: instanceId, template_item_id: ti.id, label: ti.label,
       category: ti.category, sort_order: ti.sort_order ?? i,
-    })));
+    }))).onConflict().ignore();
   }
   return cx('checklist_instances').where('id', instanceId).first();
 }
