@@ -6,6 +6,8 @@ export interface JwtPayload {
   roleId: number;
   roleName: string;
   employeeId: number | null;
+  /** Linked employee's first name — for display (e.g. the dashboard greeting). */
+  firstName?: string | null;
 }
 
 export interface AuthRequest extends Request {

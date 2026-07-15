@@ -4,6 +4,8 @@ export interface User {
   roleId: number;
   roleName: string;
   employeeId: number | null;
+  /** Linked employee's first name, from the auth payload (may be absent on old sessions). */
+  firstName?: string | null;
 }
 
 export interface Permission {

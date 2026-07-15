@@ -8,6 +8,7 @@ import { JwtPayload } from '../types';
 export async function login(email: string, password: string) {
   const user = await db('users')
     .join('roles', 'roles.id', 'users.role_id')
+    .leftJoin('employees', 'employees.id', 'users.employee_id')
     .where('users.email', email)
     .where('users.is_active', true)
     .select(
@@ -16,7 +17,8 @@ export async function login(email: string, password: string) {
       'users.password_hash',
       'users.employee_id',
       'roles.id as roleId',
-      'roles.name as roleName'
+      'roles.name as roleName',
+      'employees.first_name as firstName'
     )
     .first();
 
@@ -35,6 +37,7 @@ export async function login(email: string, password: string) {
     roleId: user.roleId,
     roleName: user.roleName,
     employeeId: user.employee_id,
+    firstName: user.firstName ?? null,
   };
 
   const token = jwt.sign(payload, env.JWT_SECRET, { expiresIn: '24h' });
@@ -50,6 +53,7 @@ export async function login(email: string, password: string) {
 export async function getCurrentUser(userId: number): Promise<JwtPayload | null> {
   const row = await db('users')
     .join('roles', 'roles.id', 'users.role_id')
+    .leftJoin('employees', 'employees.id', 'users.employee_id')
     .where('users.id', userId)
     .where('users.is_active', true)
     .select(
@@ -57,7 +61,8 @@ export async function getCurrentUser(userId: number): Promise<JwtPayload | null>
       'users.email',
       'users.employee_id',
       'roles.id as roleId',
-      'roles.name as roleName'
+      'roles.name as roleName',
+      'employees.first_name as firstName'
     )
     .first();
   if (!row) return null;
@@ -67,6 +72,7 @@ export async function getCurrentUser(userId: number): Promise<JwtPayload | null>
     roleId: row.roleId,
     roleName: row.roleName,
     employeeId: row.employee_id,
+    firstName: row.firstName ?? null,
   };
 }
 

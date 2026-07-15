@@ -1,10 +1,8 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/lib/auth';
-import api from '@/lib/api';
 
-/** A friendly display name from an email handle when we have no employee record. */
+/** A friendly display name from an email handle when no employee record is linked. */
 function nameFromEmail(email?: string) {
   if (!email) return 'there';
   const handle = (email.split('@')[0] || '').split(/[._+-]/)[0].replace(/[0-9]+/g, '');
@@ -19,23 +17,17 @@ function partOfDay() {
 }
 
 /**
- * Personalised dashboard header: greets the signed-in user by their first name
- * (from their employee record, falling back to their email handle) with a
- * time-of-day message. `suppressHydrationWarning` because the greeting depends on
- * the client's clock and the client-side auth session.
+ * Personalised dashboard header: greets the signed-in user by first name with a
+ * time-of-day message. The name comes from the auth session itself (/auth/me and the
+ * login payload carry the linked employee's first_name), so there is no extra fetch
+ * here and nothing user-specific cached outside the auth state — cross-user cache
+ * safety lives in one place: the queryClient.clear() on login/logout in lib/auth.tsx.
+ * `suppressHydrationWarning` because the greeting depends on the client's clock and
+ * the client-side session.
  */
 export default function DashboardGreeting({ subtitle }: { subtitle?: string }) {
   const { user } = useAuth();
-
-  const { data: me } = useQuery({
-    // Keyed by user id so a different sign-in never reuses the previous person's name.
-    queryKey: ['me-greeting-name', user?.userId],
-    queryFn: () => api.get('/employees/me').then((r) => r.data).catch(() => null),
-    enabled: !!user?.employeeId,
-    staleTime: 5 * 60 * 1000,
-  });
-
-  const name = (me?.first_name && String(me.first_name).trim()) || nameFromEmail(user?.email);
+  const name = user?.firstName?.trim() || nameFromEmail(user?.email);
 
   return (
     <div>

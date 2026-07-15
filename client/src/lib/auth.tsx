@@ -52,7 +52,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function login(email: string, password: string) {
     const { data } = await api.post('/auth/login', { email, password });
     authSeq.current++; // this session supersedes any in-flight checkAuth()
-    queryClient.clear(); // drop any cached per-user data from a previous session
+    // THE cross-user cache-safety mechanism: per-user query keys stay unscoped
+    // everywhere because login/logout wipe the whole cache here.
+    queryClient.clear();
     setState({ user: data.user, permissions: data.permissions, overrides: data.overrides ?? emptyOverrides, isLoading: false });
     const defaultRoute = ROLE_DEFAULT_DASHBOARD[data.user.roleName as RoleName] || '/dashboard';
     router.push(defaultRoute);
