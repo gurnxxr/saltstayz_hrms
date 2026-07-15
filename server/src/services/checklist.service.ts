@@ -79,9 +79,13 @@ export async function addTemplateItem(templateId: number, data: { label: string;
     // added, unticked item re-opens the phase — the stage gate re-blocks advancement.
     const openIds = await openCandidateInstanceIds(templateId, trx);
     if (openIds.length) {
+      // Plain insert on purpose: the template item id was minted two statements up in
+      // this transaction, so no instance row can already reference it — a conflict here
+      // would be a real logic bug, and it should roll the transaction back loudly
+      // rather than silently skip an instance.
       await trx('checklist_instance_items').insert(openIds.map((instance_id) => ({
         instance_id, template_item_id: id, label, category, sort_order: sort,
-      }))).onConflict(['instance_id', 'template_item_id']).ignore();
+      })));
       for (const instanceId of openIds) await recomputeStatus(instanceId, trx);
     }
     return trx('checklist_template_items').where('id', id).first();
@@ -204,11 +208,14 @@ export async function reconcileInstanceToTemplate(instanceId: number, trx?: Knex
   let changed = false;
   const missing = templateItems.filter((ti: any) => !linked.has(ti.id));
   if (missing.length) {
-    // ON CONFLICT DO NOTHING: this runs on every candidate view, so two concurrent
-    // views can't double-insert the same template item (uq_cii_instance_template_item).
+    // Target-less ON CONFLICT DO NOTHING: this runs on every candidate view, so two
+    // concurrent views can't double-insert the same template item (the race loses to
+    // uq_cii_instance_template_item). No conflict target on purpose — a named target
+    // makes SQLite reject the statement at prepare time when the index doesn't exist
+    // yet (code deployed/hot-reloaded before migration 079), 500ing every view.
     await cx('checklist_instance_items').insert(missing.map((ti: any) => ({
       instance_id: instanceId, template_item_id: ti.id, label: ti.label, category: ti.category, sort_order: ti.sort_order,
-    }))).onConflict(['instance_id', 'template_item_id']).ignore();
+    }))).onConflict().ignore();
     changed = true;
   }
   for (const ti of templateItems) {
