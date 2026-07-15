@@ -345,6 +345,23 @@ export async function addItem(instanceId: number, data: { label: string; categor
 export async function deleteItem(itemId: number) {
   const item = await db('checklist_instance_items').where('id', itemId).first();
   if (!item) throw new NotFoundError('Checklist item');
+  // A template-linked item on a still-open candidate checklist would be re-added by
+  // the reconcile on the next view — deleting it here is a confusing no-op loop, so
+  // refuse and point at the template, where a delete actually sticks. Custom items
+  // and items on frozen (advanced-past) checklists delete as before.
+  if (item.template_item_id != null) {
+    const open = await db('checklist_instances as ci')
+      .join('checklist_templates as ct', 'ct.id', 'ci.template_id')
+      .join('candidates as c', 'c.id', 'ci.candidate_id')
+      .where('ci.id', item.instance_id)
+      .whereRaw('c.stage = ct.phase')
+      .first();
+    if (open) {
+      throw new ValidationError(
+        'This item comes from the checklist template, so it would be re-added automatically. Remove it from Recruitment → Checklist Templates instead.',
+      );
+    }
+  }
   if (item.document_url) {
     try { fs.unlinkSync(path.join(UPLOAD_DIR, path.basename(item.document_url))); } catch { /* already gone */ }
   }

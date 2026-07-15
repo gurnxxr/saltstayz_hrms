@@ -601,13 +601,17 @@ export default function CandidateDetailPage({ params }: { params: Promise<{ id: 
                               </label>
                             )
                           )}
-                          <button
-                            onClick={() => deleteItemMutation.mutate(item.id)}
-                            className="p-1 rounded text-secondary/30 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"
-                            title="Remove item"
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                          {/* Template-linked items are governed by the Checklist Template —
+                              the reconcile would re-add them, so only custom items get a delete. */}
+                          {item.template_item_id == null && (
+                            <button
+                              onClick={() => deleteItemMutation.mutate(item.id)}
+                              className="p-1 rounded text-secondary/30 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"
+                              title="Remove item"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          )}
                         </div>
                       </div>
                     </div>
