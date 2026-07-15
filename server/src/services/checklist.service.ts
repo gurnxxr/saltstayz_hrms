@@ -228,7 +228,11 @@ export async function reconcileInstanceToTemplate(instanceId: number, trx?: Knex
     await cx('checklist_instance_items').insert(missing.map((ti: any) => ({
       instance_id: instanceId, template_item_id: ti.id, label: ti.label, category: ti.category, sort_order: ti.sort_order,
     }))).onConflict().ignore();
-    changed = true;
+    // A race loser can have every row ignored; only recompute when rows really landed.
+    const afterCount = Number(
+      ((await cx('checklist_instance_items').where('instance_id', instanceId).count({ c: '*' }).first()) as any)?.c ?? 0,
+    );
+    if (afterCount > instItems.length) changed = true;
   }
   for (const ti of templateItems) {
     const existing = linked.get(ti.id);
@@ -252,7 +256,10 @@ export async function getInstance(instanceId: number) {
     .leftJoin('users as u', 'u.id', 'cii.completed_by')
     .where('cii.instance_id', instanceId)
     .select('cii.*', 'u.email as completed_by_email')
-    .orderBy('cii.sort_order');
+    // id tiebreaker: template items and per-instance custom items number independently,
+    // so sort_order can tie — without it SQLite's tie order is unspecified and the
+    // list can reshuffle between loads.
+    .orderBy([{ column: 'cii.sort_order' }, { column: 'cii.id' }]);
   return {
     ...instance,
     supports_documents: !!instance.supports_documents,
@@ -270,7 +277,7 @@ export async function listForSubject(subject: Subject) {
   if (!instances.length) return [];
   const items = await db('checklist_instance_items')
     .whereIn('instance_id', instances.map((i: any) => i.id))
-    .orderBy('sort_order');
+    .orderBy([{ column: 'sort_order' }, { column: 'id' }]); // stable when sort_order ties
   return instances.map((inst: any) => {
     const own = items.filter((i: any) => i.instance_id === inst.id);
     return {
