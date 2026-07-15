@@ -81,7 +81,7 @@ export async function addTemplateItem(templateId: number, data: { label: string;
     if (openIds.length) {
       await trx('checklist_instance_items').insert(openIds.map((instance_id) => ({
         instance_id, template_item_id: id, label, category, sort_order: sort,
-      })));
+      }))).onConflict(['instance_id', 'template_item_id']).ignore();
       for (const instanceId of openIds) await recomputeStatus(instanceId, trx);
     }
     return trx('checklist_template_items').where('id', id).first();
@@ -204,9 +204,11 @@ export async function reconcileInstanceToTemplate(instanceId: number, trx?: Knex
   let changed = false;
   const missing = templateItems.filter((ti: any) => !linked.has(ti.id));
   if (missing.length) {
+    // ON CONFLICT DO NOTHING: this runs on every candidate view, so two concurrent
+    // views can't double-insert the same template item (uq_cii_instance_template_item).
     await cx('checklist_instance_items').insert(missing.map((ti: any) => ({
       instance_id: instanceId, template_item_id: ti.id, label: ti.label, category: ti.category, sort_order: ti.sort_order,
-    })));
+    }))).onConflict(['instance_id', 'template_item_id']).ignore();
     changed = true;
   }
   for (const ti of templateItems) {
