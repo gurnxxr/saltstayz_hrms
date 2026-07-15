@@ -58,9 +58,11 @@ export async function up(knex: Knex): Promise<void> {
     const items = await knex('checklist_instance_items').where('instance_id', instanceId).select('is_completed');
     const all = items.length > 0 && items.every((i: any) => i.is_completed);
     const any = items.some((i: any) => i.is_completed);
+    const current = await knex('checklist_instances').where('id', instanceId).select('completed_at').first();
     await knex('checklist_instances').where('id', instanceId).update({
       status: all ? 'completed' : any ? 'in_progress' : 'pending',
-      completed_at: all ? knex.fn.now() : null,
+      // Preserve an existing completion timestamp — don't rewrite history.
+      completed_at: all ? (current?.completed_at ?? knex.fn.now()) : null,
       updated_at: knex.fn.now(),
     });
   }

@@ -309,9 +309,12 @@ async function recomputeStatus(instanceId: number, trx?: Knex.Transaction) {
   const items = await cx('checklist_instance_items').where('instance_id', instanceId).select('is_completed');
   const all = items.length > 0 && items.every((i: any) => i.is_completed);
   const any = items.some((i: any) => i.is_completed);
+  // Preserve the ORIGINAL completion timestamp: recomputes fire on renames,
+  // re-uploads and reconciles too, and must not rewrite completion history.
+  const current = await cx('checklist_instances').where('id', instanceId).select('completed_at').first();
   await cx('checklist_instances').where('id', instanceId).update({
     status: all ? 'completed' : any ? 'in_progress' : 'pending',
-    completed_at: all ? cx.fn.now() : null,
+    completed_at: all ? (current?.completed_at ?? cx.fn.now()) : null,
     updated_at: cx.fn.now(),
   });
 }
