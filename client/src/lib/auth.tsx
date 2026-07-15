@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import api from './api';
 import { User, Permission, AuthState, type RoleName } from './types';
 import { ROLE_DEFAULT_DASHBOARD } from './constants';
@@ -22,6 +23,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isLoading: true,
   });
   const router = useRouter();
+  const queryClient = useQueryClient();
   // Monotonic guard: a completed login/logout must win over any in-flight
   // checkAuth(). The provider mounts once (persisted in the root layout) and
   // fires checkAuth() → GET /auth/me; on a cold start that request can resolve
@@ -50,6 +52,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function login(email: string, password: string) {
     const { data } = await api.post('/auth/login', { email, password });
     authSeq.current++; // this session supersedes any in-flight checkAuth()
+    queryClient.clear(); // drop any cached per-user data from a previous session
     setState({ user: data.user, permissions: data.permissions, overrides: data.overrides ?? emptyOverrides, isLoading: false });
     const defaultRoute = ROLE_DEFAULT_DASHBOARD[data.user.roleName as RoleName] || '/dashboard';
     router.push(defaultRoute);
@@ -58,6 +61,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function logout() {
     authSeq.current++; // supersede any in-flight checkAuth()
     await api.post('/auth/logout');
+    queryClient.clear(); // wipe cached per-user data so the next sign-in starts fresh
     setState({ user: null, permissions: [], overrides: emptyOverrides, isLoading: false });
     router.push('/login');
   }

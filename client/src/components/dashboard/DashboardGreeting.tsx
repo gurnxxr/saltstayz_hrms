@@ -28,7 +28,8 @@ export default function DashboardGreeting({ subtitle }: { subtitle?: string }) {
   const { user } = useAuth();
 
   const { data: me } = useQuery({
-    queryKey: ['me-greeting-name'],
+    // Keyed by user id so a different sign-in never reuses the previous person's name.
+    queryKey: ['me-greeting-name', user?.userId],
     queryFn: () => api.get('/employees/me').then((r) => r.data).catch(() => null),
     enabled: !!user?.employeeId,
     staleTime: 5 * 60 * 1000,
