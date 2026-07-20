@@ -16,7 +16,11 @@ router.get('/me', authorize('attendance', 'read'), ctrl.getMyRegularisations);
 router.get('/pending', authorize('attendance', 'read'), ctrl.getPendingRegularisations);
 // Regularisation log (history) — decided requests, scoped to the manager's reports / all for HR.
 router.get('/log', authorize('attendance', 'read'), ctrl.getRegularisationLog);
-router.post('/:id/approve', authorize('attendance', 'read'), ctrl.approveRegularisation);
-router.post('/:id/reject', authorize('attendance', 'read'), ctrl.rejectRegularisation);
+// Deciding a regularisation mutates attendance, so it is gated on attendance:update
+// (not read) — mirroring leave approvals, which gate on leave:update. property_manager
+// holds attendance:update, so reporting managers can still decide; the service further
+// restricts to the reporting manager or HR.
+router.post('/:id/approve', authorize('attendance', 'update'), ctrl.approveRegularisation);
+router.post('/:id/reject', authorize('attendance', 'update'), ctrl.rejectRegularisation);
 
 export default router;

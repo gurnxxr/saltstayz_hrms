@@ -115,15 +115,23 @@ export async function requestRegularisation(employeeId: number, data: Regularisa
     .first();
   if (overlap) throw new ValidationError('You already have a pending regularisation overlapping these dates');
 
-  // Monthly cap (pending + approved requests) for the attendance month being corrected.
-  const monthPrefix = start.slice(0, 7); // YYYY-MM
-  const countRow = await db('attendance_regularisations')
-    .where('employee_id', employeeId)
-    .whereRaw('substr(date, 1, 7) = ?', [monthPrefix])
-    .whereIn('status', ['pending', 'approved'])
-    .count({ c: 'id' }).first();
-  if (Number((countRow as any)?.c || 0) >= MONTHLY_LIMIT) {
-    throw new ValidationError(`You have reached the monthly regularisation limit (${MONTHLY_LIMIT}) for ${monthPrefix}.`);
+  // Monthly cap (pending + approved requests) — enforced for EVERY month the requested
+  // range touches, not just its start month. Otherwise a request whose dates spill into
+  // a trailing month slips past that month's limit. A request spans <= 31 days, so the
+  // two endpoint months cover the whole range.
+  const months = [...new Set([start.slice(0, 7), end.slice(0, 7)])];
+  for (const m of months) {
+    const mStart = `${m}-01`;
+    const mEnd = `${m}-31`; // lexical upper bound — safe for zero-padded YYYY-MM-DD compares
+    const countRow = await db('attendance_regularisations')
+      .where('employee_id', employeeId)
+      .whereIn('status', ['pending', 'approved'])
+      // count any existing request whose own range overlaps month m
+      .whereRaw('date <= ? AND COALESCE(end_date, date) >= ?', [mEnd, mStart])
+      .count({ c: 'id' }).first();
+    if (Number((countRow as any)?.c || 0) >= MONTHLY_LIMIT) {
+      throw new ValidationError(`You have reached the monthly regularisation limit (${MONTHLY_LIMIT}) for ${m}.`);
+    }
   }
 
   const [id] = await db('attendance_regularisations').insert({
@@ -228,6 +236,15 @@ export async function approveRegularisation(id: number, approverId: number, role
   let firstAttendanceId: number | null = null;
 
   await db.transaction(async (trx) => {
+    // Claim the request atomically before applying anything: only a still-pending request
+    // can be approved. loadForDecision's check ran outside the transaction, so two
+    // concurrent approvals could both reach here — the status-conditioned UPDATE lets
+    // exactly one win; the loser matches no row and aborts (rolling back its writes).
+    const claimed = await trx('attendance_regularisations')
+      .where({ id, status: 'pending' })
+      .update({ status: 'approved', approved_by: approverId, decided_at: trx.fn.now(), updated_at: trx.fn.now() });
+    if (!claimed) throw new ValidationError('Only pending requests can be actioned');
+
     for (const date of dates) {
       const existing = await trx('attendance_records')
         .where({ employee_id: reg.employee_id, date }).first();
@@ -255,11 +272,8 @@ export async function approveRegularisation(id: number, approverId: number, role
     }
 
     await trx('attendance_regularisations').where('id', id).update({
-      status: 'approved',
-      approved_by: approverId,
       applied_status: status,
       attendance_id: firstAttendanceId,
-      decided_at: trx.fn.now(),
       updated_at: trx.fn.now(),
     });
   });
@@ -281,13 +295,18 @@ export async function rejectRegularisation(id: number, approverId: number, roleN
   const note = String(comment || '').trim();
   if (!note) throw new ValidationError('A reason is required to reject');
 
-  await db('attendance_regularisations').where('id', id).update({
-    status: 'rejected',
-    approved_by: approverId,
-    reviewer_comment: note,
-    decided_at: db.fn.now(),
-    updated_at: db.fn.now(),
-  });
+  // Status-conditioned update closes the check-then-write race with a concurrent
+  // approve/reject: only a still-pending request can be rejected.
+  const updated = await db('attendance_regularisations')
+    .where({ id, status: 'pending' })
+    .update({
+      status: 'rejected',
+      approved_by: approverId,
+      reviewer_comment: note,
+      decided_at: db.fn.now(),
+      updated_at: db.fn.now(),
+    });
+  if (!updated) throw new ValidationError('Only pending requests can be actioned');
 
   await notifyEmployee(reg.employee_id, {
     type: 'regularisation_rejected',

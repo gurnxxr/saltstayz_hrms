@@ -43,15 +43,16 @@ export default function CredentialsPage() {
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['admin-credentials'] });
 
-  const missing = useMemo(() => rows.filter((r: any) => !r.has_login || !r.initial_password).length, [rows]);
+  const missing = useMemo(() => rows.filter((r: any) => !r.has_login).length, [rows]);
 
   const fillMutation = useMutation({
     mutationFn: () => api.post('/admin/credentials/fill-missing').then(r => r.data),
     onSuccess: (d: any) => {
       invalidate();
-      toast.success(`Set 1234 for ${(d.created ?? 0) + (d.updated ?? 0)} user${(d.created ?? 0) + (d.updated ?? 0) === 1 ? '' : 's'} (${d.created ?? 0} new logins, ${d.updated ?? 0} reset)`);
+      const n = d.created ?? 0;
+      toast.success(`Created ${n} login${n === 1 ? '' : 's'} with password 1234`);
     },
-    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to set passwords'),
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to create logins'),
   });
 
   if (!isAdmin) {
@@ -74,16 +75,16 @@ export default function CredentialsPage() {
           <div>
             <Breadcrumb className="mb-2" items={[{ label: 'Admin', href: '/admin' }, { label: 'User Credentials' }]} />
             <h1 className="text-2xl font-bold text-foreground">User Credentials</h1>
-            <p className="text-secondary mt-1">Login email &amp; password for every employee.</p>
+            <p className="text-secondary mt-1">Manage each employee&apos;s login. Passwords are set here and shown once — never stored in readable form.</p>
           </div>
           <button
             onClick={() => fillMutation.mutate()}
             disabled={fillMutation.isPending || missing === 0}
-            title={missing === 0 ? 'Every employee already has a password' : `Set 1234 for ${missing} employee(s) with no login or no password`}
+            title={missing === 0 ? 'Every employee already has a login' : `Create a login (password 1234) for ${missing} employee(s) without one`}
             className="inline-flex items-center gap-1.5 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors shrink-0"
           >
             {fillMutation.isPending ? <Loader2 size={15} className="animate-spin" /> : <Wand2 size={15} />}
-            Set missing to 1234{missing > 0 ? ` (${missing})` : ''}
+            Create missing logins{missing > 0 ? ` (${missing})` : ''}
           </button>
         </div>
 
@@ -94,7 +95,7 @@ export default function CredentialsPage() {
                 <tr className="border-b border-border text-left text-xs text-secondary uppercase tracking-wide">
                   <th className="px-4 py-3 font-medium">Employee</th>
                   <th className="px-4 py-3 font-medium">Email</th>
-                  <th className="px-4 py-3 font-medium">Password</th>
+                  <th className="px-4 py-3 font-medium">Login</th>
                   <th className="px-4 py-3 font-medium text-right">Actions</th>
                 </tr>
               </thead>
@@ -124,15 +125,10 @@ export default function CredentialsPage() {
                       ) : <span className="text-xs text-secondary italic">—</span>}
                     </td>
                     <td className="px-4 py-3">
-                      {c.has_login && c.initial_password ? (
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-mono text-xs text-foreground">{c.initial_password}</span>
-                          <button onClick={() => copyText(c.initial_password, 'Password')} title="Copy password" className="p-1 rounded text-secondary hover:text-primary hover:bg-primary/5 shrink-0">
-                            <Copy size={13} />
-                          </button>
-                        </div>
-                      ) : c.has_login ? (
-                        <span className="text-xs text-secondary italic">Changed by user</span>
+                      {c.has_login ? (
+                        <span className={`text-xs ${c.is_active ? 'text-green-700' : 'text-secondary'}`}>
+                          {c.is_active ? 'Active' : 'Deactivated'}
+                        </span>
                       ) : (
                         <span className="text-xs text-amber-700">No login yet</span>
                       )}
@@ -141,21 +137,12 @@ export default function CredentialsPage() {
                       <div className="flex items-center justify-end gap-1.5">
                         {c.has_login ? (
                           <>
-                            {c.initial_password && (
-                              <button
-                                onClick={() => copyText(`Email: ${c.email}\nPassword: ${c.initial_password}`, 'Login')}
-                                title="Copy email + password to share"
-                                className="inline-flex items-center gap-1 px-2.5 py-1.5 border border-border rounded-lg text-xs font-medium hover:bg-muted transition-colors"
-                              >
-                                <ClipboardCopy size={13} /> Copy
-                              </button>
-                            )}
                             <button
                               onClick={() => setResetFor(c)}
                               title="Set a new password"
                               className="inline-flex items-center gap-1 px-2.5 py-1.5 border border-border rounded-lg text-xs font-medium hover:bg-muted transition-colors"
                             >
-                              <RefreshCw size={13} /> Reset
+                              <RefreshCw size={13} /> Set password
                             </button>
                           </>
                         ) : (

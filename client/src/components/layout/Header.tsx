@@ -24,11 +24,11 @@ export default function Header() {
   const [open, setOpen] = useState(false);
 
   // Live identity: the header shows the current email/role from the DB (via
-  // /auth/me, which now reads them fresh), refetched when the tab regains focus —
-  // so an email changed in Admin → User Management appears without a re-login.
+  // /session-context, which reads them fresh from the session), refetched when the tab
+  // regains focus — so an email changed in Admin → User Management appears without a re-login.
   const { data: me } = useQuery({
-    queryKey: ['auth-me'],
-    queryFn: () => api.get('/auth/me').then((r) => r.data),
+    queryKey: ['session-context'],
+    queryFn: () => api.get('/session-context').then((r) => r.data),
     enabled: !!user,
     staleTime: 30_000,
     refetchOnWindowFocus: true,

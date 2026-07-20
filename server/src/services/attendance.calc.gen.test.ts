@@ -67,11 +67,13 @@ describe('overnightHours — same-day, midnight wrap and rounding', () => {
     expect(overnightHours('23:30', '00:30')).toBe(1);
   });
 
-  it('treats an identical in/out punch as a full 24h loop', () => {
-    // With only HH:MM there is no way to tell a zero-length punch from a full
-    // day; diff <= 0 rolls forward by a day, so equal punches read as 24h.
-    expect(overnightHours('09:00', '09:00')).toBe(24);
-    expect(overnightHours('00:00', '00:00')).toBe(24);
+  it('treats an identical in/out punch as zero elapsed time, not a 24h loop', () => {
+    // An identical First_In / Last_Out is a single swipe the export duplicated —
+    // zero real work, not a full day. Only diff < 0 (out earlier than in) rolls
+    // forward over midnight; diff === 0 stays 0. The caller then classifies such a
+    // day as a miss punch rather than a 24h "present" day.
+    expect(overnightHours('09:00', '09:00')).toBe(0);
+    expect(overnightHours('00:00', '00:00')).toBe(0);
   });
 
   it('rounds worked hours to two decimals', () => {

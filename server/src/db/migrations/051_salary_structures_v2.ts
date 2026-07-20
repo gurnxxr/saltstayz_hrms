@@ -63,4 +63,27 @@ export async function down(knex: Knex): Promise<void> {
   await knex.raw('DROP INDEX IF EXISTS salary_structures_job_title_unique');
   await knex.raw('DROP INDEX IF EXISTS salary_structures_name_unique');
   await knex.schema.dropTableIfExists('salary_structures');
+
+  // up() replaced migration 009's per-employee `salary_structures` table with the v2
+  // designation-level one. The `payslips` table (also from 009) still holds a foreign key
+  // to `salary_structures`; dropping the v2 table above would leave that FK dangling and
+  // abort the rest of a `db:rollback` / `db:reset` batch. Recreate the legacy 009-shape
+  // table (empty) so the FK target exists — 009's own down() drops it at the end.
+  if (!(await knex.schema.hasTable('salary_structures'))) {
+    await knex.schema.createTable('salary_structures', (table) => {
+      table.increments('id').primary();
+      table.integer('employee_id').unsigned().notNullable().references('id').inTable('employees').onDelete('CASCADE');
+      table.decimal('basic', 12, 2).notNullable();
+      table.decimal('hra', 12, 2).defaultTo(0);
+      table.decimal('da', 12, 2).defaultTo(0);
+      table.decimal('special_allowance', 12, 2).defaultTo(0);
+      table.decimal('gross', 12, 2).notNullable();
+      table.decimal('pf_deduction', 12, 2).defaultTo(0);
+      table.decimal('esi_deduction', 12, 2).defaultTo(0);
+      table.decimal('tax_deduction', 12, 2).defaultTo(0);
+      table.decimal('net_salary', 12, 2).notNullable();
+      table.date('effective_from').notNullable();
+      table.timestamps(true, true);
+    });
+  }
 }

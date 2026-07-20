@@ -28,6 +28,8 @@ export async function autoMarkAttendance(date?: string) {
     .whereNotNull('ar.working_hours')
     // Leave + punch-derived statuses are authoritative — the threshold job never overwrites them.
     .whereNotIn('ar.status', ['on_leave', 'miss_punch', 'short_punch'])
+    // An HR/manager-approved regularisation is authoritative too — never re-derive it.
+    .whereRaw('COALESCE(ar.is_regularised, 0) = 0')
     .where(function (this: any) {
       this.whereNull('st.process_attendance_after').orWhere('st.process_attendance_after', '<=', target);
     })
@@ -218,9 +220,16 @@ export async function uploadAttendanceCsv(csvContent: string) {
       continue;
     }
 
-    const hasIn = !!row.checkIn;
-    const hasOut = !!row.checkOut;
-    const worked = overnightHours(row.checkIn, row.checkOut); // 0 when a punch is missing
+    const rawIn = !!row.checkIn;
+    const rawOut = !!row.checkOut;
+    // An identical First_In / Last_Out is a single swipe the biometric export
+    // duplicated into both columns — treat it as one punch (a miss punch), not a
+    // full 24h "present" day.
+    const duplicatePunch = rawIn && rawOut && row.checkIn === row.checkOut;
+    const hasIn = rawIn;
+    const hasOut = rawOut && !duplicatePunch;
+
+    const worked = (hasIn && hasOut) ? overnightHours(row.checkIn, row.checkOut) : 0;
     const shift = shiftByKey.get(`${employeeId}|${row.date}`) ?? shiftByEmp.get(employeeId);
     const shiftHours = shift ? overnightHours(shift.start_time, shift.end_time) : 0;
 
@@ -241,15 +250,20 @@ export async function uploadAttendanceCsv(csvContent: string) {
       .first();
 
     if (existing) {
-      // An approved leave (status='on_leave', written by leave approval) is
-      // HR-authoritative — a stray biometric punch must not overwrite it. Keep the
-      // leave status; still capture the punch times for the record.
-      const nextStatus = existing.status === 'on_leave' ? 'on_leave' : status;
+      // HR-authoritative days must never be overwritten by a biometric re-upload:
+      // an approved leave (status='on_leave') OR an HR/manager-approved regularisation
+      // (is_regularised). Overwriting either silently reverts a corrected day back to
+      // its raw punch-derived status — i.e. re-docks approved pay. Leave the record
+      // exactly as HR set it and count it skipped.
+      if (existing.status === 'on_leave' || existing.is_regularised) {
+        results.skipped++;
+        continue;
+      }
       await db('attendance_records').where('id', existing.id).update({
         check_in: checkInDatetime,
         check_out: checkOutDatetime,
         working_hours: workingHours,
-        status: nextStatus,
+        status,
         ...(location ? { location } : {}),
         updated_at: db.fn.now(),
       });

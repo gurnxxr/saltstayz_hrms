@@ -3,7 +3,7 @@ import db from '../config/database';
 import { NotFoundError, ValidationError } from '../utils/errors';
 import {
   getCtcRange, getStructureByJobTitle, seedEmployeeStructureFromTemplate,
-  editorLines, previewStructure, saveEmployeeStructure,
+  editorLines, previewStructure, saveEmployeeStructure, getMonthlyCtcMap,
 } from './salaryStructure.service';
 import { listSalaryComponents } from './salaryComponent.service';
 import { assertCtcMeetsMinimumWage } from './statutory.service';
@@ -585,11 +585,25 @@ export async function transferToManager(id: number, userId: number, notes?: stri
   const employee = await db('employees').where('id', candidate.employee_id).first();
   if (!employee) throw new NotFoundError('Employee');
 
+  // Stamp the monthly CTC (planning figure) so the Manpower & Budget Control guardrail
+  // counts this hire — it only sees employees with employees.monthly_ctc set. Prefer the
+  // live salary structure (cloned onto the employee at offer acceptance); fall back to the
+  // offer's annual CTC / 12. Leaving it null let hiring slip past the sanctioned headcount.
+  let monthlyCtc = employee.monthly_ctc ?? null;
+  if (monthlyCtc == null) {
+    monthlyCtc = (await getMonthlyCtcMap([employee.id])).get(employee.id) ?? null;
+  }
+  if (monthlyCtc == null) {
+    const offer = await db('offer_letters').where('candidate_id', id).first();
+    if (offer?.offered_ctc) monthlyCtc = Math.round(Number(offer.offered_ctc) / 12);
+  }
+
   await db.transaction(async (trx) => {
     await transition(candidate, 'transferred', userId, notes, trx);
     await trx('employees').where('id', employee.id).update({
       is_active: true,
       employment_status: 'active',
+      ...(monthlyCtc != null ? { monthly_ctc: monthlyCtc } : {}),
       updated_at: trx.fn.now(),
     });
   });
