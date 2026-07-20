@@ -33,7 +33,10 @@ export function overnightHours(checkIn?: string | null, checkOut?: string | null
   const outMin = toMinutes(checkOut);
   if (inMin == null || outMin == null) return 0;
   let diff = outMin - inMin;
-  if (diff <= 0) diff += 24 * 60; // crossed midnight
+  // Equal in/out (diff === 0) means a single swipe the export duplicated into both
+  // First_In and Last_Out — that is zero elapsed time, NOT a 24h day. Only a genuinely
+  // earlier out-than-in (diff < 0) crosses midnight and rolls forward a day.
+  if (diff < 0) diff += 24 * 60; // crossed midnight
   return round2(diff / 60);
 }
 

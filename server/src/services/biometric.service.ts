@@ -2,6 +2,13 @@ import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import db from '../config/database';
 import { ValidationError, NotFoundError } from '../utils/errors';
+import { getPaySchedule } from './paySchedule.service';
+import { overnightHours, deriveAttendanceStatus } from './attendance.calc';
+
+// "Today" in India — device clocks report IST. Deriving the default date from UTC
+// (toISOString) rolls it a day early during the 00:00–05:30 IST window and would
+// process the wrong calendar day. en-CA formats as YYYY-MM-DD.
+const istToday = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
 // ─── API Key Management ───
 
@@ -45,37 +52,62 @@ export async function receivePunch(log: PunchLog) {
 
   await upsertDevice(log.device_sn);
 
-  const [id] = await db('biometric_logs').insert({
-    employee_code: log.employee_code,
+  // Idempotent ingest: a device re-transmitting its buffer must not create duplicate
+  // punches. (employee_code, log_datetime, device_sn) is unique — a repeat is a no-op.
+  const dupeKey = { employee_code: log.employee_code, log_datetime: log.log_datetime, device_sn: log.device_sn };
+  const existing = await db('biometric_logs').where(dupeKey).first();
+  if (existing) {
+    return { id: existing.id, matched: !!employee, duplicate: true, employee_name: employee ? `${employee.first_name} ${employee.last_name}` : null };
+  }
+
+  // onConflict().ignore() is the race backstop if two identical punches arrive together.
+  const inserted = await db('biometric_logs').insert({
+    ...dupeKey,
     employee_id: employee?.id || null,
-    log_datetime: log.log_datetime,
     log_time: log.log_time,
-    device_sn: log.device_sn,
     downloaded_at: log.downloaded_at || null,
     status: employee ? 'pending' : 'unmatched',
-  });
+  }).onConflict().ignore();
+  const id = Array.isArray(inserted) ? inserted[0] : inserted;
 
-  return { id, matched: !!employee, employee_name: employee ? `${employee.first_name} ${employee.last_name}` : null };
+  return { id: id ?? null, matched: !!employee, duplicate: false, employee_name: employee ? `${employee.first_name} ${employee.last_name}` : null };
 }
 
 export async function receivePunchBatch(logs: PunchLog[]) {
   if (!Array.isArray(logs) || logs.length === 0) throw new ValidationError('Logs array is required and must not be empty');
   if (logs.length > 1000) throw new ValidationError('Maximum 1000 logs per batch');
 
-  const results = { received: 0, matched: 0, unmatched: 0, errors: [] as string[] };
+  const results = { received: 0, matched: 0, unmatched: 0, duplicates: 0, errors: [] as string[] };
 
   const employeeCodes = [...new Set(logs.map(l => l.employee_code))];
   const employees = await db('employees').whereIn('employee_code', employeeCodes);
   const empMap = new Map(employees.map((e: any) => [e.employee_code, e]));
 
-  const deviceSns = [...new Set(logs.map(l => l.device_sn))];
+  // Only register devices for rows that actually carry a serial. A missing device_sn is
+  // a per-row validation error (reported below) — it must not abort the whole batch by
+  // reaching upsertDevice(undefined) with an undefined Knex binding.
+  const deviceSns = [...new Set(logs.map(l => l.device_sn).filter((s): s is string => !!s && !!String(s).trim()))];
   for (const sn of deviceSns) await upsertDevice(sn);
+
+  // Idempotent ingest: skip punches already stored (a device re-transmitting its buffer)
+  // and de-dupe within the batch. (employee_code, log_datetime, device_sn) is the key.
+  const keyOf = (l: PunchLog) => `${l.employee_code}|${l.log_datetime}|${l.device_sn}`;
+  const seen = new Set<string>();
+  const stored = await db('biometric_logs')
+    .whereIn('employee_code', employeeCodes)
+    .whereIn('log_datetime', [...new Set(logs.map(l => l.log_datetime))])
+    .select('employee_code', 'log_datetime', 'device_sn');
+  for (const r of stored as any[]) seen.add(`${r.employee_code}|${String(r.log_datetime)}|${r.device_sn}`);
 
   for (let i = 0; i < logs.length; i++) {
     const log = logs[i];
     try {
       validatePunchLog(log);
       const employee = empMap.get(log.employee_code);
+
+      const key = keyOf(log);
+      if (seen.has(key)) { results.duplicates++; continue; }
+      seen.add(key);
 
       await db('biometric_logs').insert({
         employee_code: log.employee_code,
@@ -85,7 +117,7 @@ export async function receivePunchBatch(logs: PunchLog[]) {
         device_sn: log.device_sn,
         downloaded_at: log.downloaded_at || null,
         status: employee ? 'pending' : 'unmatched',
-      });
+      }).onConflict().ignore(); // race backstop against a concurrent identical batch
 
       results.received++;
       if (employee) results.matched++;
@@ -101,45 +133,96 @@ export async function receivePunchBatch(logs: PunchLog[]) {
 // ─── Processing: Raw Logs → Attendance Records ───
 
 export async function processLogs(date?: string) {
-  const targetDate = date || new Date().toISOString().split('T')[0];
+  const targetDate = date || istToday();
+  const dayStart = `${targetDate} 00:00:00`;
+  const dayEnd = `${targetDate} 23:59:59`;
 
-  const logs = await db('biometric_logs')
+  // Pending, matched logs decide which employees to (re)process and which log rows to
+  // mark done. There may already be processed logs for the same day (an earlier run).
+  const pending = await db('biometric_logs')
     .where('is_processed', false)
     .whereNotNull('employee_id')
     .where('status', 'pending')
-    .whereBetween('log_datetime', [`${targetDate} 00:00:00`, `${targetDate} 23:59:59`])
+    .whereBetween('log_datetime', [dayStart, dayEnd])
     .orderBy('log_datetime', 'asc');
 
-  if (logs.length === 0) return { processed: 0, records_created: 0, records_updated: 0 };
+  if (pending.length === 0) return { processed: 0, records_created: 0, records_updated: 0, records_skipped: 0, date: targetDate };
 
-  const grouped = new Map<number, typeof logs>();
-  for (const log of logs) {
-    const existing = grouped.get(log.employee_id) || [];
-    existing.push(log);
-    grouped.set(log.employee_id, existing);
+  const empIds = [...new Set(pending.map((l: any) => l.employee_id as number))];
+
+  // Recompute check-in/out from ALL of the day's punches for these employees (already
+  // processed + newly pending), NOT just the pending subset. Otherwise a second run
+  // after the check-out punch arrives would recompute from that punch alone, overwrite
+  // the real check-in and blank the working hours.
+  const allDay = await db('biometric_logs')
+    .whereNotNull('employee_id')
+    .whereIn('employee_id', empIds)
+    .whereBetween('log_datetime', [dayStart, dayEnd])
+    .orderBy('log_datetime', 'asc');
+  const byEmp = new Map<number, any[]>();
+  for (const l of allDay as any[]) {
+    const a = byEmp.get(l.employee_id) || [];
+    a.push(l); byEmp.set(l.employee_id, a);
   }
+
+  // Shift + grace from the same source as the CSV path, so status is derived consistently.
+  const schedule = await getPaySchedule();
+  const graceMinutes = schedule.grace_minutes;
+  const standardDayHours = schedule.standard_day_hours;
+  const rosterRows = await db('shift_rosters as r')
+    .join('shift_types as st', 'st.id', 'r.shift_type_id')
+    .whereIn('r.employee_id', empIds).where('r.date', targetDate)
+    .select('r.employee_id', 'st.start_time', 'st.end_time');
+  const shiftByEmpDate = new Map<number, any>(rosterRows.map((r: any) => [r.employee_id, r]));
+  const assignRows = await db('employee_shift_assignments as a')
+    .join('shift_types as st', 'st.id', 'a.shift_type_id')
+    .whereIn('a.employee_id', empIds)
+    .select('a.employee_id', 'st.start_time', 'st.end_time');
+  const shiftByEmp = new Map<number, any>(assignRows.map((r: any) => [r.employee_id, r]));
 
   let recordsCreated = 0;
   let recordsUpdated = 0;
+  let recordsSkipped = 0;
   const processedIds: number[] = [];
 
-  for (const [employeeId, empLogs] of grouped) {
-    const sorted = empLogs.sort((a: any, b: any) => a.log_datetime.localeCompare(b.log_datetime));
-    const checkIn = sorted[0].log_datetime;
-    const checkOut = sorted.length > 1 ? sorted[sorted.length - 1].log_datetime : null;
+  for (const employeeId of empIds) {
+    const dayLogs = (byEmp.get(employeeId) || []).sort((a: any, b: any) =>
+      String(a.log_datetime).localeCompare(String(b.log_datetime)));
+    const times = [...new Set(dayLogs.map((l: any) => String(l.log_datetime)))];
+    const checkIn = times[0] ?? null;
+    // A single distinct punch (even if the device duplicated it) is a miss punch, not a
+    // full-day pair — only 2+ distinct times give a check-out.
+    const checkOut = times.length > 1 ? times[times.length - 1] : null;
+    const hasIn = checkIn != null;
+    const hasOut = checkOut != null;
 
     let workingHours: number | null = null;
-    if (checkIn && checkOut) {
-      const diff = new Date(checkOut).getTime() - new Date(checkIn).getTime();
+    if (hasIn && hasOut) {
+      const diff = new Date(checkOut as string).getTime() - new Date(checkIn as string).getTime();
       workingHours = Math.round((diff / (1000 * 60 * 60)) * 100) / 100;
     }
 
-    const status = workingHours && workingHours >= 4 ? (workingHours >= 7 ? 'present' : 'half_day') : 'present';
+    const shift = shiftByEmpDate.get(employeeId) ?? shiftByEmp.get(employeeId);
+    const shiftHours = shift ? overnightHours(shift.start_time, shift.end_time) : 0;
+    // Real ladder: present / short_punch / miss_punch (not the old inverted rule that
+    // marked sub-threshold and single-punch days 'present' and never produced anything else).
+    const status = deriveAttendanceStatus({
+      hasIn, hasOut, workedHours: workingHours ?? 0,
+      shiftHours: shiftHours || standardDayHours,
+      graceMinutes,
+    });
 
+    const pendingIdsForEmp = pending.filter((l: any) => l.employee_id === employeeId).map((l: any) => l.id);
     const existing = await db('attendance_records')
-      .where('employee_id', employeeId)
-      .where('date', targetDate)
-      .first();
+      .where('employee_id', employeeId).where('date', targetDate).first();
+
+    // HR-authoritative days (approved leave or an approved regularisation) are never
+    // overwritten from punches — mark the logs processed so they don't re-queue, and skip.
+    if (existing && (existing.status === 'on_leave' || existing.is_regularised)) {
+      recordsSkipped++;
+      processedIds.push(...pendingIdsForEmp);
+      continue;
+    }
 
     if (existing) {
       await db('attendance_records').where('id', existing.id).update({
@@ -162,14 +245,14 @@ export async function processLogs(date?: string) {
       recordsCreated++;
     }
 
-    processedIds.push(...sorted.map((l: any) => l.id));
+    processedIds.push(...pendingIdsForEmp);
   }
 
   if (processedIds.length > 0) {
     await db('biometric_logs').whereIn('id', processedIds).update({ is_processed: true, status: 'processed', updated_at: db.fn.now() });
   }
 
-  return { processed: processedIds.length, records_created: recordsCreated, records_updated: recordsUpdated, date: targetDate };
+  return { processed: processedIds.length, records_created: recordsCreated, records_updated: recordsUpdated, records_skipped: recordsSkipped, date: targetDate };
 }
 
 // ─── Query Logs ───
@@ -202,7 +285,7 @@ export async function getLogs(filters: { date?: string; employee_code?: string; 
 }
 
 export async function getLogStats(date?: string) {
-  const targetDate = date || new Date().toISOString().split('T')[0];
+  const targetDate = date || istToday();
 
   const stats = await db('biometric_logs')
     .whereBetween('log_datetime', [`${targetDate} 00:00:00`, `${targetDate} 23:59:59`])
