@@ -37,10 +37,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const emptyOverrides = { granted: [], denied: [] };
 
+  // Better Auth (mounted on the API) owns identity + the session cookie; the app owns
+  // authorization, so we hydrate the signed-in user + permissions + overrides from
+  // /session-context. The session cookie rides along automatically (axios withCredentials).
   async function checkAuth() {
     const seq = ++authSeq.current;
     try {
-      const { data } = await api.get('/auth/me');
+      const { data } = await api.get('/session-context');
       if (seq !== authSeq.current) return; // superseded by a login/logout — ignore
       setState({ user: data.user, permissions: data.permissions, overrides: data.overrides ?? emptyOverrides, isLoading: false });
     } catch {
@@ -50,8 +53,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function login(email: string, password: string) {
-    const { data } = await api.post('/auth/login', { email, password });
+    // Better Auth signs the user in and sets the session cookie; then hydrate context.
+    await api.post('/auth/sign-in/email', { email, password });
     authSeq.current++; // this session supersedes any in-flight checkAuth()
+    const { data } = await api.get('/session-context');
     // THE cross-user cache-safety mechanism: per-user query keys stay unscoped
     // everywhere because login/logout wipe the whole cache here.
     queryClient.clear();
@@ -62,7 +67,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function logout() {
     authSeq.current++; // supersede any in-flight checkAuth()
-    await api.post('/auth/logout');
+    await api.post('/auth/sign-out'); // Better Auth revokes the session + clears the cookie
     queryClient.clear(); // wipe cached per-user data so the next sign-in starts fresh
     setState({ user: null, permissions: [], overrides: emptyOverrides, isLoading: false });
     router.push('/login');

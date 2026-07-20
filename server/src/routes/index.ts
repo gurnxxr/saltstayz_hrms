@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import authRoutes from './auth.routes';
+import { authenticate } from '../middleware/auth';
+import { sessionContext } from '../controllers/auth.controller';
 import employeeRoutes from './employee.routes';
 import attendanceRoutes from './attendance.routes';
 import leaveRoutes from './leave.routes';
@@ -23,7 +24,9 @@ import regularisationRoutes from './regularisation.routes';
 
 const router = Router();
 
-router.use('/auth', authRoutes);
+// Sign-in/out live under /auth/* (handled by Better Auth, mounted in app.ts before this
+// router). The client hydrates its session — user + permissions + overrides — from here.
+router.get('/session-context', authenticate, sessionContext);
 router.use('/employees', employeeRoutes);
 router.use('/attendance', attendanceRoutes);
 router.use('/leave', leaveRoutes);

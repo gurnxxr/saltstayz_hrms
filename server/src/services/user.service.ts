@@ -2,6 +2,34 @@ import db from '../config/database';
 import bcrypt from 'bcryptjs';
 import { NotFoundError, ValidationError } from '../utils/errors';
 
+// The password is stored ONLY as a bcrypt hash in Better Auth's `account` table (its
+// credential store) — never in readable form. Creates the row for a new login, updates it on
+// reset. The admin who sets it sees the value once (they typed/generated it) to hand over.
+async function upsertCredentialAccount(userId: number, passwordHash: string) {
+  const now = new Date().toISOString();
+  const existing = await db('account').where({ userId, providerId: 'credential' }).first();
+  if (existing) {
+    await db('account').where('id', existing.id).update({ password: passwordHash, updatedAt: now });
+  } else {
+    await db('account').insert({
+      accountId: String(userId), providerId: 'credential', userId,
+      password: passwordHash, createdAt: now, updatedAt: now,
+    });
+  }
+}
+
+/** The Better Auth user columns a Knex-inserted login must also fill. */
+async function betterAuthUserFields(roleId: number, employeeId?: number | null) {
+  const role = await db('roles').where('id', roleId).first();
+  if (!role) throw new ValidationError('Invalid role');
+  let name = '';
+  if (employeeId) {
+    const emp = await db('employees').where('id', employeeId).select('first_name', 'last_name').first();
+    if (emp) name = `${emp.first_name} ${emp.last_name}`.trim();
+  }
+  return { name, email_verified: 1, role: role.name };
+}
+
 export async function listUsers(filters: { search?: string; role_id?: string; is_active?: string }) {
   const query = db('users')
     .join('roles', 'roles.id', 'users.role_id')
@@ -87,16 +115,16 @@ export async function createUser(data: {
     if (empUser) throw new ValidationError('This employee already has a user account');
   }
 
-  const password_hash = await bcrypt.hash(data.password, 12);
+  const hash = await bcrypt.hash(data.password, 12);
   const [id] = await db('users').insert({
     email: data.email,
-    password_hash,
+    password_hash: hash, // legacy mirror; auth reads the account credential below
     role_id: data.role_id,
     employee_id: data.employee_id || null,
-    // Keep the admin-set plaintext so it can be copied & shared with the new hire
-    // (Admin → User Credentials). Cleared once the user changes their own password.
-    initial_password: data.password,
+    ...(await betterAuthUserFields(data.role_id, data.employee_id)),
   });
+  // The real credential Better Auth verifies at sign-in.
+  await upsertCredentialAccount(id, hash);
 
   return getUser(id);
 }
@@ -175,17 +203,17 @@ export async function resetPassword(id: number, newPassword: string) {
   const user = await db('users').where('id', id).first();
   if (!user) throw new NotFoundError('User');
 
-  const password_hash = await bcrypt.hash(newPassword, 12);
-  await db('users').where('id', id).update({ password_hash, initial_password: newPassword, updated_at: db.fn.now() });
+  const hash = await bcrypt.hash(newPassword, 12);
+  await upsertCredentialAccount(id, hash);                       // Better Auth credential
+  await db('users').where('id', id).update({ password_hash: hash, updated_at: db.fn.now() }); // legacy mirror
   return { message: 'Password reset successfully' };
 }
 
 /**
- * Every active EMPLOYEE with their login and shareable password, for Admin → User
- * Credentials. Employees without a login appear too (email/password null) so the admin
- * can spot who still needs one. `initial_password` is the plaintext the admin last set
- * (or the known seed password); it is null once the user changes their own password —
- * the UI shows that as "changed by user". Admin-only: the plaintext is returned nowhere else.
+ * Every active EMPLOYEE with their login (email, role, whether they have a login, active),
+ * for Admin → User Credentials. Employees without a login appear too so the admin can spot
+ * who still needs one. Passwords are NEVER returned — they are stored only as bcrypt hashes;
+ * an admin uses "Set / reset password" to assign a new one and hands it over at that moment.
  */
 export async function listCredentials() {
   const rows = await db('employees as e')
@@ -194,7 +222,7 @@ export async function listCredentials() {
     .where('e.is_active', true)
     .select(
       'e.id as employee_id', 'e.first_name', 'e.last_name', 'e.employee_code', 'e.email as employee_email',
-      'u.id as user_id', 'u.email as login_email', 'u.initial_password', 'u.is_active as user_active',
+      'u.id as user_id', 'u.email as login_email', 'u.is_active as user_active',
       'r.name as role_name',
     )
     .orderBy('e.first_name');
@@ -207,7 +235,6 @@ export async function listCredentials() {
     employee_code: row.employee_code,
     email: row.login_email || row.employee_email || null,
     role_name: row.role_name ?? null,
-    initial_password: row.initial_password ?? null,
     has_login: !!row.user_id,
     is_active: !!row.user_active,
   }));
@@ -231,32 +258,32 @@ async function deriveUniqueEmail(emp: any): Promise<string> {
 }
 
 /**
- * Fill every gap on the credentials tab with the shared demo password 1234: create a
- * login (role "employee") for any active employee who has none, and set 1234 as the
- * shareable password for any login whose password isn't known (never set, or the user
- * changed it). Logins that already have a known password are left untouched. Idempotent.
+ * Create a login (role "employee", password 1234) for any active employee who has none, so
+ * an admin can hand it over. Existing logins are left untouched — passwords are stored only
+ * as hashes now, so a login whose password an admin doesn't remember is reset via the
+ * "Set / reset password" action instead. Idempotent.
  */
 export async function fillMissingCredentials() {
   const employees = await db('employees').where('is_active', true)
     .select('id', 'first_name', 'last_name', 'employee_code', 'email');
   const role = await db('roles').where('name', 'employee').first();
   if (!role) throw new ValidationError('The "employee" role is missing.');
-  // One hash, reused — everyone here shares the demo password 1234.
-  const password_hash = await bcrypt.hash('1234', 12);
+  const hash = await bcrypt.hash('1234', 12); // shared demo password for the new logins
 
-  let created = 0, updated = 0;
+  let created = 0;
   for (const emp of employees) {
     const user = await db('users').where('employee_id', emp.id).first();
-    if (!user) {
-      const email = await deriveUniqueEmail(emp);
-      await db('users').insert({ email, password_hash, initial_password: '1234', role_id: role.id, employee_id: emp.id });
-      created += 1;
-    } else if (!user.initial_password) {
-      await db('users').where('id', user.id).update({ password_hash, initial_password: '1234', updated_at: db.fn.now() });
-      updated += 1;
-    }
+    if (user) continue; // already has a login — leave it as-is
+    const email = await deriveUniqueEmail(emp);
+    const name = `${emp.first_name} ${emp.last_name}`.trim() || email;
+    const [id] = await db('users').insert({
+      email, password_hash: hash, role_id: role.id, employee_id: emp.id,
+      name, email_verified: 1, role: role.name,
+    });
+    await upsertCredentialAccount(id, hash);
+    created += 1;
   }
-  return { created, updated, total: employees.length };
+  return { created, updated: 0, total: employees.length };
 }
 
 export async function deleteUser(id: number) {
