@@ -43,19 +43,6 @@ npm run build --workspace=server   # tsc
 
 **Client auth:** `useAuth()` from `@/lib/auth` returns `{ user, login, logout, can }`. `usePermissions()` from `@/hooks/usePermissions` has `isAdmin`, `isCHRO`, etc.
 
-## Roles & Logins
-
-| Role | Email | Password |
-|------|-------|----------|
-| admin | gurnoor@saltstayz.com | 1234 |
-| chro | chro@saltstayz.com | 1234 |
-| hr | hr@saltstayz.com | 1234 |
-| cluster_hr | clusterhr@saltstayz.com | 1234 |
-| property_manager | fo@saltstayz.com | 1234 |
-| employee | employee@saltstayz.com | 1234 |
-| finance | finance@saltstayz.com | 1234 |
-
-Admin (gurnoor) is linked to employee code 2399.
 
 ## Project Structure
 
