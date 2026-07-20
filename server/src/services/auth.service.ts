@@ -97,7 +97,14 @@ export async function changePassword(userId: number, currentPassword: string, ne
   return { message: 'Password changed successfully' };
 }
 
-const OVERRIDE_ACTIONS = ['create', 'read', 'update', 'delete'];
+// A granted per-employee module override confers FULL access to that module in
+// rbac.ts (authorize() short-circuits to allow for any action once an allowed
+// override is found — it never compares the requested action). So the client-facing
+// permission set must materialise EVERY action the module can carry, otherwise can()
+// on the client hides actions the API actually permits (notably 'approve' and the
+// org-wide 'read_org'). This list is the full action universe defined in the
+// permissions catalog; keep it in lockstep with what rbac.ts grants.
+const OVERRIDE_ACTIONS = ['create', 'read', 'update', 'delete', 'approve', 'read_org'];
 
 export async function getUserPermissions(roleId: number, employeeId?: number | null) {
   let perms = await db('role_permissions')

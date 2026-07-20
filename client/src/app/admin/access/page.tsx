@@ -69,6 +69,15 @@ export default function ModuleAccessPage() {
           <Breadcrumb className="mb-2" items={[{ label: 'Admin', href: '/admin' }, { label: 'Module Access' }]} />
           <h1 className="text-2xl font-bold text-foreground">Module Access</h1>
           <p className="text-secondary mt-1">Search any employee and grant or revoke access to specific modules</p>
+          <div className="mt-3 flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3 max-w-2xl">
+            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+            <span>
+              Granting a module gives <span className="font-semibold">full access</span> to it —
+              every action including create, edit, delete and approvals (and org-wide reads where
+              the module has them), regardless of the person&apos;s role. Grant only modules the
+              employee should fully operate.
+            </span>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-5 items-start">

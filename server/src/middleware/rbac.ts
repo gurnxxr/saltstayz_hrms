@@ -10,7 +10,15 @@ export function authorize(requiredModule: string, requiredAction: string) {
     }
 
     try {
-      // Per-employee module override takes precedence over the role default
+      // Per-employee module override takes precedence over the role default.
+      //
+      // NOTE (intentional, by product decision): a granted override confers access to
+      // the WHOLE module — every action, including create/update/delete, approve and
+      // the org-wide read_org — regardless of `requiredAction`. Granting a module in
+      // Admin → Module Access is deliberately "full access to this module", not merely
+      // view. The client permission list mirrors this (see OVERRIDE_ACTIONS in
+      // auth.service.ts) and the admin UI states it explicitly, so the two stay in
+      // lockstep. Do not narrow this to a per-action check without also revisiting both.
       if (req.user.employeeId) {
         const override = await db('employee_module_access')
           .where({ employee_id: req.user.employeeId, module: requiredModule })

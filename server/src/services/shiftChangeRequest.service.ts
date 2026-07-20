@@ -129,7 +129,11 @@ export async function decideChangeRequest(
     .first();
   if (!cr) throw new NotFoundError('Shift change request');
   if (cr.status !== 'pending') throw new ValidationError('This request has already been decided.');
-  if (!HR_ROLES.includes(approver.roleName) && cr.reporting_manager_id !== approver.employeeId) {
+  // Fail closed when the approver has no employee record: without this, an approver
+  // whose employeeId is null and a request whose reporting_manager_id is also null
+  // slip through (null !== null is false), letting a non-manager decide the request.
+  if (!HR_ROLES.includes(approver.roleName) &&
+      (approver.employeeId == null || cr.reporting_manager_id !== approver.employeeId)) {
     throw new ForbiddenError('Only the reporting manager or HR can decide this request.');
   }
 
