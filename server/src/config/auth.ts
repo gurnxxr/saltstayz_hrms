@@ -1,4 +1,3 @@
-import path from 'path';
 import Database from 'better-sqlite3';
 import { betterAuth } from 'better-auth';
 import { admin } from 'better-auth/plugins';
@@ -10,10 +9,12 @@ import { env } from './env';
 // two connections coexist). It ADOPTS the existing integer `users` table (numeric ids via
 // generateId:'serial') so the ~50 downstream foreign keys to users.id are preserved; it adds
 // its own `session`, `account`, `verification` tables (created by migration 084).
-const authDb = new Database(path.join(__dirname, '../../data/hrms.db'));
+const authDb = new Database(env.DATABASE_PATH);
+// Set busy_timeout BEFORE switching journal modes, so the WAL pragma itself waits for a transient
+// lock (e.g. during a reload or a backup) instead of throwing SQLITE_BUSY at startup.
+authDb.pragma('busy_timeout = 5000');
 authDb.pragma('journal_mode = WAL');
 authDb.pragma('foreign_keys = ON');
-authDb.pragma('busy_timeout = 5000');
 
 export const auth = betterAuth({
   database: authDb,
@@ -40,6 +41,14 @@ export const auth = betterAuth({
     database: { generateId: 'serial' },
     cookiePrefix: 'saltstayz',
     useSecureCookies: env.NODE_ENV === 'production',
+    // Production only: the Vercel front end and this API live on different sites, so the browser
+    // only returns the session cookie on cross-site requests when it is SameSite=None + Secure.
+    // In dev we keep the defaults (localhost over http), where None/Secure would stop the cookie
+    // from being stored at all. (If the API is ever put on a SUBDOMAIN of the front end's domain,
+    // prefer crossSubDomainCookies + SameSite=Lax instead — more robust than None.)
+    ...(env.NODE_ENV === 'production'
+      ? { defaultCookieAttributes: { sameSite: 'none' as const, secure: true } }
+      : {}),
   },
   user: {
     modelName: 'users',

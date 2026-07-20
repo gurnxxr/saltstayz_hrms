@@ -14,6 +14,12 @@ import routes from './routes';
 
 const app = express();
 
+// In production the app sits behind a reverse proxy / load balancer (Railway, Fly, Render, nginx…).
+// Trust the first proxy hop so (a) req.protocol/req.secure reflect the real HTTPS request — needed
+// to issue Secure cookies — and (b) the sign-in rate limiter keys on the real client IP instead of
+// the proxy's, which would otherwise put every user in one bucket and lock the whole team out.
+if (env.NODE_ENV === 'production') app.set('trust proxy', 1);
+
 app.use(helmet({
   contentSecurityPolicy: env.NODE_ENV === 'production' ? undefined : false,
   crossOriginEmbedderPolicy: false,
