@@ -31,6 +31,9 @@ export function generatePayslipPdf(data: PayslipPdfData): Promise<Buffer> {
 
     // Old stored snapshots (pre component-based structures) are adapted to lines.
     const b = legacyBreakdownToLines(data.breakdown);
+    // Reimbursements are paid with salary (outside gross) and folded into BOTH net_pay
+    // and CTC by the engine — so they must be shown, or those totals won't reconcile.
+    const reimbTotal = b.reimbursements.reduce((s, l) => s + l.amount, 0);
     const pageLeft = 50;
     const pageRight = doc.page.width - 50;
     const contentW = pageRight - pageLeft;
@@ -124,10 +127,25 @@ export function generatePayslipPdf(data: PayslipPdfData): Promise<Buffer> {
 
     y = Math.max(ly, ry) + 16;
 
+    // ─── Reimbursements (paid with salary, outside gross) — shown so Net Pay reconciles ───
+    if (b.reimbursements.length > 0) {
+      doc.rect(pageLeft, y, contentW, 22).fill(BRAND);
+      doc.fontSize(9).font('Helvetica-Bold').fillColor('#ffffff').text('REIMBURSEMENTS (paid with salary)', pageLeft + 10, y + 7);
+      doc.fontSize(9).font('Helvetica-Bold').fillColor('#ffffff').text('Amount', pageRight - 100, y + 7, { width: 90, align: 'right' });
+      y += 22;
+      b.reimbursements.forEach((l, i) => {
+        if (i % 2 === 1) doc.rect(pageLeft, y, contentW, 20).fill('#fafafa');
+        doc.fontSize(9).font('Helvetica').fillColor(DARK).text(l.name, pageLeft + 10, y + 6, { width: contentW - 120 });
+        doc.fontSize(9).font('Helvetica').fillColor(DARK).text(inr(l.amount), pageRight - 100, y + 6, { width: 90, align: 'right' });
+        y += 20;
+      });
+      y += 12;
+    }
+
     // ─── Net pay banner ───
     doc.roundedRect(pageLeft, y, contentW, 40, 6).fill(BRAND);
     doc.fontSize(11).font('Helvetica-Bold').fillColor('#ffffff')
-      .text('Net Pay (Gross Earnings - Total Deduction)', pageLeft + 16, y + 14);
+      .text(reimbTotal > 0 ? 'Net Pay (Gross - Deductions + Reimbursements)' : 'Net Pay (Gross Earnings - Total Deduction)', pageLeft + 16, y + 14);
     doc.fontSize(14).font('Helvetica-Bold').fillColor('#ffffff')
       .text(inr(b.net_pay), pageRight - 160, y + 12, { width: 144, align: 'right' });
     y += 50;
@@ -149,14 +167,27 @@ export function generatePayslipPdf(data: PayslipPdfData): Promise<Buffer> {
       y += 17;
     };
 
+    // Reconcile the CTC breakdown with the printed Total CTC. The engine counts employer
+    // PF/ESI toward CTC only when the config says so (Statutory Components), so showing
+    // their raw amounts unconditionally made the listed items exceed the Total. Derive the
+    // employer statutory ACTUALLY in CTC from the identity
+    //   ctc = gross + employer_statutory_in_ctc + employer_costs + reimbursements.
     ctcRow('Gross Earnings', b.gross_earnings, false, true);
-    ctcRow('Employer Statutory Contributions', b.employer_pf + b.employer_esi + b.employer_lwf, false, true);
-    ctcRow('Employer PF', b.employer_pf, true);
-    ctcRow('Employer ESI / Medical Benefit', b.employer_esi, true);
-    ctcRow('Employer LWF', b.employer_lwf, true);
+    const employerStatInCtc = Math.round(b.ctc - b.gross_earnings - b.employer_costs_total - reimbTotal);
+    if (employerStatInCtc > 0) {
+      ctcRow('Employer Statutory Contributions', employerStatInCtc, false, true);
+      // employer_lwf is always in CTC; the remainder is the employer PF/ESI that counts.
+      const pfEsiInCtc = employerStatInCtc - b.employer_lwf;
+      if (pfEsiInCtc > 0) ctcRow('Employer PF / ESI', pfEsiInCtc, true);
+      if (b.employer_lwf > 0) ctcRow('Employer LWF', b.employer_lwf, true);
+    }
     if (b.employer_costs.length > 0) {
       ctcRow('Employer Benefits', b.employer_costs_total, false, true);
       for (const l of b.employer_costs) ctcRow(l.name, l.amount, true);
+    }
+    if (b.reimbursements.length > 0) {
+      ctcRow('Reimbursements', reimbTotal, false, true);
+      for (const l of b.reimbursements) ctcRow(l.name, l.amount, true);
     }
 
     y += 4;

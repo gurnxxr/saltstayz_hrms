@@ -185,14 +185,19 @@ export async function getStatutoryRates(cityOrState?: string | null): Promise<St
   };
 }
 
-/** Lowest configured minimum wage for a state (null when none configured). */
+/** Lowest configured, currently-effective minimum wage for a state (null when none). */
 export async function getMinimumWageFor(state: string): Promise<number | null> {
-  const rows = await db(MW_TABLE).where('state', state).select('monthly_wage');
-  if (!rows.length) return null;
-  const general = await db(MW_TABLE).where({ state, category: 'general' }).first();
-  if (general) return Number(general.monthly_wage) || null;
-  // Ignore zero/non-numeric rows so a state with only bad data returns null,
-  // never Infinity (which would flag every slip below "min wage").
+  // Only wages effective on or before today apply — a future-dated wage must NOT take
+  // effect until its date (effective-dating was previously ignored entirely, so a
+  // future entry began flagging slips immediately).
+  const today = new Date().toISOString().slice(0, 10);
+  const rows = await db(MW_TABLE)
+    .where('state', state)
+    .andWhere((q: any) => q.whereNull('effective_from').orWhere('effective_from', '<=', today))
+    .select('monthly_wage');
+  // Honour the documented "lowest configured minimum wage" contract — do NOT special-case
+  // the 'general' category (which could be higher than a skilled/unskilled row). Ignore
+  // zero/non-numeric rows so a state with only bad data returns null, never Infinity.
   const valid = rows.map((r: any) => Number(r.monthly_wage)).filter((w) => Number.isFinite(w) && w > 0);
   return valid.length ? Math.min(...valid) : null;
 }

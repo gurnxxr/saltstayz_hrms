@@ -455,7 +455,9 @@ export async function getCtcRegister() {
         const structureRow = await getStructureRow(asg.structure_id);
         const state = await getEmployeeState(r.employee_id);
         const bd = await computeForStructure(structureRow, num(asg.base), null, undefined, { state });
-        gross = bd.gross_earnings; net = bd.net_pay; ctc = bd.ctc;
+        // Net is take-home AFTER the assignment's manual TDS (computeForStructure doesn't
+        // receive it), otherwise Net overstates take-home for anyone with TDS configured.
+        gross = bd.gross_earnings; net = bd.net_pay - num(asg.tds_amount); ctc = bd.ctc;
         totals.gross += gross; totals.net += net; totals.ctc += ctc; totals.configured += 1;
       } catch { /* leave nulls for a structure that can't resolve */ }
     }
@@ -557,7 +559,10 @@ export async function getSalaryOverview() {
         v.epf = round(bd.employee_pf); v.esi = round(bd.esi); v.pt = round(bd.pt); v.lwf = round(bd.lwf);
         for (const c of deductions) v[`c${c.id}`] = lineAmt(bd.other_deductions, c.id);
         v.tds = round(num(asg.tds_amount));
-        v.net = round(bd.net_pay);
+        // Net Pay must subtract the TDS shown in its own column, or the row is internally
+        // inconsistent (Net overstated by the TDS amount). computeForStructure's net_pay
+        // is pre-TDS, so deduct it here.
+        v.net = round(bd.net_pay) - v.tds;
         v.employer_epf = round(bd.employer_pf); v.employer_esi = round(bd.employer_esi); v.employer_lwf = round(bd.employer_lwf);
         for (const c of benefits) v[`c${c.id}`] = lineAmt(bd.employer_costs, c.id);
         for (const c of reimbursements) v[`c${c.id}`] = lineAmt(bd.reimbursements, c.id);

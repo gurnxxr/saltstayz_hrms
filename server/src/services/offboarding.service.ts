@@ -1,6 +1,7 @@
 import db from '../config/database';
 import { NotFoundError, ValidationError, AppError } from '../utils/errors';
 import { getMonthlyBreakdown } from './payslip.service';
+import { getCurrentPeriod } from './leave.service';
 import { notifyEmployee } from './notification.service';
 import { notifyReplacementNeeded } from './manpower.service';
 
@@ -28,6 +29,31 @@ function diffMonths(from?: string | null, to?: string | null): number | null {
   const b = to ? new Date(to) : new Date();
   if (isNaN(a.getTime()) || isNaN(b.getTime())) return null;
   return Math.max(0, Math.round((b.getTime() - a.getTime()) / (1000 * 60 * 60 * 24 * 30.44)));
+}
+
+/**
+ * Gratuity tenure from EXACT calendar dates (not rounded 30.44-day months). Returns the
+ * completed years (drives the 5-year eligibility) and the years for the amount (the
+ * Payment of Gratuity Act rounds a trailing period over 6 months up to a full year).
+ * Using rounded months for eligibility let 4 years 11.9 months round up to 5 and wrongly
+ * pay gratuity — this counts real anniversaries instead.
+ */
+function gratuityTenure(from?: string | null, to?: string | null): { completed: number; forAmount: number } {
+  if (!from || !to) return { completed: 0, forAmount: 0 };
+  const a = new Date(from);
+  const b = new Date(to);
+  if (isNaN(a.getTime()) || isNaN(b.getTime()) || b < a) return { completed: 0, forAmount: 0 };
+  let completed = b.getFullYear() - a.getFullYear();
+  const beforeAnniv = b.getMonth() < a.getMonth() || (b.getMonth() === a.getMonth() && b.getDate() < a.getDate());
+  if (beforeAnniv) completed -= 1;
+  completed = Math.max(0, completed);
+  // Months past the last completed anniversary (for the >6-month rounding of the amount).
+  const anniv = new Date(a);
+  anniv.setFullYear(a.getFullYear() + completed);
+  let extraMonths = (b.getFullYear() - anniv.getFullYear()) * 12 + (b.getMonth() - anniv.getMonth());
+  if (b.getDate() < anniv.getDate()) extraMonths -= 1;
+  extraMonths = Math.max(0, extraMonths);
+  return { completed, forAmount: completed + (extraMonths > 6 ? 1 : 0) };
 }
 
 function daysInMonth(dateStr: string): number {
@@ -111,24 +137,45 @@ function safeParse(s: string) { try { return JSON.parse(s); } catch { return nul
 export async function computeFnF(
   employeeId: number, lastWorkingDay: string, dateOfJoining?: string | null, noticePeriodDays = 0,
 ) {
-  const breakdown = await getMonthlyBreakdown(employeeId);
+  const lwd = new Date(lastWorkingDay);
+  const month = lwd.getMonth() + 1;
+  const year = lwd.getFullYear();
+
+  // Monthly employees use a full-month breakdown (no attendance), then we prorate by the
+  // days worked into the final month. Hourly-rated pay has no "full month" figure — its
+  // breakdown needs the attendance period and is already the earned amount, so pass the
+  // final month/year and skip the day proration. (Previously the period-less call threw a
+  // 422 for hourly employees, breaking every getCase for them.)
+  let breakdown: any;
+  let hourly = false;
+  try {
+    breakdown = await getMonthlyBreakdown(employeeId);
+  } catch (e: any) {
+    if (e?.statusCode === 422) {
+      hourly = true;
+      breakdown = await getMonthlyBreakdown(employeeId, month, year);
+    } else {
+      throw e;
+    }
+  }
   if (!breakdown) return null;
 
-  const lwd = new Date(lastWorkingDay);
   const dim = daysInMonth(lastWorkingDay);
   const daysWorked = lwd.getDate(); // days into the final month
-  const perDayNet = breakdown.net_pay / dim;
-  const proratedSalary = Math.round(perDayNet * daysWorked);
+  const proratedSalary = hourly
+    ? Math.round(breakdown.net_pay) // hours-based: already the earned amount for the final month
+    : Math.round((breakdown.net_pay / dim) * daysWorked);
 
-  // Leave encashment — remaining balance × (basic / 30). Best-effort from entitlements.
+  // Leave encashment — encashable balance × (basic / 30). Best-effort from entitlements.
   const leaveBalance = await remainingLeaveBalance(employeeId);
   const perDayBasic = breakdown.basic / 30;
   const leaveEncashment = Math.round(leaveBalance * perDayBasic);
 
-  // Gratuity — payable after 5 years: (15/26) × last basic × completed years.
+  // Gratuity — payable after 5 COMPLETED years: (15/26) × last basic × years.
+  const tenure = gratuityTenure(dateOfJoining, lastWorkingDay);
+  const years = tenure.completed;
+  const gratuity = years >= 5 ? Math.round((15 / 26) * breakdown.basic * tenure.forAmount) : 0;
   const tenureMonths = diffMonths(dateOfJoining, lastWorkingDay) ?? 0;
-  const years = Math.floor(tenureMonths / 12);
-  const gratuity = years >= 5 ? Math.round((15 / 26) * breakdown.basic * years) : 0;
 
   const earnings = proratedSalary + leaveEncashment + gratuity;
   const deductions = 0; // notice shortfall / advances entered by HR
@@ -151,10 +198,18 @@ export async function computeFnF(
 
 async function remainingLeaveBalance(employeeId: number): Promise<number> {
   try {
-    const row = await db('leave_entitlements')
-      .where('employee_id', employeeId)
-      .sum({ total: 'total_days' })
-      .sum({ used: 'used_days' })
+    // Encashable balance ONLY: F&F pays out unused leave for encashable leave types in
+    // the CURRENT period (the same rule leaveEncashment.service enforces). Summing every
+    // leave type across every year — including non-encashable casual/sick and prior-year
+    // rows — materially overpaid the settlement.
+    const period = await getCurrentPeriod();
+    const row = await db('leave_entitlements as le')
+      .join('leave_types as lt', 'lt.id', 'le.leave_type_id')
+      .where('le.employee_id', employeeId)
+      .where('le.leave_period_id', period.id)
+      .where('lt.is_encashable', true)
+      .sum({ total: 'le.total_days' })
+      .sum({ used: 'le.used_days' })
       .first();
     const bal = Number((row as any)?.total ?? 0) - Number((row as any)?.used ?? 0);
     return Math.max(0, bal);

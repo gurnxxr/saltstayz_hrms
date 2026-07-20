@@ -85,6 +85,7 @@ function esiPeriodKey(month: number, year: number): string {
 
 export async function getMonthlyBreakdown(
   employeeId: number, month?: number, year?: number,
+  opts: { persistEsiPeriod?: boolean } = {},
 ): Promise<PayslipBreakdown | null> {
   // Explicit assignment wins; employees without one fall back to their
   // designation's structure at its default base (new hires keep working).
@@ -192,13 +193,17 @@ export async function getMonthlyBreakdown(
   // ESI contribution period (Phase 5): reuse the period's persisted coverage
   // decision; on first encounter this month's contracted wage sets it, so a
   // mid-period raise across the ceiling can't drop coverage until the next period.
+  //
+  // Only a REAL payroll write (opts.persistEsiPeriod) may set the decision — a read-only
+  // preview (F&F, leave-encashment rate, staff draft view) must never freeze coverage,
+  // since it can run for an arbitrary month and would lock the period from the wrong one.
   let esiCoveredOverride: boolean | null = null;
   let esiPeriodToPersist: string | null = null;
   if (hasPeriod) {
     const periodKey = esiPeriodKey(month!, year!);
     const existing = await db('employee_esi_periods').where({ employee_id: employeeId, period_key: periodKey }).first();
     if (existing) esiCoveredOverride = !!existing.covered;
-    else esiPeriodToPersist = periodKey;
+    else if (opts.persistEsiPeriod) esiPeriodToPersist = periodKey;
   }
 
   const breakdown = await computeForStructure(structure, base, attendance, extraLines, {
@@ -221,11 +226,12 @@ export async function getMonthlyBreakdown(
 
 export async function computeForEmployee(
   employeeId: number, month: number, year: number,
+  opts: { persistEsiPeriod?: boolean } = {},
 ): Promise<ComputedPayslip> {
   assertValidPeriod(month, year);
 
   const emp = await employeeOrThrow(employeeId);
-  const breakdown = await getMonthlyBreakdown(employeeId, month, year);
+  const breakdown = await getMonthlyBreakdown(employeeId, month, year, opts);
   if (!breakdown) {
     throw new AppError('Salary not configured for this employee or their designation. Please contact HR.', 422);
   }
@@ -328,7 +334,7 @@ export async function generatePayslip(
     throw new AppError('Payroll for this month is locked. Please contact HR.', 409);
   }
 
-  const computed = await computeForEmployee(employeeId, month, year);
+  const computed = await computeForEmployee(employeeId, month, year, { persistEsiPeriod: true });
   const id = await writePayslipRecord(computed, run?.id ?? null, generatedBy);
 
   await notifyEmployee(employeeId, {
@@ -444,8 +450,9 @@ export async function runPayroll(month: number, year: number, userId?: number | 
     const who = { employee_code: emp.employee_code, name: `${emp.first_name} ${emp.last_name}` };
     try {
       // Period-aware compute so hourly-rated employees are included (a period-less
-      // pre-check used to throw for them and silently skip every one).
-      const computed = await computeForEmployee(emp.id, month, year);
+      // pre-check used to throw for them and silently skip every one). This is a real
+      // payroll write, so it may freeze the ESI contribution-period coverage.
+      const computed = await computeForEmployee(emp.id, month, year, { persistEsiPeriod: true });
       await writePayslipRecord(computed, run.id, userId);
       generated += 1;
       totalNet += computed.breakdown.net_pay;
@@ -460,6 +467,15 @@ export async function runPayroll(month: number, year: number, userId?: number | 
       else failed.push({ ...who, reason });
     }
   }
+
+  // Drop slips for employees no longer in the active set (departed since a prior run of
+  // this month), so they don't linger in the run details, the salary register (the bank
+  // hand-off), or the recomputed totals. Only inactive employees are removed — everyone
+  // active was just (re)generated above.
+  const activeIds = employees.map((e: any) => e.id);
+  const purge = db('payslip_history').where({ month, year });
+  if (activeIds.length) purge.whereNotIn('employee_id', activeIds);
+  await purge.del();
 
   await db('payroll_runs').where('id', run.id).update({
     employee_count: generated,
@@ -535,7 +551,7 @@ export async function upsertAdjustment(
   else await db('payroll_adjustments').insert({ employee_id: employeeId, month, year, ...patch });
 
   // Regenerate this employee's slip so the review grid shows the corrected numbers.
-  const computed = await computeForEmployee(employeeId, month, year);
+  const computed = await computeForEmployee(employeeId, month, year, { persistEsiPeriod: !!run });
   if (run) {
     await writePayslipRecord(computed, run.id, userId);
     await refreshRunTotals(run.id, month, year);
@@ -750,6 +766,9 @@ export async function unlockRun(month: number, year: number, userId?: number | n
   if (!reason || !reason.trim()) throw new AppError('An unlock reason is required.', 400);
   const run = await getRun(month, year);
   if (!run) throw new NotFoundError('Payroll run');
+  // Only a locked run can be unlocked — otherwise a still-draft run gets bogus unlock
+  // provenance for a lock that never happened.
+  if (run.status !== 'locked') throw new AppError('This payroll run is not locked.', 400);
   // Preserve lock provenance (locked_by / locked_at) — record who unlocked and why.
   await db('payroll_runs').where('id', run.id).update({
     status: 'draft',

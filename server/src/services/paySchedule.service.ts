@@ -86,6 +86,11 @@ export async function updatePaySchedule(input: any, userId?: number) {
   // only as the fallback for weeks with no published roster, so preserve it (or seed
   // the Mon–Fri default) rather than requiring it on save.
   const existing = await db(TABLE).orderBy('id').first();
+  // A save is a MERGE onto the stored settings: any field the form omits keeps its stored
+  // value (falling back to DEFAULTS only when there is no row yet). Previously every
+  // omitted field silently reset to its DEFAULT — most visibly fixed_working_days, which
+  // the UI doesn't expose, so it could never hold anything but 30.
+  const current = parseRow(existing);
   let workWeekJson: string = existing?.work_week ?? JSON.stringify(DEFAULTS.work_week);
   if (Array.isArray(input.work_week) && input.work_week.length) {
     const days = Array.from(new Set(input.work_week.map(Number))) as number[];
@@ -94,10 +99,10 @@ export async function updatePaySchedule(input: any, userId?: number) {
   }
 
   // ── Salary calculation method ──
-  const method = String(input.salary_calculation_method);
+  const method = input.salary_calculation_method != null ? String(input.salary_calculation_method) : current.salary_calculation_method;
   if (!CALC_METHODS.includes(method as any)) throw new ValidationError('Invalid salary calculation method.');
 
-  let fixedDays = DEFAULTS.fixed_working_days;
+  let fixedDays = current.fixed_working_days;
   if (input.fixed_working_days != null) {
     fixedDays = Number(input.fixed_working_days);
     if (!Number.isInteger(fixedDays) || fixedDays < 1 || fixedDays > 31) {
@@ -106,11 +111,11 @@ export async function updatePaySchedule(input: any, userId?: number) {
   }
 
   // ── Pay date ──
-  const payType = String(input.pay_date_type);
+  const payType = input.pay_date_type != null ? String(input.pay_date_type) : current.pay_date_type;
   if (!PAY_DATE_TYPES.includes(payType as any)) throw new ValidationError('Invalid pay date type.');
 
-  let payDay = DEFAULTS.pay_date_day;
-  if (payType === 'fixed_day') {
+  let payDay = current.pay_date_day;
+  if (payType === 'fixed_day' && input.pay_date_day != null) {
     payDay = Number(input.pay_date_day);
     if (!Number.isInteger(payDay) || payDay < 1 || payDay > 31) {
       throw new ValidationError('Pay date day must be between 1 and 31.');
@@ -118,11 +123,12 @@ export async function updatePaySchedule(input: any, userId?: number) {
   }
 
   // ── Attendance policies (Phase 3) ──
-  const unmarkedPolicy = input.unmarked_day_policy === 'absent' ? 'absent' : 'present';
-  const holidaysPaid = input.holidays_paid === undefined ? true : !!input.holidays_paid;
+  const unmarkedPolicy = input.unmarked_day_policy != null
+    ? (input.unmarked_day_policy === 'absent' ? 'absent' : 'present') : current.unmarked_day_policy;
+  const holidaysPaid = input.holidays_paid === undefined ? current.holidays_paid : !!input.holidays_paid;
 
   // ── Overtime multiplier (Phase 4) ──
-  let otMultiplier = DEFAULTS.overtime_multiplier;
+  let otMultiplier = current.overtime_multiplier;
   if (input.overtime_multiplier != null) {
     otMultiplier = Number(input.overtime_multiplier);
     if (!Number.isFinite(otMultiplier) || otMultiplier < 1 || otMultiplier > 5) {
@@ -130,7 +136,7 @@ export async function updatePaySchedule(input: any, userId?: number) {
     }
   }
 
-  // ── Attendance policy (Phase 2) ──
+  // ── Attendance policy (Phase 2) ── (omitted fields keep their stored value)
   const intIn = (v: any, name: string, min: number, max: number, dflt: number) => {
     if (v == null) return dflt;
     const n = Number(v);
@@ -143,12 +149,12 @@ export async function updatePaySchedule(input: any, userId?: number) {
     if (!Number.isFinite(n) || n < 0 || n > 1) throw new ValidationError(`${name} must be between 0 and 1 day.`);
     return Math.round(n * 10) / 10;
   };
-  const graceMinutes = intIn(input.grace_minutes, 'Grace minutes', 0, 240, DEFAULTS.grace_minutes);
-  const missAllowance = intIn(input.miss_punch_allowance, 'Miss-punch allowance', 0, 31, DEFAULTS.miss_punch_allowance);
-  const missLop = lopIn(input.miss_punch_lop, 'Miss-punch LOP', DEFAULTS.miss_punch_lop);
-  const shortLop = lopIn(input.short_punch_lop, 'Short-punch LOP', DEFAULTS.short_punch_lop);
-  const attendanceGatePct = intIn(input.attendance_gate_pct, 'Attendance coverage threshold', 0, 100, DEFAULTS.attendance_gate_pct);
-  let standardDayHours = DEFAULTS.standard_day_hours;
+  const graceMinutes = intIn(input.grace_minutes, 'Grace minutes', 0, 240, current.grace_minutes);
+  const missAllowance = intIn(input.miss_punch_allowance, 'Miss-punch allowance', 0, 31, current.miss_punch_allowance);
+  const missLop = lopIn(input.miss_punch_lop, 'Miss-punch LOP', current.miss_punch_lop);
+  const shortLop = lopIn(input.short_punch_lop, 'Short-punch LOP', current.short_punch_lop);
+  const attendanceGatePct = intIn(input.attendance_gate_pct, 'Attendance coverage threshold', 0, 100, current.attendance_gate_pct);
+  let standardDayHours = current.standard_day_hours;
   if (input.standard_day_hours != null) {
     standardDayHours = Number(input.standard_day_hours);
     if (!Number.isFinite(standardDayHours) || standardDayHours <= 0 || standardDayHours > 24) {
