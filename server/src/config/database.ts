@@ -1,10 +1,11 @@
 import knex from 'knex';
-import path from 'path';
+import { env } from './env';
 
 const db = knex({
   client: 'better-sqlite3',
   connection: {
-    filename: path.join(__dirname, '../../data/hrms.db'),
+    // Persistent-volume path in production; repo-local default in dev. See env.DATABASE_PATH.
+    filename: env.DATABASE_PATH,
   },
   useNullAsDefault: true,
   pool: {
