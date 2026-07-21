@@ -46,11 +46,11 @@ export async function searchEmployees(q?: string) {
   if (q && q.trim()) {
     const term = `%${q.trim()}%`;
     query.where(function (this: any) {
-      this.where('e.first_name', 'like', term)
-        .orWhere('e.last_name', 'like', term)
-        .orWhere('e.employee_code', 'like', term)
-        .orWhere('jt.title', 'like', term)
-        .orWhereRaw("(e.first_name || ' ' || e.last_name) like ?", [term]);
+      this.where('e.first_name', 'ilike', term)
+        .orWhere('e.last_name', 'ilike', term)
+        .orWhere('e.employee_code', 'ilike', term)
+        .orWhere('jt.title', 'ilike', term)
+        .orWhereRaw("(e.first_name || ' ' || e.last_name) ilike ?", [term]);
     });
   }
   return query;
@@ -102,9 +102,9 @@ export async function setEmployeeAccess(employeeId: number, module: string, allo
   const existing = await db('employee_module_access').where({ employee_id: employeeId, module }).first();
   if (existing) {
     await db('employee_module_access').where('id', existing.id)
-      .update({ allowed: allowed ? 1 : 0, updated_by: updatedBy ?? null, updated_at: db.fn.now() });
+      .update({ allowed: allowed ? true : false, updated_by: updatedBy ?? null, updated_at: db.fn.now() });
   } else {
-    await db('employee_module_access').insert({ employee_id: employeeId, module, allowed: allowed ? 1 : 0, updated_by: updatedBy ?? null });
+    await db('employee_module_access').insert({ employee_id: employeeId, module, allowed: allowed ? true : false, updated_by: updatedBy ?? null });
   }
   return getEmployeeAccess(employeeId);
 }

@@ -90,13 +90,13 @@ export async function createShiftType(data: any) {
 
   // property_id is a vestigial NOT NULL column — set it to any existing property.
   const anyProperty = await db('properties').select('id').first();
-  const [id] = await db('shift_types').insert({
+  const [{ id }] = await db('shift_types').insert({
     name,
     start_time: data.start_time,
     end_time: data.end_time,
     property_id: anyProperty?.id ?? 1,
     ...config,
-  });
+  }).returning('id');
   return getShiftType(id);
 }
 

@@ -71,9 +71,9 @@ export async function addTemplateItem(templateId: number, data: { label: string;
   return db.transaction(async (trx) => {
     const max = await trx('checklist_template_items').where('template_id', templateId).max({ m: 'sort_order' }).first();
     const sort = Number((max as any)?.m || 0) + 1;
-    const [id] = await trx('checklist_template_items').insert({
+    const [{ id }] = await trx('checklist_template_items').insert({
       template_id: templateId, label, category, sort_order: sort, is_active: true,
-    });
+    }).returning('id');
     // Live-sync: hand this new item to every candidate still in this checklist's phase,
     // so an in-flight document-collection list stays matched to the template. A newly
     // added, unticked item re-opens the phase — the stage gate re-blocks advancement.
@@ -177,9 +177,9 @@ export async function ensureInstance(
   // winner's row instead.
   let instanceId: number;
   try {
-    [instanceId] = await cx('checklist_instances').insert({
+    [{ id: instanceId }] = await cx('checklist_instances').insert({
       template_id: template.id, ...where, status: 'pending', initiated_by: userId ?? null,
-    });
+    }).returning('id');
   } catch (err) {
     const winner = await cx('checklist_instances').where({ template_id: template.id, ...where }).first();
     if (winner) return winner;
@@ -344,10 +344,10 @@ export async function addItem(instanceId: number, data: { label: string; categor
   const label = String(data.label || '').trim();
   if (!label) throw new ValidationError('Item label is required');
   const max = await db('checklist_instance_items').where('instance_id', instanceId).max({ m: 'sort_order' }).first();
-  const [id] = await db('checklist_instance_items').insert({
+  const [{ id }] = await db('checklist_instance_items').insert({
     instance_id: instanceId, label, category: data.category || 'General',
     sort_order: Number((max as any)?.m || 0) + 1,
-  });
+  }).returning('id');
   await recomputeStatus(instanceId); // a new unticked item can un-complete the phase
   return db('checklist_instance_items').where('id', id).first();
 }

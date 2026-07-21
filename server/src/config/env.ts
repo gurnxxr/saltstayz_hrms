@@ -14,6 +14,15 @@ if (NODE_ENV === 'production' && !process.env.BETTER_AUTH_SECRET && !process.env
   throw new Error('BETTER_AUTH_SECRET environment variable is required in production');
 }
 
+// PostgreSQL connection string. Dev falls back to a local Postgres so importing this module never
+// needs configuration (the pure-logic tests import services that import the db module, and must
+// stay database-free — nothing here opens a connection).
+const DATABASE_URL = process.env.DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/hrms';
+
+if (NODE_ENV === 'production' && !process.env.DATABASE_URL) {
+  throw new Error('DATABASE_URL environment variable is required in production');
+}
+
 // Many hosts (Railway, Fly, Render, Heroku, …) inject the port to bind as PORT; honour it first,
 // then our own SERVER_PORT, then the local default. Without this the app would bind 5000 while the
 // platform routes to $PORT, and the host would consider the service down.
@@ -27,9 +36,12 @@ export const env = {
   // The API's own base URL (where Better Auth is mounted).
   BETTER_AUTH_URL: process.env.BETTER_AUTH_URL || `http://localhost:${PORT}`,
   SERVER_PORT: PORT,
-  // Where the SQLite file lives. In production this points at a PERSISTENT volume (e.g.
-  // /data/hrms.db) so the database survives restarts and redeploys; locally it defaults to the
-  // repo's server/data/hrms.db. Both the Knex connection and Better Auth read this single value.
+  // PostgreSQL connection (Knex + Better Auth both use this).
+  DATABASE_URL,
+  // Managed Postgres (Neon, Supabase, …) requires TLS; a local Postgres normally doesn't.
+  DATABASE_SSL: !/localhost|127\.0\.0\.1/.test(DATABASE_URL),
+  // LEGACY: path to the old SQLite file. Retained only for the one-time SQLite→Postgres data
+  // copy (db/migrate-sqlite-to-pg.ts); nothing in the running app reads it any more.
   DATABASE_PATH: process.env.DATABASE_PATH || path.join(__dirname, '../../data/hrms.db'),
   CLIENT_URL: process.env.CLIENT_URL || 'http://localhost:3000',
   NODE_ENV,

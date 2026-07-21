@@ -1,12 +1,16 @@
 import type { Knex } from 'knex';
 import path from 'path';
+import { env } from '../config/env';
 
+// Config for the migration/seed CLI (driven by run-migrate.ts). Reads the SAME DATABASE_URL as the
+// runtime connection in config/database.ts, so migrate/seed always target the database the app
+// actually uses — the old version hard-pointed at the local SQLite file and could drift.
 const config: Knex.Config = {
-  client: 'better-sqlite3',
+  client: 'pg',
   connection: {
-    filename: path.join(__dirname, '../../data/hrms.db'),
+    connectionString: env.DATABASE_URL,
+    ssl: env.DATABASE_SSL ? { rejectUnauthorized: false } : false,
   },
-  useNullAsDefault: true,
   migrations: {
     directory: path.join(__dirname, 'migrations'),
     extension: 'ts',
@@ -15,13 +19,7 @@ const config: Knex.Config = {
     directory: path.join(__dirname, 'seeds'),
     extension: 'ts',
   },
-  pool: {
-    afterCreate: (conn: any, cb: any) => {
-      conn.pragma('journal_mode = WAL');
-      conn.pragma('foreign_keys = ON');
-      cb();
-    },
-  },
+  pool: { min: 0, max: 5 },
 };
 
 export default config;

@@ -258,11 +258,11 @@ async function validateStructureInput(data: any, excludeId?: number): Promise<St
 export async function createStructure(data: any, userId?: number | null) {
   const input = await validateStructureInput(data);
   const id = await db.transaction(async (trx) => {
-    const [newId] = await trx('salary_structures').insert({
+    const [{ id: newId }] = await trx('salary_structures').insert({
       name: input.name, description: input.description ?? null, job_title_id: input.job_title_id,
       payment_basis: input.payment_basis, default_base: input.default_base,
-      city: input.city, is_active: input.is_active ? 1 : 0, updated_by: userId ?? null,
-    });
+      city: input.city, is_active: input.is_active ? true : false, updated_by: userId ?? null,
+    }).returning('id');
     await trx('salary_structure_components').insert(
       input.lines.map((l, i) => ({ ...l, structure_id: newId, sort_order: i })),
     );
@@ -282,7 +282,7 @@ export async function updateStructure(id: number, data: any, userId?: number | n
     await trx('salary_structures').where('id', id).update({
       name: input.name, description: input.description ?? null, job_title_id: input.job_title_id,
       payment_basis: input.payment_basis, default_base: input.default_base,
-      city: input.city, is_active: input.is_active ? 1 : 0,
+      city: input.city, is_active: input.is_active ? true : false,
       updated_by: userId ?? null, updated_at: db.fn.now(),
     });
     await trx('salary_structure_components').where('structure_id', id).del();
@@ -671,14 +671,14 @@ export async function saveEmployeeStructure(
     let structure = await trx('salary_structures').where('employee_id', employeeId).first();
     if (!structure) {
       const name = `${emp.first_name ?? ''} ${emp.last_name ?? ''} · ${emp.employee_code ?? employeeId}`.trim();
-      const [newId] = await trx('salary_structures').insert({
+      const [{ id: newId }] = await trx('salary_structures').insert({
         name, description: null, job_title_id: null, employee_id: employeeId,
-        payment_basis, default_base: base, city, is_active: 1, updated_by: userId ?? null,
-      });
+        payment_basis, default_base: base, city, is_active: true, updated_by: userId ?? null,
+      }).returning('id');
       structure = { id: newId };
     } else {
       await trx('salary_structures').where('id', structure.id).update({
-        payment_basis, default_base: base, city, is_active: 1,
+        payment_basis, default_base: base, city, is_active: true,
         updated_by: userId ?? null, updated_at: trx.fn.now(),
       });
     }

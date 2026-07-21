@@ -84,7 +84,7 @@ export async function createPromotion(
 
   const id = await db.transaction(async (trx) => {
     await trx('employees').where('id', emp.id).update({ job_title_id: toJobTitle.id, updated_at: trx.fn.now() });
-    const [newId] = await trx('employee_promotions').insert({
+    const [{ id: newId }] = await trx('employee_promotions').insert({
       employee_id: emp.id,
       promotion_date: data.promotion_date,
       from_job_title_id: emp.job_title_id ?? null,
@@ -93,7 +93,7 @@ export async function createPromotion(
       to_base: newBase > 0 ? newBase : null,
       note: data.note ? String(data.note).trim() : null,
       created_by: userId ?? null,
-    });
+    }).returning('id');
     return newId;
   });
 
@@ -176,7 +176,7 @@ export async function createTransfer(
     if (toBranch) patch.branch_name = toBranch;
     if (toDept) patch.dept_name = toDept;
     await trx('employees').where('id', emp.id).update(patch);
-    const [newId] = await trx('employee_transfers').insert({
+    const [{ id: newId }] = await trx('employee_transfers').insert({
       employee_id: emp.id,
       transfer_date: data.transfer_date,
       from_branch: emp.branch_name ?? null,
@@ -185,7 +185,7 @@ export async function createTransfer(
       to_dept: toDept || null,
       note: data.note ? String(data.note).trim() : null,
       created_by: userId ?? null,
-    });
+    }).returning('id');
     return newId;
   });
 
@@ -224,14 +224,14 @@ export async function scheduleExitInterview(
   if (!emp) throw new NotFoundError('Employee');
   if (!data.interview_date) throw new ValidationError('Interview date is required');
 
-  const [id] = await db('exit_interviews').insert({
+  const [{ id }] = await db('exit_interviews').insert({
     employee_id: emp.id,
     interview_date: data.interview_date,
     status: 'scheduled',
     reason_for_leaving: data.reason_for_leaving ? String(data.reason_for_leaving).trim() : null,
     interviewer_id: userId ?? null,
     created_by: userId ?? null,
-  });
+  }).returning('id');
   const rows = await listExitInterviews();
   return rows.find((r: any) => r.id === id);
 }
@@ -257,7 +257,7 @@ export async function completeExitInterview(
     status: 'completed',
     reason_for_leaving: data.reason_for_leaving ? String(data.reason_for_leaving).trim() : interview.reason_for_leaving,
     overall_rating: rating,
-    would_recommend: data.would_recommend === undefined ? null : (data.would_recommend ? 1 : 0),
+    would_recommend: data.would_recommend === undefined ? null : (data.would_recommend ? true : false),
     feedback: data.feedback ? String(data.feedback).trim() : null,
     suggestions: data.suggestions ? String(data.suggestions).trim() : null,
     interviewer_id: userId ?? interview.interviewer_id,

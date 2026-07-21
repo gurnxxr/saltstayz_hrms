@@ -84,7 +84,7 @@ export async function cloneStructureForEmployee(
   opts: { srcStructureId: number; employeeId: number; name: string; base: number },
 ): Promise<number> {
   const src = await knex('salary_structures').where('id', opts.srcStructureId).first();
-  const [newId] = await knex('salary_structures').insert({
+  const [{ id: newId }] = await knex('salary_structures').insert({
     name: opts.name,
     description: src?.description ?? null,
     job_title_id: null,
@@ -92,8 +92,8 @@ export async function cloneStructureForEmployee(
     payment_basis: src?.payment_basis ?? 'monthly',
     default_base: opts.base,
     city: src?.city ?? 'Haryana',
-    is_active: 1,
-  });
+    is_active: true,
+  }).returning('id');
   const lines = await knex('salary_structure_components')
     .where('structure_id', opts.srcStructureId)
     .select('component_id', 'calculation_type', 'value', 'sort_order');

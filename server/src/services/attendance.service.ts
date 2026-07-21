@@ -29,7 +29,7 @@ export async function autoMarkAttendance(date?: string) {
     // Leave + punch-derived statuses are authoritative — the threshold job never overwrites them.
     .whereNotIn('ar.status', ['on_leave', 'miss_punch', 'short_punch'])
     // An HR/manager-approved regularisation is authoritative too — never re-derive it.
-    .whereRaw('COALESCE(ar.is_regularised, 0) = 0')
+    .whereRaw('COALESCE(ar.is_regularised, false) = false')
     .where(function (this: any) {
       this.whereNull('st.process_attendance_after').orWhere('st.process_attendance_after', '<=', target);
     })
@@ -100,7 +100,8 @@ export async function getMonthSummary(employeeId: number, month: string) {
       db.raw("SUM(CASE WHEN status = 'miss_punch' THEN 1 ELSE 0 END) as miss_punch"),
       db.raw("SUM(CASE WHEN status = 'short_punch' THEN 1 ELSE 0 END) as short_punch"),
       db.raw("SUM(CASE WHEN status = 'on_leave' THEN 1 ELSE 0 END) as on_leave"),
-      db.raw("ROUND(AVG(working_hours), 1) as avg_working_hours")
+      // working_hours is a float column; Postgres only defines round(numeric, int), so cast.
+      db.raw("ROUND(AVG(working_hours)::numeric, 1) as avg_working_hours")
     )
     .first();
 
@@ -324,7 +325,7 @@ export async function listAttendanceUploadLogs(limit = 50) {
 /** True if a (non-failed) attendance upload was recorded today. */
 export async function wasAttendanceUploadedToday(): Promise<boolean> {
   const row = await db('attendance_upload_logs')
-    .whereRaw('date(created_at) = ?', [todayStr()])
+    .whereRaw('created_at::date = ?', [todayStr()])
     .whereNot('status', 'failed')
     .first();
   return !!row;
@@ -341,7 +342,7 @@ export async function ensureDailyAttendanceReminder(user: JwtPayload): Promise<v
     const existing = await db('notifications')
       .where('user_id', user.userId)
       .where('type', 'attendance_upload_reminder')
-      .whereRaw('date(created_at) = ?', [todayStr()])
+      .whereRaw('created_at::date = ?', [todayStr()])
       .first();
     if (existing) return;
     await notify(user.userId, {
@@ -362,7 +363,7 @@ export async function resolveTodaysReminders(): Promise<void> {
     await db('notifications')
       .where('type', 'attendance_upload_reminder')
       .where('is_read', false)
-      .whereRaw('date(created_at) = ?', [todayStr()])
+      .whereRaw('created_at::date = ?', [todayStr()])
       .update({ is_read: true });
   } catch {
     /* non-fatal */
@@ -386,7 +387,8 @@ export async function getPropertySummary(date: string) {
       db.raw("SUM(CASE WHEN ar.status = 'miss_punch' THEN 1 ELSE 0 END) as miss_punch"),
       db.raw("SUM(CASE WHEN ar.status = 'short_punch' THEN 1 ELSE 0 END) as short_punch"),
       db.raw("SUM(CASE WHEN ar.status = 'on_leave' THEN 1 ELSE 0 END) as on_leave"),
-      db.raw("ROUND(AVG(ar.working_hours), 1) as avg_hours")
+      // working_hours is a float column; Postgres only defines round(numeric, int), so cast.
+      db.raw("ROUND(AVG(ar.working_hours)::numeric, 1) as avg_hours")
     )
     .groupByRaw("COALESCE(ar.location, e.branch_name)")
     .orderByRaw("COALESCE(ar.location, e.branch_name)");

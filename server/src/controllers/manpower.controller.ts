@@ -1,12 +1,20 @@
 import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../types';
 import * as svc from '../services/manpower.service';
+import { ValidationError } from '../utils/errors';
 
 // ─── Availability / scope helpers ───
 
 export async function getAvailability(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    const a = await svc.computeAvailability(Number(req.query.property_id), Number(req.query.job_title_id));
+    // Validate before querying: a missing param became NaN, which SQLite tolerated but Postgres
+    // rejects with a 500. A 400 is the honest answer.
+    const propertyId = Number(req.query.property_id);
+    const jobTitleId = Number(req.query.job_title_id);
+    if (!Number.isInteger(propertyId) || !Number.isInteger(jobTitleId)) {
+      throw new ValidationError('property_id and job_title_id are required.');
+    }
+    const a = await svc.computeAvailability(propertyId, jobTitleId);
     res.json(a);
   } catch (err) { next(err); }
 }

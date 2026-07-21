@@ -40,7 +40,7 @@ export async function seed(knex: Knex): Promise<void> {
 
       const first = FIRST[(pi * ACTIVE_PER_PROPERTY + k) % FIRST.length];
       const last = LAST[(pi + k) % LAST.length];
-      const [empId] = await knex('employees').insert({
+      const [{ id: empId }] = await knex('employees').insert({
         employee_code: code,
         first_name: first,
         last_name: last,
@@ -51,7 +51,7 @@ export async function seed(knex: Knex): Promise<void> {
         dept_name: DEPARTMENTS[k % DEPARTMENTS.length],
         branch_name: branch,
         is_active: true,
-      });
+      }).returning('id');
 
       // Attendance for recent dates → attendance-by-property analytics
       for (let di = 0; di < recentDates.length; di++) {
@@ -77,7 +77,7 @@ export async function seed(knex: Knex): Promise<void> {
 
       const first = FIRST[(pi + k + 5) % FIRST.length];
       const last = LAST[(pi + k + 3) % LAST.length];
-      const [empId] = await knex('employees').insert({
+      const [{ id: empId }] = await knex('employees').insert({
         employee_code: code,
         first_name: first,
         last_name: last,
@@ -87,7 +87,7 @@ export async function seed(knex: Knex): Promise<void> {
         dept_name: DEPARTMENTS[(pi + k) % DEPARTMENTS.length],
         branch_name: branch,
         is_active: false,
-      });
+      }).returning('id');
 
       // exit within the last few months for the attrition trend
       const month = 4 + ((exitSeq) % 3); // Apr/May/Jun 2026

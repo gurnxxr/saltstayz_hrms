@@ -76,9 +76,9 @@ export async function listCases(filters: { status?: string; search?: string }) {
 
   if (filters.status) q.where('oc.status', filters.status);
   if (filters.search) {
-    q.where((b) => b.where('e.first_name', 'like', `%${filters.search}%`)
-      .orWhere('e.last_name', 'like', `%${filters.search}%`)
-      .orWhere('e.employee_code', 'like', `%${filters.search}%`));
+    q.where((b) => b.where('e.first_name', 'ilike', `%${filters.search}%`)
+      .orWhere('e.last_name', 'ilike', `%${filters.search}%`)
+      .orWhere('e.employee_code', 'ilike', `%${filters.search}%`));
   }
 
   const cases = await q;
@@ -232,7 +232,7 @@ export async function createCase(data: any, userId: number) {
   if (!data.last_working_day) throw new ValidationError('Last working day is required');
   const exitType = EXIT_TYPES.includes(data.exit_type) ? data.exit_type : 'resignation';
 
-  const [id] = await db('offboarding_cases').insert({
+  const [{ id }] = await db('offboarding_cases').insert({
     employee_id: employeeId,
     status: 'initiated',
     exit_type: exitType,
@@ -241,7 +241,7 @@ export async function createCase(data: any, userId: number) {
     last_working_day: data.last_working_day,
     notice_period_days: data.notice_period_days ? Number(data.notice_period_days) : 0,
     initiated_by: userId,
-  });
+  }).returning('id');
 
   await db('offboarding_items').insert(
     DEFAULT_CLEARANCE.map((c) => ({ case_id: id, category: c.category, item_name: c.item })),
@@ -308,7 +308,7 @@ export async function toggleItem(itemId: number, userId: number) {
 export async function addItem(caseId: number, category: string, itemName: string) {
   const c = await db('offboarding_cases').where('id', caseId).first();
   if (!c) throw new NotFoundError('Offboarding case');
-  const [id] = await db('offboarding_items').insert({ case_id: caseId, category: category || 'General', item_name: itemName });
+  const [{ id }] = await db('offboarding_items').insert({ case_id: caseId, category: category || 'General', item_name: itemName }).returning('id');
   await refreshStatus(caseId);
   return db('offboarding_items').where('id', id).first();
 }

@@ -27,7 +27,7 @@ async function betterAuthUserFields(roleId: number, employeeId?: number | null) 
     const emp = await db('employees').where('id', employeeId).select('first_name', 'last_name').first();
     if (emp) name = `${emp.first_name} ${emp.last_name}`.trim();
   }
-  return { name, email_verified: 1, role: role.name };
+  return { name, email_verified: true, role: role.name };
 }
 
 export async function listUsers(filters: { search?: string; role_id?: string; is_active?: string }) {
@@ -57,15 +57,15 @@ export async function listUsers(filters: { search?: string; role_id?: string; is
 
   if (filters.search) {
     query.where(function () {
-      this.where('users.email', 'like', `%${filters.search}%`)
-        .orWhere('employees.first_name', 'like', `%${filters.search}%`)
-        .orWhere('employees.last_name', 'like', `%${filters.search}%`)
-        .orWhere('employees.employee_code', 'like', `%${filters.search}%`);
+      this.where('users.email', 'ilike', `%${filters.search}%`)
+        .orWhere('employees.first_name', 'ilike', `%${filters.search}%`)
+        .orWhere('employees.last_name', 'ilike', `%${filters.search}%`)
+        .orWhere('employees.employee_code', 'ilike', `%${filters.search}%`);
     });
   }
   if (filters.role_id) query.where('users.role_id', filters.role_id);
   if (filters.is_active !== undefined && filters.is_active !== '') {
-    query.where('users.is_active', filters.is_active === 'true' ? 1 : 0);
+    query.where('users.is_active', filters.is_active === 'true' ? true : false);
   }
 
   return query;
@@ -116,13 +116,13 @@ export async function createUser(data: {
   }
 
   const hash = await bcrypt.hash(data.password, 12);
-  const [id] = await db('users').insert({
+  const [{ id }] = await db('users').insert({
     email: data.email,
     password_hash: hash, // legacy mirror; auth reads the account credential below
     role_id: data.role_id,
     employee_id: data.employee_id || null,
     ...(await betterAuthUserFields(data.role_id, data.employee_id)),
-  });
+  }).returning('id');
   // The real credential Better Auth verifies at sign-in.
   await upsertCredentialAccount(id, hash);
 
@@ -276,10 +276,10 @@ export async function fillMissingCredentials() {
     if (user) continue; // already has a login — leave it as-is
     const email = await deriveUniqueEmail(emp);
     const name = `${emp.first_name} ${emp.last_name}`.trim() || email;
-    const [id] = await db('users').insert({
+    const [{ id }] = await db('users').insert({
       email, password_hash: hash, role_id: role.id, employee_id: emp.id,
-      name, email_verified: 1, role: role.name,
-    });
+      name, email_verified: true, role: role.name,
+    }).returning('id');
     await upsertCredentialAccount(id, hash);
     created += 1;
   }

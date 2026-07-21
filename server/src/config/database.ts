@@ -1,26 +1,19 @@
 import knex from 'knex';
 import { env } from './env';
 
+// PostgreSQL. Unlike the previous SQLite setup there are no pragmas to apply: Postgres enforces
+// foreign keys natively and handles concurrent writers with MVCC, so the old
+// journal_mode/foreign_keys/busy_timeout dance (and the SQLITE_BUSY 500s it guarded against) is
+// gone. The pool is a real connection pool — keep max modest so a small managed instance
+// (e.g. Neon's free tier) isn't exhausted by one app instance.
 const db = knex({
-  client: 'better-sqlite3',
+  client: 'pg',
   connection: {
-    // Persistent-volume path in production; repo-local default in dev. See env.DATABASE_PATH.
-    filename: env.DATABASE_PATH,
+    connectionString: env.DATABASE_URL,
+    // Managed Postgres terminates TLS with its own CA; a local Postgres runs without TLS.
+    ssl: env.DATABASE_SSL ? { rejectUnauthorized: false } : false,
   },
-  useNullAsDefault: true,
-  pool: {
-    afterCreate: (conn: any, cb: any) => {
-      conn.pragma('journal_mode = WAL');
-      conn.pragma('foreign_keys = ON');
-      // Wait up to 5s for a held lock instead of throwing SQLITE_BUSY instantly.
-      // With WAL + a knex connection pool and an audit-log write on nearly every
-      // request, two pooled connections can contend; without this a transient
-      // busy error surfaces as a generic 500 (e.g. a login that only works on
-      // the retry). The driver retries internally within the timeout.
-      conn.pragma('busy_timeout = 5000');
-      cb();
-    },
-  },
+  pool: { min: 0, max: 10 },
 });
 
 export default db;

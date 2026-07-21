@@ -30,10 +30,10 @@ export async function listEmployees(filters: {
   const applyFilters = (q: any) => {
     if (filters.search) {
       q.where(function (this: any) {
-        this.where('e.first_name', 'like', `%${filters.search}%`)
-          .orWhere('e.last_name', 'like', `%${filters.search}%`)
-          .orWhere('e.employee_code', 'like', `%${filters.search}%`)
-          .orWhere('e.email', 'like', `%${filters.search}%`);
+        this.where('e.first_name', 'ilike', `%${filters.search}%`)
+          .orWhere('e.last_name', 'ilike', `%${filters.search}%`)
+          .orWhere('e.employee_code', 'ilike', `%${filters.search}%`)
+          .orWhere('e.email', 'ilike', `%${filters.search}%`);
       });
     }
     if (filters.status === 'active') q.where('e.is_active', true);
@@ -113,7 +113,7 @@ export async function createEmployee(data: any) {
 
   normalizeGender(data);
   if (!data.job_id) data.job_id = await nextJobId(db);
-  const [id] = await db('employees').insert(data);
+  const [{ id }] = await db('employees').insert(data).returning('id');
   return getEmployee(id);
 }
 

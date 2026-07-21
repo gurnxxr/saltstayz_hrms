@@ -3,6 +3,7 @@ import db from '../config/database';
 import { JwtPayload } from '../types';
 import { NotFoundError, ValidationError, ForbiddenError, GuardrailError } from '../utils/errors';
 import { nextJobId } from '../utils/jobId';
+import { LOCK, advisoryXactLock } from '../utils/locks';
 import { notifyRole } from './notification.service';
 import { LIVE_VACANCY_STATUSES } from './recruitment.service';
 import { getMonthlyCtcMap } from './salaryStructure.service';
@@ -258,6 +259,10 @@ export function evaluateGuardrail(a: Availability, ctc: number): GuardrailBlock 
 // ─── Hires ───
 
 async function nextEmployeeCode(trx: Knex.Transaction): Promise<string> {
+  // MAX+1 generators race under MVCC: two transactions read the same max and mint the same code.
+  // employees.employee_code is UNIQUE so a race could never corrupt data, but it would surface as a
+  // constraint-violation 500. Serialising here turns that into a short wait instead.
+  await advisoryXactLock(trx, LOCK.EMPLOYEE_CODE);
   const rows = await trx('employees').where('employee_code', 'like', 'MH-%').select('employee_code');
   let max = 0;
   for (const r of rows) {
@@ -287,7 +292,7 @@ async function insertHire(trx: Knex.Transaction, input: HireInput, ctc: number, 
   const overBand = round2(ctc - a.band_max);
   const doj = input.date_of_joining || today();
 
-  const [employeeId] = await trx('employees').insert({
+  const [{ id: employeeId }] = await trx('employees').insert({
     employee_code: code,
     job_id: await nextJobId(trx),
     first_name: firstName,
@@ -305,7 +310,7 @@ async function insertHire(trx: Knex.Transaction, input: HireInput, ctc: number, 
     created_by_user_id: actor?.userId || null,
     approved_by_user_id: approved ? (actor?.userId || null) : null,
     sanction_variance: overBand > 0 ? overBand : 0,
-  });
+  }).returning('id');
 
   await trx('employee_status_history').insert({
     employee_id: employeeId,
@@ -328,8 +333,13 @@ export async function createHire(input: HireInput, user: JwtPayload) {
   await assertPropertyInScope(user, input.property_id);
 
   return db.transaction(async (trx) => {
-    // Recompute availability INSIDE the transaction so two HRs racing for the last
-    // slot can't both win (SQLite serialises writers).
+    // Serialise hires competing for the same property's budget/headcount. PostgreSQL is MVCC, so
+    // without this lock two HRs racing for the last slot would each read the pre-hire availability,
+    // both pass the guardrail, and both insert — overshooting the sanctioned budget/headcount.
+    // (Under SQLite the single-writer rule made this safe implicitly.)
+    await advisoryXactLock(trx, LOCK.HIRE_BUDGET, input.property_id);
+
+    // Recompute availability INSIDE the transaction, now that we hold the lock.
     const a = await computeAvailability(input.property_id, input.job_title_id, trx);
     if (!a.property_configured) {
       throw new ValidationError('No budget is configured for this property. Ask Admin to set it in Admin → Budget Control first.');
@@ -390,9 +400,9 @@ export async function listEmployees(filters: { property_id?: number; job_title_i
   if (filters.status) q.where('e.employment_status', filters.status);
   if (filters.search) {
     q.where(function () {
-      this.where('e.first_name', 'like', `%${filters.search}%`)
-        .orWhere('e.last_name', 'like', `%${filters.search}%`)
-        .orWhere('e.employee_code', 'like', `%${filters.search}%`);
+      this.where('e.first_name', 'ilike', `%${filters.search}%`)
+        .orWhere('e.last_name', 'ilike', `%${filters.search}%`)
+        .orWhere('e.employee_code', 'ilike', `%${filters.search}%`);
     });
   }
   return q;
@@ -575,12 +585,12 @@ export async function upsertSanction(data: { property_id: number; job_title_id: 
     });
     return db('manpower_sanctions').where('id', existing.id).first();
   }
-  const [id] = await db('manpower_sanctions').insert({
+  const [{ id }] = await db('manpower_sanctions').insert({
     property_id: data.property_id, job_title_id: data.job_title_id,
     sanctioned_headcount: headcount, sanctioned_budget_monthly: budget,
     band_min: bandMin, band_max: bandMax, notes: data.notes || null,
     created_by: user?.userId || null, updated_by: user?.userId || null,
-  });
+  }).returning('id');
   return db('manpower_sanctions').where('id', id).first();
 }
 
@@ -634,7 +644,7 @@ export async function createException(input: HireInput & { request_reason?: stri
   const block = evaluateGuardrail(a, ctc);
   if (!block) throw new ValidationError('This hire is within sanction — no exception is needed.');
 
-  const [id] = await db('manpower_exceptions').insert({
+  const [{ id }] = await db('manpower_exceptions').insert({
     property_id: input.property_id, job_title_id: input.job_title_id,
     requested_by: user?.userId || null, candidate_name: input.name.trim(),
     requested_ctc: ctc, exception_type: block.exception_type,
@@ -645,7 +655,7 @@ export async function createException(input: HireInput & { request_reason?: stri
     suggested_ctc: a.suggested_ctc, variance_amount: block.variance_amount,
     join_date: input.date_of_joining || null, request_reason: input.request_reason || null,
     status: 'pending',
-  });
+  }).returning('id');
   return getException(id);
 }
 
@@ -697,7 +707,7 @@ export async function upsertCluster(data: { id?: number; name: string; descripti
     await db('clusters').where('id', data.id).update({ name: data.name.trim(), description: data.description ?? null, updated_at: db.fn.now() });
     return db('clusters').where('id', data.id).first();
   }
-  const [id] = await db('clusters').insert({ name: data.name.trim(), description: data.description || null });
+  const [{ id }] = await db('clusters').insert({ name: data.name.trim(), description: data.description || null }).returning('id');
   return db('clusters').where('id', id).first();
 }
 

@@ -71,7 +71,7 @@ export async function createChangeRequest(employeeId: number, data: any) {
   // Snapshot what the employee is currently rostered for that day (if anything).
   const cell = await db('shift_rosters').where({ employee_id: employeeId, date }).first();
 
-  const [id] = await db(TABLE).insert({
+  const [{ id }] = await db(TABLE).insert({
     employee_id: employeeId,
     date,
     from_shift_type_id: cell?.shift_type_id ?? null,
@@ -80,7 +80,7 @@ export async function createChangeRequest(employeeId: number, data: any) {
     to_day_type: toDayType,
     reason: data.reason ? String(data.reason).trim() : null,
     status: 'pending',
-  });
+  }).returning('id');
 
   // Notify the reporting manager (an employee id) if one exists.
   if (emp.reporting_manager_id) {

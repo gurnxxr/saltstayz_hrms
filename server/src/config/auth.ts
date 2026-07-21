@@ -1,23 +1,23 @@
-import Database from 'better-sqlite3';
+import { Pool } from 'pg';
 import { betterAuth } from 'better-auth';
 import { admin } from 'better-auth/plugins';
 import bcrypt from 'bcryptjs';
 import { env } from './env';
 
-// Better Auth owns identity + credentials + sessions. It runs against the SAME SQLite file
-// as Knex, on its own better-sqlite3 connection (WAL allows many readers + one writer, so the
-// two connections coexist). It ADOPTS the existing integer `users` table (numeric ids via
-// generateId:'serial') so the ~50 downstream foreign keys to users.id are preserved; it adds
-// its own `session`, `account`, `verification` tables (created by migration 084).
-const authDb = new Database(env.DATABASE_PATH);
-// Set busy_timeout BEFORE switching journal modes, so the WAL pragma itself waits for a transient
-// lock (e.g. during a reload or a backup) instead of throwing SQLITE_BUSY at startup.
-authDb.pragma('busy_timeout = 5000');
-authDb.pragma('journal_mode = WAL');
-authDb.pragma('foreign_keys = ON');
+// Better Auth owns identity + credentials + sessions. It runs against the SAME PostgreSQL database
+// as Knex, on its own small pg pool. It ADOPTS the existing integer `users` table (numeric ids via
+// generateId:'serial') so the ~50 downstream foreign keys to users.id are preserved; it uses its
+// own `session`, `account`, `verification` tables (created by the baseline schema migration).
+// Those three tables use camelCase columns (userId, expiresAt, …) — the baseline creates them with
+// exactly those quoted names, which is what Better Auth's query layer expects.
+const authPool = new Pool({
+  connectionString: env.DATABASE_URL,
+  ssl: env.DATABASE_SSL ? { rejectUnauthorized: false } : false,
+  max: 5,
+});
 
 export const auth = betterAuth({
-  database: authDb,
+  database: authPool,
   secret: env.BETTER_AUTH_SECRET,
   baseURL: env.BETTER_AUTH_URL,
   basePath: '/api/v1/auth',

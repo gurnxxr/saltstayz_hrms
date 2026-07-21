@@ -28,14 +28,14 @@ export async function listProperties() {
 }
 
 export async function createProperty(data: { name: string; hotel_id?: string; city?: string; state?: string; address?: string; category?: string }) {
-  const [id] = await db('properties').insert({
+  const [{ id }] = await db('properties').insert({
     name: requiredField(data.name, 'Property name'),
     hotel_id: data.hotel_id?.trim() || null,
     city: requiredField(data.city, 'City'),
     state: validState(data.state),
     address: requiredField(data.address, 'Address'),
     category: requiredField(data.category, 'Category'),
-  });
+  }).returning('id');
   return db('properties').where('id', id).first();
 }
 
@@ -103,7 +103,7 @@ export async function createDepartment(data: { name: string; working_hours_per_d
   if (!name) throw new ValidationError('Department name is required');
   const existing = await db('departments').whereRaw('lower(name) = lower(?)', [name]).first();
   if (existing) throw new ValidationError('A department with this name already exists');
-  const [id] = await db('departments').insert({ name, working_hours_per_day: validWorkingHours(data.working_hours_per_day) });
+  const [{ id }] = await db('departments').insert({ name, working_hours_per_day: validWorkingHours(data.working_hours_per_day) }).returning('id');
   return db('departments').where('id', id).first();
 }
 
@@ -153,7 +153,7 @@ export async function createPropertyCategory(data: { name: string }) {
   if (!name) throw new ValidationError('Category name is required');
   const existing = await db('property_categories').whereRaw('lower(name) = lower(?)', [name]).first();
   if (existing) throw new ValidationError('A category with this name already exists');
-  const [id] = await db('property_categories').insert({ name });
+  const [{ id }] = await db('property_categories').insert({ name }).returning('id');
   return db('property_categories').where('id', id).first();
 }
 
@@ -193,7 +193,7 @@ export async function listJobTitles() {
 
 export async function createJobTitle(data: { title: string; description?: string }) {
   if (!data.title?.trim()) throw new ValidationError('Job title is required');
-  const [id] = await db('job_titles').insert(data);
+  const [{ id }] = await db('job_titles').insert(data).returning('id');
   return db('job_titles').where('id', id).first();
 }
 
@@ -220,7 +220,7 @@ export async function listCategories() {
 
 export async function createCategory(data: { name: string }) {
   if (!data.name?.trim()) throw new ValidationError('Category name is required');
-  const [id] = await db('employee_categories').insert(data);
+  const [{ id }] = await db('employee_categories').insert(data).returning('id');
   return db('employee_categories').where('id', id).first();
 }
 
@@ -247,7 +247,7 @@ export async function listPayGrades() {
 
 export async function createPayGrade(data: { name: string; min_salary?: number; max_salary?: number }) {
   if (!data.name?.trim()) throw new ValidationError('Pay grade name is required');
-  const [id] = await db('pay_grades').insert(data);
+  const [{ id }] = await db('pay_grades').insert(data).returning('id');
   return db('pay_grades').where('id', id).first();
 }
 
@@ -272,7 +272,7 @@ export async function listStatuses() {
 
 export async function createStatus(data: { name: string }) {
   if (!data.name?.trim()) throw new ValidationError('Status name is required');
-  const [id] = await db('employment_statuses').insert(data);
+  const [{ id }] = await db('employment_statuses').insert(data).returning('id');
   return db('employment_statuses').where('id', id).first();
 }
 

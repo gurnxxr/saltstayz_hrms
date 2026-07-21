@@ -93,10 +93,10 @@ export async function createSalaryComponent(input: any, userId?: number) {
   const status = input.status === 'inactive' ? 'inactive' : 'active';
   const config = buildConfig(category, input.config);
 
-  const [id] = await db(TABLE).insert({
+  const [{ id }] = await db(TABLE).insert({
     category, name, name_in_payslip: namePayslip, status, is_system: 0, config: JSON.stringify(config),
     sort_order: 9999, updated_by: userId || null,
-  });
+  }).returning('id');
   return parseRow(await db(TABLE).where('id', id).first());
 }
 

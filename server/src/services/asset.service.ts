@@ -28,7 +28,7 @@ export async function createAssetType(data: { name: string; category?: string })
   if (!name) throw new ValidationError('Item name is required');
   const dupe = await db('asset_types').whereRaw('lower(name) = ?', [name.toLowerCase()]).first();
   if (dupe) throw new ValidationError('An item with this name already exists');
-  const [id] = await db('asset_types').insert({ name, category: category(data.category) });
+  const [{ id }] = await db('asset_types').insert({ name, category: category(data.category) }).returning('id');
   return db('asset_types').where('id', id).first();
 }
 
@@ -48,7 +48,7 @@ export async function updateAssetType(
     patch.name = name;
   }
   if (data.category !== undefined) patch.category = category(data.category);
-  if (data.is_active !== undefined) patch.is_active = data.is_active ? 1 : 0;
+  if (data.is_active !== undefined) patch.is_active = data.is_active ? true : false;
 
   await db('asset_types').where('id', id).update(patch);
   return db('asset_types').where('id', id).first();
@@ -95,7 +95,7 @@ export async function createAssignment(
   if (!type.is_active) throw new ValidationError('This item is inactive — reactivate it in the catalog first');
   if (!data.assigned_date) throw new ValidationError('Assigned date is required');
 
-  const [id] = await db('asset_assignments').insert({
+  const [{ id }] = await db('asset_assignments').insert({
     employee_id: emp.id,
     asset_type_id: type.id,
     identifier: clean(data.identifier) || null,
@@ -103,7 +103,7 @@ export async function createAssignment(
     assigned_by: userId ?? null,
     status: 'assigned',
     note: clean(data.note) || null,
-  });
+  }).returning('id');
   return assignmentSelect().where('a.id', id).first();
 }
 
@@ -280,7 +280,7 @@ export async function bulkUploadAssetAssignments(csvContent: string, userId?: nu
     if (assetTypeId === undefined) {
       const existing = await db('asset_types').whereRaw('lower(name) = ?', [typeKey]).first();
       if (existing) assetTypeId = existing.id;
-      else { const [id] = await db('asset_types').insert({ name: itemName, category: 'Other' }); assetTypeId = id; }
+      else { const [{ id }] = await db('asset_types').insert({ name: itemName, category: 'Other' }).returning('id'); assetTypeId = id; }
       typeCache.set(typeKey, assetTypeId!);
     }
 
