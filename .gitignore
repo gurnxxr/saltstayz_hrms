@@ -22,3 +22,8 @@ server/data/
 Thumbs.db
 ~$*
 uploads/
+
+# tooling artifacts (machine-local)
+.neon
+skills-lock.json
+.claude/skills/
