@@ -6,7 +6,7 @@ Internal HR Management System for SaltStayz hospitality chain. Monorepo with Nex
 
 - **Client:** Next.js 16.2.9 (App Router, Turbopack), React 19, TypeScript 5, Tailwind CSS 4
 - **Server:** Express 4, TypeScript 5, Knex.js query builder
-- **Database:** SQLite via better-sqlite3 (NOT PostgreSQL). WAL mode, foreign keys enabled.
+- **Database:** PostgreSQL via `pg` (migrated from SQLite). Connect with `DATABASE_URL`; managed hosts (Neon) need SSL.
 - **Auth:** JWT in httpOnly cookies, bcrypt password hashing, RBAC via `authorize(module, action)` middleware
 - **Monorepo:** npm workspaces — `client/` and `server/`
 
@@ -33,7 +33,7 @@ npm run build --workspace=server   # tsc
 
 **DB import:** `import db from '../config/database'` — NOT `../db/connection`.
 
-**SQLite insert returns ID, not row:** `const [id] = await db('table').insert(data)`.
+**Insert must ask for the id:** `const [{ id }] = await db('table').insert(data).returning('id')`. Postgres returns nothing from a bare `.insert()`.
 
 **Next.js 16 dynamic params:** `{ params }: { params: Promise<{ id: string }> }` then `const { id } = use(params)`.
 
@@ -67,7 +67,10 @@ HRMS/
 
 ## Do NOT
 
-- Use PostgreSQL syntax — this is SQLite
+- Use SQLite-only SQL (`strftime`, `date(col)`, `VACUUM INTO`, `IFNULL`) — this is PostgreSQL
+- Compare or write booleans as `1`/`0` — use `true`/`false` (real boolean columns)
+- Use `LIKE` for user-facing search — use `ilike` (Postgres `LIKE` is case-sensitive)
+- Assume writers serialise — Postgres is MVCC; use the advisory locks in `utils/locks.ts` for check-then-insert
 - Use `employees.property_id` or `employees.department_id` — these columns were dropped in migration 011
 - Import from `../db/connection` — use `../config/database`
 - Use Prisma, Drizzle, or any ORM — use Knex only

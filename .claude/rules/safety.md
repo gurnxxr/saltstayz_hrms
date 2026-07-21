@@ -32,3 +32,7 @@ This happens when dev servers don't shut down cleanly. Always `Ctrl+C` before cl
 - **Chrome extension timeout on localhost** — Turbopack HMR WebSocket keeps page non-idle. Use `javascript_tool` instead of `find`/`read_page`, or take desktop screenshots.
 - **Empty bash output from `npx tsx -e "..."`** — Write to a script file and run `npx tsx scriptfile.ts` instead.
 - **`Cannot find module '../db/connection'`** — Wrong import. Use `import db from '../config/database'`.
+- **`function round(double precision, integer) does not exist`** — Postgres only has `round(numeric, int)`. Cast: `round(avg(col)::numeric, 1)`.
+- **`column "x" is of type boolean but expression is of type integer`** — writing `1`/`0` to a boolean column. Use `true`/`false`.
+- **Insert returns `undefined` id** — missing `.returning('id')` on a Postgres insert.
+- **`database "hrms" does not exist`** — `DATABASE_URL` points at the wrong Postgres (check for another server already on 5432).

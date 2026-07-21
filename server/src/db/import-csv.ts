@@ -67,7 +67,7 @@ async function run() {
 
     for (const title of designations) {
       if (!existingMap[title]) {
-        const [id] = await db('job_titles').insert({ title });
+        const [{ id }] = await db('job_titles').insert({ title }).returning('id');
         existingMap[title] = id;
         console.log(`  Created job title: "${title}" (id=${id})`);
       }

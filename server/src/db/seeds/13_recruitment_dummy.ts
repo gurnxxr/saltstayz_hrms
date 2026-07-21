@@ -37,12 +37,12 @@ export async function seed(knex: Knex): Promise<void> {
   for (const p of props) {
     for (const role of Object.keys(roleDept)) {
       if (!jt[role] || !dept[roleDept[role]]) continue;
-      const [vacId] = await knex('vacancies').insert({
+      const [{ id: vacId }] = await knex('vacancies').insert({
         job_title_id: jt[role], department_id: dept[roleDept[role]], property_id: p.id,
         positions: 2, filled: 0, status: 'listed',
         description: `DUMMY: ${role} opening at ${p.name}`,
         reporting_manager_id: mgr?.id || null, posted_by: admin?.id,
-      });
+      }).returning('id');
 
       const n = 3 + (idx % 3); // 3–5 candidates per vacancy
       for (let k = 0; k < n; k++) {

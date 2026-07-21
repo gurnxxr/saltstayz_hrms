@@ -134,7 +134,7 @@ export async function requestRegularisation(employeeId: number, data: Regularisa
     }
   }
 
-  const [id] = await db('attendance_regularisations').insert({
+  const [{ id }] = await db('attendance_regularisations').insert({
     attendance_id: null,
     employee_id: employeeId,
     date: start,
@@ -142,7 +142,7 @@ export async function requestRegularisation(employeeId: number, data: Regularisa
     requested_status: type,
     reason,
     status: 'pending',
-  });
+  }).returning('id');
 
   // Alert the reporting manager (the approver) that a request awaits action.
   if (emp.reporting_manager_id) {
@@ -260,12 +260,12 @@ export async function approveRegularisation(id: number, approverId: number, role
         });
         if (firstAttendanceId === null) firstAttendanceId = existing.id;
       } else {
-        const [newId] = await trx('attendance_records').insert({
+        const [{ id: newId }] = await trx('attendance_records').insert({
           employee_id: reg.employee_id,
           date,
           status,
           is_regularised: true,
-        });
+        }).returning('id');
         if (firstAttendanceId === null) firstAttendanceId = newId;
       }
       applied += 1;

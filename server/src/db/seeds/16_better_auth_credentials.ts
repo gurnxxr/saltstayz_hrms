@@ -13,7 +13,7 @@ export async function seed(knex: Knex): Promise<void> {
     ) WHERE name IS NULL OR name = ''
   `);
   await knex.raw(`UPDATE users SET role = (SELECT r.name FROM roles r WHERE r.id = users.role_id) WHERE role IS NULL`);
-  await knex('users').whereNull('email_verified').update({ email_verified: 1 });
+  await knex('users').whereNull('email_verified').update({ email_verified: true });
 
   const users = await knex('users').select('id', 'password_hash');
   const now = new Date().toISOString();

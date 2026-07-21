@@ -1,109 +1,101 @@
 # Deploying SaltStayz HRMS
 
-The front end runs on **Vercel**. The back end uses **SQLite** (a database that is a single file
-on disk), so it must run on a host that stays on **and keeps a persistent disk**. Vercel is
-serverless (no persistent disk), so the back end cannot live there — that mismatch is what caused
-the recurring "invalid credentials" on the deployed site.
+The front end runs on **Vercel**. The back end is an Express API talking to **PostgreSQL**.
+
+Because the database is now a networked service rather than a file on disk, the API no longer needs a
+persistent volume — it can run on any host, including free ones. (Under the old SQLite build the
+database *was* a local file, which is why production login kept breaking: nothing persisted it.)
 
 ```
-Browser ──► Vercel (Next.js front end)  ──HTTPS──►  API host (Express + SQLite)
-                                                     └─ persistent volume: /data/hrms.db + uploads
+Browser ──► Vercel (Next.js front end) ──HTTPS──► API host (Express) ──► PostgreSQL (e.g. Neon)
 ```
 
-## What the code already handles (done)
+## 1. Create the database
 
-- Binds the port the host provides (`PORT`), not a hard-coded 5000.
-- Reads the database location from `DATABASE_PATH`, so it can live on a persistent volume.
-- Trusts the proxy in production (correct HTTPS detection + per-user rate limiting).
-- Sends the session cookie cross-site in production (`SameSite=None; Secure`) so login "sticks"
-  between the Vercel front end and the API host.
-- Fails clearly on a port clash and shuts down cleanly.
+Create a **Neon** project (free tier is enough) — or any managed Postgres — and copy its connection
+string. It looks like:
 
-## What you need to do
+```
+postgres://user:password@ep-something.eu-central-1.aws.neon.tech/neondb?sslmode=require
+```
 
-### 1. Host the back end (with a persistent volume)
+SSL is enabled automatically for any non-localhost host.
 
-Pick a host that runs Node continuously **and** offers a persistent volume. Good options:
-**Railway** or **Fly.io** (both have volumes), or a small **VPS**. (Render works only on a paid
-plan that includes a disk — its free tier has no persistent storage.)
+## 2. Host the API
 
-Using **Railway** as the example:
+Any host that runs Node works — a free always-on service, a small VPS, or Vercel. No disk required.
 
-1. Create a project → **Deploy from GitHub repo** → pick this repo.
-2. Set the service **root/working directory** to `server`.
-3. **Build command:** `npm install && npm run build`
-4. **Start command:** `npm run start:prod`  *(runs migrations, then serves)*
-   - `start:prod` uses `tsx` for the migration step, so make sure dev dependencies are installed
-     (don't prune them). If your host prunes dev deps, instead run migrations once as a separate
-     step and use `npm start` as the run command.
-5. Add a **Volume** mounted at `/data`.
-6. Note the service's public URL (e.g. `https://saltstayz-api.up.railway.app`).
+- **Build:** `npm install && npm run build`
+- **Start:** `npm run start:prod` (runs migrations, then serves) — needs dev dependencies present for
+  the migration step. If your host prunes them, run migrations as a separate release step and start
+  with `npm start`.
+- **Root directory:** `server`
 
-### 2. Set the back-end environment variables (on the API host)
+## 3. Environment variables
+
+On the **API host**:
 
 | Variable | Value |
 |----------|-------|
 | `NODE_ENV` | `production` |
-| `DATABASE_PATH` | `/data/hrms.db` (on the mounted volume) |
-| `BETTER_AUTH_SECRET` | a long random string (32+ chars) — generate with `openssl rand -base64 32` |
-| `BETTER_AUTH_URL` | your API's public URL, e.g. `https://saltstayz-api.up.railway.app` |
-| `CLIENT_URL` | your Vercel URL, exact, no trailing slash, e.g. `https://saltstayz.vercel.app` |
+| `DATABASE_URL` | your Postgres connection string |
+| `BETTER_AUTH_SECRET` | a long random secret (`openssl rand -base64 32`) |
+| `BETTER_AUTH_URL` | the API's own public URL |
+| `CLIENT_URL` | your Vercel URL, exact, no trailing slash |
 
-`PORT` is provided by the host automatically — leave it unset.
+`PORT` is provided by the host — leave it unset.
 
-### 3. Point the front end at the API (on Vercel)
-
-In the Vercel project → **Settings → Environment Variables**:
+On **Vercel**:
 
 | Variable | Value |
 |----------|-------|
-| `NEXT_PUBLIC_API_URL` | `https://saltstayz-api.up.railway.app/api/v1` |
+| `NEXT_PUBLIC_API_URL` | `https://<api-host>/api/v1` |
 
-Then **redeploy** the Vercel project — `NEXT_PUBLIC_*` values are baked in at build time, so a
-redeploy is required for the change to take effect.
+Then **redeploy** Vercel — `NEXT_PUBLIC_*` values are baked in at build time.
 
-### 4. Give the production database its login records
+## 4. Create the schema and load the data
 
-The database must contain the Better Auth **credential** rows, or every login says "invalid
-credentials." Two ways:
+```bash
+npm run db:migrate --workspace=server     # creates the whole schema (one baseline migration)
+```
 
-- **Recommended — bring your real data over** (keeps your ~300 real logins and their passwords):
-  1. Locally: `npm run db:backup --workspace=server` → produces a clean copy under
-     `server/data/backups/`.
-  2. Upload that file to the volume as `/data/hrms.db` (Railway: use the volume's shell/console,
-     or `railway run` / an upload step; on a VPS use `scp`).
-  3. On the host, run `npm run db:migrate --workspace=server` once to apply any newer migrations.
-- **Fresh start instead** (demo logins): on the host run
-  `npm run db:migrate --workspace=server && npm run db:seed --workspace=server`.
-  Seed 16 creates the Better Auth credential rows.
+Then either:
 
-> Do **not** commit the database file — it's git-ignored on purpose (it holds employee PII).
-> Move it directly to the host.
+- **Bring your existing data over** (one time, from the legacy SQLite file):
+  ```bash
+  npx tsx src/db/migrate-sqlite-to-pg.ts path/to/hrms.db
+  ```
+  Copies every table, converts 0/1 → booleans, preserves ids, and advances sequences. The source is
+  opened read-only. Verified locally: 6,055 rows / 81 tables, including 323 users with their logins.
+- **Or start fresh:** `npm run db:seed --workspace=server` for working demo logins.
 
-## Verify it end-to-end
+> Never commit the database or a dump — they hold employee PII.
 
-1. **API up:** open `https://<api-host>/health` → `{ "status": "ok", "db": "up" }`.
-2. **Login works:** sign in on the Vercel site → succeeds (no "invalid credentials").
-3. **Session sticks:** navigate around and refresh → you stay logged in (confirms the cross-site
-   cookie).
-4. **No lockouts:** two people/browsers sign in without a "too many attempts" error (confirms
-   trust-proxy).
-5. **Survives redeploy (the anti-recurrence check):** redeploy the API, then log in again →
-   still works, data intact (confirms the persistent volume).
+## Verify
 
-## If something still fails
+1. `GET https://<api-host>/health` → `{"status":"ok","db":"up"}`
+2. Sign in on the Vercel site → succeeds.
+3. Session sticks across navigation/refresh (cross-site cookie settings).
+4. Two people sign in without a rate-limit lockout (trust-proxy).
+5. **Redeploy the API, log in again** → still works, data intact.
 
-| Symptom | Likely cause | Fix |
-|---------|--------------|-----|
-| "Invalid credentials" for everyone | DB on the host has no credential rows | Do step 4 (restore real DB or seed) |
-| Login works then bounces to /login | Cookie not stored cross-site | Confirm `NODE_ENV=production` (enables `SameSite=None; Secure`) and the site is HTTPS; ideally put the API on a subdomain of the front end's domain |
-| CORS / network error in the browser console | `CLIENT_URL` (server) or `NEXT_PUBLIC_API_URL` (Vercel) wrong | Set both exactly; redeploy Vercel |
-| 403 on sign-in | Origin not trusted | `CLIENT_URL` must exactly match the Vercel origin (no trailing slash) |
-| "Too many attempts" for everyone | `trust proxy` / IP | Ensure `NODE_ENV=production` (turns on trust-proxy) |
-| Data resets after each deploy | DB not on the volume | Ensure the volume is mounted and `DATABASE_PATH=/data/hrms.db` |
+## If something fails
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| "Invalid credentials" for everyone | Database has no credential rows | Run step 4 (data copy or seed) |
+| Login works then bounces to /login | Session cookie not stored cross-site | `NODE_ENV=production` (enables `SameSite=None; Secure`) and HTTPS |
+| CORS / network error | `CLIENT_URL` or `NEXT_PUBLIC_API_URL` wrong | Set both exactly; redeploy Vercel |
+| 403 on sign-in | Origin not trusted | `CLIENT_URL` must match the Vercel origin exactly |
+| "Too many attempts" for everyone | Rate limiter keyed on the proxy IP | `NODE_ENV=production` turns on trust-proxy |
+| `database "..." does not exist` | `DATABASE_URL` points at the wrong server | Check the host/database name |
+
+## Backups
+
+`npm run db:backup --workspace=server` shells out to `pg_dump` (set `PG_DUMP` if it isn't on PATH).
+Managed hosts like Neon also take automatic backups — that is the recommended safety net.
 
 ## Note on uploads
 
-Uploaded files (checklist docs, etc.) are also written to disk. For them to survive redeploys,
-keep them on the same persistent volume (e.g. an `uploads` folder under `/data`). Login does not
-depend on this, so it can follow later.
+Uploaded files (checklist documents) are still written to local disk, so on an ephemeral host they
+are lost on redeploy. Moving them to object storage is follow-up work; it does not affect login.

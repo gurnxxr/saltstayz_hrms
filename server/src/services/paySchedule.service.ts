@@ -169,7 +169,7 @@ export async function updatePaySchedule(input: any, userId?: number) {
     pay_date_type: payType,
     pay_date_day: payDay,
     unmarked_day_policy: unmarkedPolicy,
-    holidays_paid: holidaysPaid ? 1 : 0,
+    holidays_paid: holidaysPaid ? true : false,
     overtime_multiplier: otMultiplier,
     grace_minutes: graceMinutes,
     standard_day_hours: standardDayHours,

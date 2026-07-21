@@ -11,8 +11,8 @@ export async function seed(knex: Knex): Promise<void> {
   await knex('clusters').del();
 
   // ─── Clusters ───
-  const [delhiId] = await knex('clusters').insert({ name: 'Delhi NCR', description: 'Delhi properties' });
-  const [ggnId] = await knex('clusters').insert({ name: 'Gurgaon Region', description: 'Gurgaon properties' });
+  const [{ id: delhiId }] = await knex('clusters').insert({ name: 'Delhi NCR', description: 'Delhi properties' }).returning('id');
+  const [{ id: ggnId }] = await knex('clusters').insert({ name: 'Gurgaon Region', description: 'Gurgaon properties' }).returning('id');
 
   const properties = await knex('properties').select('id', 'name', 'city');
   for (const p of properties) {

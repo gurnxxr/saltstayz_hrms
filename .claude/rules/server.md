@@ -26,8 +26,10 @@ export async function handler(req: AuthRequest, res: Response, next: NextFunctio
 
 ## Database
 
-- SQLite — no `ILIKE`, no `RETURNING *`, no `ON CONFLICT DO UPDATE` with complex clauses
-- Insert returns ID array: `const [id] = await db('table').insert(data)`
+- PostgreSQL via `pg` — connect with `DATABASE_URL`. See `.claude/rules/database.md` for the full
+  dialect rules (booleans, `ilike`, date columns, advisory locks).
+- Insert must ask for the id: `const [{ id }] = await db('table').insert(data).returning('id')`
+- Booleans are real booleans (`true`/`false`, never `1`/`0`); user-facing search uses `ilike`
 - Use `db.raw()` for aggregates: `db.raw("SUM(CASE WHEN status = 'present' THEN 1 ELSE 0 END) as present")`
 - Joins: `db('table as t').join('other as o', 'o.id', 't.other_id')`
 - Current employee's ID: `req.user!.employeeId!`

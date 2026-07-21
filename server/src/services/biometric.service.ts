@@ -19,7 +19,7 @@ export async function createApiKey(name: string) {
   const keyPrefix = rawKey.slice(0, 8);
   const keyHash = await bcrypt.hash(rawKey, 12);
 
-  const [id] = await db('biometric_api_keys').insert({ name: name.trim(), key_hash: keyHash, key_prefix: keyPrefix });
+  const [{ id }] = await db('biometric_api_keys').insert({ name: name.trim(), key_hash: keyHash, key_prefix: keyPrefix }).returning('id');
   return { id, name: name.trim(), key: rawKey, prefix: keyPrefix };
 }
 
@@ -67,8 +67,8 @@ export async function receivePunch(log: PunchLog) {
     log_time: log.log_time,
     downloaded_at: log.downloaded_at || null,
     status: employee ? 'pending' : 'unmatched',
-  }).onConflict().ignore();
-  const id = Array.isArray(inserted) ? inserted[0] : inserted;
+  }).onConflict().ignore().returning('id');
+  const id = Array.isArray(inserted) ? inserted[0]?.id : undefined;
 
   return { id: id ?? null, matched: !!employee, duplicate: false, employee_name: employee ? `${employee.first_name} ${employee.last_name}` : null };
 }

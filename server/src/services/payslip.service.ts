@@ -217,7 +217,7 @@ export async function getMonthlyBreakdown(
     const wage = num((breakdown as any).esi_wage_full);
     const covered = ceiling <= 0 || wage <= ceiling;
     await db('employee_esi_periods')
-      .insert({ employee_id: employeeId, period_key: esiPeriodToPersist, covered: covered ? 1 : 0 })
+      .insert({ employee_id: employeeId, period_key: esiPeriodToPersist, covered: covered ? true : false })
       .onConflict(['employee_id', 'period_key']).ignore();
   }
 
@@ -317,7 +317,7 @@ async function writePayslipRecord(
     await db('payslip_history').where('id', existing.id).update({ ...record, updated_at: db.fn.now() });
     return existing.id;
   }
-  const [id] = await db('payslip_history').insert(record);
+  const [{ id }] = await db('payslip_history').insert(record).returning('id');
   return id;
 }
 
@@ -430,9 +430,9 @@ export async function runPayroll(month: number, year: number, userId?: number | 
     throw new AppError('Payroll for this month is already locked.', 409);
   }
   if (!run) {
-    const [id] = await db('payroll_runs').insert({
+    const [{ id }] = await db('payroll_runs').insert({
       month, year, status: 'draft', generated_by: userId ?? null,
-    });
+    }).returning('id');
     run = await db('payroll_runs').where('id', id).first();
   }
 

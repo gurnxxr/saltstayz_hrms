@@ -71,7 +71,7 @@ export async function createEncashment(
   const perDayRate = Math.round((breakdown.basic / 30) * 100) / 100;
   const amount = Math.round(days * perDayRate);
 
-  const [id] = await db('leave_encashments').insert({
+  const [{ id }] = await db('leave_encashments').insert({
     employee_id: employeeId,
     leave_type_id: leaveTypeId,
     leave_period_id: period.id,
@@ -81,7 +81,7 @@ export async function createEncashment(
     status: 'pending',
     note: data.note ? String(data.note).trim() : null,
     requested_by: userId ?? null,
-  });
+  }).returning('id');
   const rows = await listEncashments();
   return rows.find((r: any) => r.id === id);
 }

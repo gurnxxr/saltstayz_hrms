@@ -104,8 +104,8 @@ export async function listVacancies(filters: {
   if (filters.department_id) query.where('vacancies.department_id', filters.department_id);
   if (filters.search) {
     query.where(function () {
-      this.where('job_titles.title', 'like', `%${filters.search}%`)
-        .orWhere('vacancies.description', 'like', `%${filters.search}%`);
+      this.where('job_titles.title', 'ilike', `%${filters.search}%`)
+        .orWhere('vacancies.description', 'ilike', `%${filters.search}%`);
     });
   }
 
@@ -205,7 +205,7 @@ export async function createVacancy(data: {
     );
   }
 
-  const [id] = await db('vacancies').insert(data);
+  const [{ id }] = await db('vacancies').insert(data).returning('id');
   return getVacancy(id);
 }
 
@@ -275,9 +275,9 @@ export async function listCandidates(filters: {
   if (filters.stage) query.where('candidates.stage', filters.stage);
   if (filters.search) {
     query.where(function () {
-      this.where('candidates.name', 'like', `%${filters.search}%`)
-        .orWhere('candidates.email', 'like', `%${filters.search}%`)
-        .orWhere('candidates.phone', 'like', `%${filters.search}%`);
+      this.where('candidates.name', 'ilike', `%${filters.search}%`)
+        .orWhere('candidates.email', 'ilike', `%${filters.search}%`)
+        .orWhere('candidates.phone', 'ilike', `%${filters.search}%`);
     });
   }
 
@@ -318,7 +318,7 @@ export async function createCandidate(data: {
   // The column default is still the retired 'screening' (SQLite cannot alter a default
   // without rebuilding the table). Set the entry stage explicitly: a candidate parked
   // in a dead stage has no allowedNextStages and can never move.
-  const [id] = await db('candidates').insert({ ...data, stage: FUNNEL_ORDER[0] });
+  const [{ id }] = await db('candidates').insert({ ...data, stage: FUNNEL_ORDER[0] }).returning('id');
   return getCandidate(id);
 }
 
@@ -461,7 +461,7 @@ export async function createEmployeeFromCandidate(
   // = false keeps them out of payroll, attendance, leave and analytics. Transfer to
   // Manager (step 11) is what activates them. monthly_ctc stays null until then, so a
   // hire in flight can never trip the budget guardrail against a real hire.
-  const [employeeId] = await cx('employees').insert({
+  const [{ id: employeeId }] = await cx('employees').insert({
     employee_code: employeeCode,
     job_id: await nextJobId(cx),
     first_name: firstName,
@@ -475,7 +475,7 @@ export async function createEmployeeFromCandidate(
     date_of_joining: joiningDate || new Date().toISOString().split('T')[0],
     employment_status: 'pre_joining',
     is_active: false,
-  });
+  }).returning('id');
 
   return employeeId;
 }

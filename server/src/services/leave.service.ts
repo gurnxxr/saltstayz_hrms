@@ -3,6 +3,7 @@ import db from '../config/database';
 import { NotFoundError, ValidationError, ForbiddenError } from '../utils/errors';
 import { notifyEmployee } from './notification.service';
 import { countWorkingDaysInRange } from './payableDays.service';
+import { LOCK, advisoryXactLock } from '../utils/locks';
 import { INDIAN_STATES } from './statutory.service';
 
 /** Inclusive list of 'YYYY-MM-DD' dates between start and end (capped for safety). */
@@ -192,13 +193,13 @@ export async function createLeaveType(data: {
     throw new ValidationError('Default days must be between 0 and 366');
   }
   const id = await db.transaction(async (trx) => {
-    const [newId] = await trx('leave_types').insert({
+    const [{ id: newId }] = await trx('leave_types').insert({
       name, default_days: defaultDays,
       is_paid: data.is_paid === undefined ? true : !!data.is_paid,
       is_encashable: !!data.is_encashable,
       is_active: true,
       ...collectPolicy(data),
-    });
+    }).returning('id');
     if ('cannot_club_with' in data) await setConflicts(trx, newId, (data as any).cannot_club_with);
     if ('departments' in data) await setDepartments(trx, newId, (data as any).departments);
     return newId;
@@ -278,9 +279,9 @@ export async function createLeavePeriod(data: { name: string; start_date: string
   if (!data.start_date || !data.end_date || data.end_date <= data.start_date) {
     throw new ValidationError('End date must be after the start date');
   }
-  const [id] = await db('leave_periods').insert({
+  const [{ id }] = await db('leave_periods').insert({
     name, start_date: data.start_date, end_date: data.end_date, is_current: false,
-  });
+  }).returning('id');
   return db('leave_periods').where('id', id).first();
 }
 
@@ -310,10 +311,10 @@ export async function getEntitlements(filters: { period_id: number; search?: str
   if (filters.search && filters.search.trim()) {
     const term = `%${filters.search.trim()}%`;
     employeesQuery.where(function (this: any) {
-      this.where('e.first_name', 'like', term)
-        .orWhere('e.last_name', 'like', term)
-        .orWhere('e.employee_code', 'like', term)
-        .orWhereRaw("(e.first_name || ' ' || e.last_name) like ?", [term]);
+      this.where('e.first_name', 'ilike', term)
+        .orWhere('e.last_name', 'ilike', term)
+        .orWhere('e.employee_code', 'ilike', term)
+        .orWhereRaw("(e.first_name || ' ' || e.last_name) ilike ?", [term]);
     });
   }
   const employees = await employeesQuery;
@@ -568,10 +569,10 @@ export async function getBalancesOverview(filters: {
   if (filters.search && filters.search.trim()) {
     const term = `%${filters.search.trim()}%`;
     employeesQuery.where(function (this: any) {
-      this.where('e.first_name', 'like', term)
-        .orWhere('e.last_name', 'like', term)
-        .orWhere('e.employee_code', 'like', term)
-        .orWhereRaw("(e.first_name || ' ' || e.last_name) like ?", [term]);
+      this.where('e.first_name', 'ilike', term)
+        .orWhere('e.last_name', 'ilike', term)
+        .orWhere('e.employee_code', 'ilike', term)
+        .orWhereRaw("(e.first_name || ' ' || e.last_name) ilike ?", [term]);
     });
   }
   const employees = await employeesQuery;
@@ -732,32 +733,43 @@ export async function applyLeave(employeeId: number, data: {
   // Balance (rule 1): an explicit allocation wins; otherwise the leave type's
   // "Default days per year" is the balance, less what's already taken this period.
   // getEffectiveBalances is the single definition — see its doc comment.
-  const [balance] = await getEffectiveBalances([employeeId], period.id, { leaveTypeIds: [leave_type_id] });
-  const available = balance ? balance.available : 0;
-  if (days > available) {
-    throw new ValidationError(`Insufficient ${leaveType.name} balance. Available: ${available} day(s), requested: ${days} day(s).`);
-  }
+  // Check-then-insert must be atomic PER EMPLOYEE. PostgreSQL is MVCC, so two requests submitted at
+  // the same time would each see the same balance and no overlap, and both insert — overspending the
+  // balance or double-booking the dates. (SQLite's single-writer rule hid this; there was no
+  // transaction here at all.) The advisory lock serialises applications for this employee, so the
+  // reads below — including the helpers that use the shared `db` handle — see a settled state.
+  const { id, policyWarnings } = await db.transaction(async (trx) => {
+    await advisoryXactLock(trx, LOCK.LEAVE_APPLY, employeeId);
 
-  const overlap = await db('leave_requests')
-    .where('employee_id', employeeId)
-    .whereIn('status', ['pending', 'approved'])
-    .where(function () {
-      this.where('start_date', '<=', end_date).andWhere('end_date', '>=', start_date);
-    })
-    .first();
-  if (overlap) throw new ValidationError('You already have a leave request overlapping these dates');
+    const [balance] = await getEffectiveBalances([employeeId], period.id, { leaveTypeIds: [leave_type_id] });
+    const available = balance ? balance.available : 0;
+    if (days > available) {
+      throw new ValidationError(`Insufficient ${leaveType.name} balance. Available: ${available} day(s), requested: ${days} day(s).`);
+    }
 
-  // Configurable policy rules (min/max/notice/half-day/eligibility/probation/clubbing).
-  const policyWarnings = await checkLeavePolicy(employeeId, employee, leaveType, start_date, end_date, days);
+    const overlap = await trx('leave_requests')
+      .where('employee_id', employeeId)
+      .whereIn('status', ['pending', 'approved'])
+      .where(function () {
+        this.where('start_date', '<=', end_date).andWhere('end_date', '>=', start_date);
+      })
+      .first();
+    if (overlap) throw new ValidationError('You already have a leave request overlapping these dates');
 
-  const [id] = await db('leave_requests').insert({
-    employee_id: employeeId,
-    leave_type_id,
-    start_date,
-    end_date,
-    days,
-    reason,
-    status: 'pending',
+    // Configurable policy rules (min/max/notice/half-day/eligibility/probation/clubbing).
+    const warnings = await checkLeavePolicy(employeeId, employee, leaveType, start_date, end_date, days);
+
+    const [{ id: newId }] = await trx('leave_requests').insert({
+      employee_id: employeeId,
+      leave_type_id,
+      start_date,
+      end_date,
+      days,
+      reason,
+      status: 'pending',
+    }).returning('id');
+
+    return { id: newId, policyWarnings: warnings };
   });
 
   // Alert the approver (reporting manager) that a request awaits action.
@@ -935,7 +947,7 @@ export async function createRegion(data: { name: string; description?: string })
   if (!name) throw new ValidationError('Region name is required.');
   const existing = await db('regions').whereRaw('LOWER(name) = ?', [name.toLowerCase()]).first();
   if (existing) throw new ValidationError('A region with this name already exists.');
-  const [id] = await db('regions').insert({ name, description: String(data.description || '').trim() || null });
+  const [{ id }] = await db('regions').insert({ name, description: String(data.description || '').trim() || null }).returning('id');
   return db('regions').where('id', id).first();
 }
 
@@ -1021,7 +1033,7 @@ export async function getHolidays(filters: { state?: string; scope?: string; yea
   if (filters.scope === 'national') q.where('h.is_national', true);
   else if (filters.scope === 'state') q.where('h.is_national', false).whereNotNull('h.state');
   if (filters.state) q.where('h.state', filters.state);
-  if (filters.year) q.whereRaw("strftime('%Y', h.date) = ?", [String(filters.year)]);
+  if (filters.year) q.whereRaw("substr(h.date, 1, 4) = ?", [String(filters.year)]);
   return q;
 }
 
@@ -1033,7 +1045,7 @@ export async function getMyHolidays(employeeId: number, year?: string) {
     this.where('h.is_national', true);
     if (region?.state) this.orWhere('h.state', region.state);
   });
-  if (year) q.whereRaw("strftime('%Y', h.date) = ?", [String(year)]);
+  if (year) q.whereRaw("substr(h.date, 1, 4) = ?", [String(year)]);
   const holidays = await q;
   return { region, holidays };
 }
@@ -1055,7 +1067,7 @@ function normalizeHolidayInput(data: any) {
 
 export async function createHoliday(data: any) {
   const payload = normalizeHolidayInput(data);
-  const [id] = await db('holidays').insert(payload);
+  const [{ id }] = await db('holidays').insert(payload).returning('id');
   return holidayBase().where('h.id', id).first();
 }
 

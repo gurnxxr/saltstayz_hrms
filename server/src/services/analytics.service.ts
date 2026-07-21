@@ -656,7 +656,8 @@ export async function getAttendanceSummary(dateFrom: string, dateTo: string) {
       db.raw("sum(case when status = 'absent' then 1 else 0 end) as absent"),
       db.raw("sum(case when status = 'half_day' then 1 else 0 end) as half_day"),
       db.raw("sum(case when status = 'on_leave' then 1 else 0 end) as on_leave"),
-      db.raw("round(avg(working_hours), 1) as avg_working_hours")
+      // working_hours is a float column; Postgres only defines round(numeric, int), so cast.
+      db.raw("round(avg(working_hours)::numeric, 1) as avg_working_hours")
     )
     .first();
 

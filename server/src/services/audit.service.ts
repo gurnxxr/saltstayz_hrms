@@ -95,7 +95,7 @@ export async function list(filters: AuditFilters) {
   if (filters.to) base.where('created_at', '<=', `${filters.to} 23:59:59`);
   if (filters.search) {
     const s = `%${filters.search}%`;
-    base.where((q) => q.where('actor_email', 'like', s).orWhere('summary', 'like', s).orWhere('target_id', 'like', s));
+    base.where((q) => q.where('actor_email', 'ilike', s).orWhere('summary', 'ilike', s).orWhere('target_id', 'ilike', s));
   }
 
   const countRow = await base.clone().count('id as c').first();

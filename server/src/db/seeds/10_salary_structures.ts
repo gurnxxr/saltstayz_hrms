@@ -22,14 +22,14 @@ export async function seed(knex: Knex): Promise<void> {
     if (usedNames.has(name.toLowerCase())) name = `${name} (Structure)`;
     usedNames.add(name.toLowerCase());
 
-    const [structureId] = await knex('salary_structures').insert({
+    const [{ id: structureId }] = await knex('salary_structures').insert({
       name,
       job_title_id: jt.id,
       payment_basis: 'monthly',
       default_base: gross,
       city: 'Haryana',
-      is_active: 1,
-    });
+      is_active: true,
+    }).returning('id');
     const lines = standardLines(ids, {
       pct_basic: 50, pct_hra: 50, pct_gratuity: 4.81,
       pli: Math.round(gross * 0.04), meal: 0, accommodation: 0, accommodation_allowance: 0,

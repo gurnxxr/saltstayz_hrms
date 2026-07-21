@@ -38,12 +38,12 @@ export async function getAllBankDetails(filters: { search?: string; branch_name?
   const applySearch = (q: any, withDetailCols: boolean) => {
     if (filters.search) {
       q.where(function (this: any) {
-        this.where('e.employee_code', 'like', `%${filters.search}%`)
-          .orWhere('e.first_name', 'like', `%${filters.search}%`)
-          .orWhere('e.last_name', 'like', `%${filters.search}%`);
+        this.where('e.employee_code', 'ilike', `%${filters.search}%`)
+          .orWhere('e.first_name', 'ilike', `%${filters.search}%`)
+          .orWhere('e.last_name', 'ilike', `%${filters.search}%`);
         if (withDetailCols) {
-          this.orWhere('ebd.account_name', 'like', `%${filters.search}%`)
-            .orWhere('ebd.pan_card', 'like', `%${filters.search}%`);
+          this.orWhere('ebd.account_name', 'ilike', `%${filters.search}%`)
+            .orWhere('ebd.pan_card', 'ilike', `%${filters.search}%`);
         }
       });
     }
@@ -89,10 +89,10 @@ export async function upsertBankDetails(employeeId: number, data: {
     return { id: existing.id, updated: true };
   }
 
-  const [id] = await db('employee_bank_details').insert({
+  const [{ id }] = await db('employee_bank_details').insert({
     employee_id: employeeId,
     ...data,
-  });
+  }).returning('id');
   return { id, updated: false };
 }
 
@@ -102,10 +102,10 @@ export async function deleteBankDetails(employeeId: number) {
 }
 
 export async function getStats() {
-  const totalEmployees = await db('employees').where('is_active', 1).count('id as count').first();
+  const totalEmployees = await db('employees').where('is_active', true).count('id as count').first();
   const withBankDetails = await db('employee_bank_details as ebd')
     .join('employees as e', 'e.id', 'ebd.employee_id')
-    .where('e.is_active', 1)
+    .where('e.is_active', true)
     .count('ebd.id as count').first();
 
   // Newly onboarded employees (have a document-collection checklist) still missing bank details
@@ -115,7 +115,7 @@ export async function getStats() {
     .join('employees as e', 'e.id', 'c.employee_id')
     .leftJoin('employee_bank_details as ebd', 'ebd.employee_id', 'e.id')
     .where('ct.key', 'document_collection')
-    .where('e.is_active', 1)
+    .where('e.is_active', true)
     .whereNull('ebd.id')
     .countDistinct('e.id as count').first();
 
