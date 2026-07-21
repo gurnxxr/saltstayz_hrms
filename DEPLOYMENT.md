@@ -1,59 +1,92 @@
 # Deploying SaltStayz HRMS
 
-The front end runs on **Vercel**. The back end is an Express API talking to **PostgreSQL**.
-
-Because the database is now a networked service rather than a file on disk, the API no longer needs a
-persistent volume — it can run on any host, including free ones. (Under the old SQLite build the
-database *was* a local file, which is why production login kept breaking: nothing persisted it.)
+The app runs as three independent pieces:
 
 ```
-Browser ──► Vercel (Next.js front end) ──HTTPS──► API host (Express) ──► PostgreSQL (e.g. Neon)
+Browser ──► Vercel (Next.js client) ──HTTPS──► Render (Express API) ──► Neon (PostgreSQL)
 ```
 
-## 1. Create the database
+Because PostgreSQL is a networked service, the API stores nothing on disk and needs no
+persistent volume — so it can run on any host, including free tiers. (Under the previous
+SQLite build the database *was* a local file, which is why production login kept failing:
+nothing persisted it.)
 
-Create a **Neon** project (free tier is enough) — or any managed Postgres — and copy its connection
-string. It looks like:
+**Current deployment**
+
+| Piece | Where | Address |
+|-------|-------|---------|
+| Client | Vercel | `https://saltstayz-hrms.vercel.app` |
+| API | Render (free) | `https://saltstayz-api.onrender.com` |
+| Database | Neon (free) | connection string only |
+
+---
+
+## 1. Database (Neon)
+
+Create a project at [neon.tech](https://neon.tech) and copy its connection string:
 
 ```
-postgres://user:password@ep-something.eu-central-1.aws.neon.tech/neondb?sslmode=require
+postgres://USER:PASSWORD@HOST.neon.tech/neondb?sslmode=require
 ```
 
 SSL is enabled automatically for any non-localhost host.
 
-## 2. Host the API
+> **Tip:** create a second Neon **branch** (e.g. `dev`) for local development so testing
+> never touches production data.
 
-Any host that runs Node works — a free always-on service, a small VPS, or Vercel. No disk required.
+---
 
-- **Build:** `npm install && npm run build`
-- **Start:** `npm run start:prod` (runs migrations, then serves) — needs dev dependencies present for
-  the migration step. If your host prunes them, run migrations as a separate release step and start
-  with `npm start`.
-- **Root directory:** `server`
+## 2. API (Render)
 
-## 3. Environment variables
+**New → Web Service → connect the GitHub repo**, then:
 
-On the **API host**:
+| Setting | Value |
+|---------|-------|
+| Root Directory | `server` |
+| Build Command | `npm install --include=dev && npm run build` |
+| Start Command | `npm start` |
+| Instance Type | Free is sufficient |
+
+> ⚠️ **`--include=dev` is required.** With `NODE_ENV=production` set, npm skips
+> devDependencies — which is where the TypeScript compiler and all `@types/*` packages live.
+> Without the flag the build fails with dozens of `TS7016: Could not find a declaration file`
+> errors.
+
+> Use `npm start`, **not** `npm run start:prod`. The latter runs migrations first, which
+> needs dev dependencies at runtime and isn't needed once the schema exists.
+
+### Environment variables (on Render)
 
 | Variable | Value |
 |----------|-------|
 | `NODE_ENV` | `production` |
-| `DATABASE_URL` | your Postgres connection string |
-| `BETTER_AUTH_SECRET` | a long random secret (`openssl rand -base64 32`) |
-| `BETTER_AUTH_URL` | the API's own public URL |
-| `CLIENT_URL` | your Vercel URL, exact, no trailing slash |
+| `DATABASE_URL` | the Neon connection string |
+| `BETTER_AUTH_SECRET` | a long random secret — `openssl rand -base64 32` |
+| `BETTER_AUTH_URL` | the API's own public URL, e.g. `https://saltstayz-api.onrender.com` |
+| `CLIENT_URL` | the client's exact origin, e.g. `https://saltstayz-hrms.vercel.app` |
 
-`PORT` is provided by the host — leave it unset.
+Leave `PORT` unset — the host provides it and the app honours it.
 
-On **Vercel**:
+> ⚠️ **`CLIENT_URL` must be the stable domain**, not the long per-deployment URL Vercel shows
+> on a build page (`...-nx303osa6-....vercel.app`). Those change on every deploy. Using one
+> makes the API reject your real site with `403 {"code":"INVALID_ORIGIN"}`.
+
+---
+
+## 3. Client (Vercel)
+
+**Settings → Environments → Production → Environment Variables:**
 
 | Variable | Value |
 |----------|-------|
-| `NEXT_PUBLIC_API_URL` | `https://<api-host>/api/v1` |
+| `NEXT_PUBLIC_API_URL` | `https://saltstayz-api.onrender.com/api/v1` (note the `/api/v1`) |
 
-Then **redeploy** Vercel — `NEXT_PUBLIC_*` values are baked in at build time.
+Then **redeploy** — `NEXT_PUBLIC_*` values are baked in at build time, so changing the
+variable alone does nothing.
 
-## 4. Create the schema and load the data
+---
+
+## 4. Create the schema and load data
 
 ```bash
 npm run db:migrate --workspace=server     # creates the whole schema (one baseline migration)
@@ -61,41 +94,49 @@ npm run db:migrate --workspace=server     # creates the whole schema (one baseli
 
 Then either:
 
-- **Bring your existing data over** (one time, from the legacy SQLite file):
+- **Fresh install:** `npm run db:seed --workspace=server` for working demo logins.
+- **Migrating from the old SQLite build (one time):**
   ```bash
   npx tsx src/db/migrate-sqlite-to-pg.ts path/to/hrms.db
   ```
-  Copies every table, converts 0/1 → booleans, preserves ids, and advances sequences. The source is
-  opened read-only. Verified locally: 6,055 rows / 81 tables, including 323 users with their logins.
-- **Or start fresh:** `npm run db:seed --workspace=server` for working demo logins.
+  Copies every table, converts 0/1 → booleans, preserves ids, advances sequences, and
+  resolves foreign-key cycles. The source file is opened read-only.
 
-> Never commit the database or a dump — they hold employee PII.
+> Never commit the database or a dump — they contain employee PII.
+
+---
 
 ## Verify
 
 1. `GET https://<api-host>/health` → `{"status":"ok","db":"up"}`
-2. Sign in on the Vercel site → succeeds.
-3. Session sticks across navigation/refresh (cross-site cookie settings).
-4. Two people sign in without a rate-limit lockout (trust-proxy).
-5. **Redeploy the API, log in again** → still works, data intact.
+2. Sign in on the client — it should succeed.
+3. Navigate and refresh; the session should persist (cross-site cookie working).
+4. Two people sign in without a rate-limit lockout (trust-proxy working).
+5. Redeploy the API, sign in again → still works, data intact.
 
-## If something fails
+---
+
+## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| "Invalid credentials" for everyone | Database has no credential rows | Run step 4 (data copy or seed) |
-| Login works then bounces to /login | Session cookie not stored cross-site | `NODE_ENV=production` (enables `SameSite=None; Secure`) and HTTPS |
-| CORS / network error | `CLIENT_URL` or `NEXT_PUBLIC_API_URL` wrong | Set both exactly; redeploy Vercel |
-| 403 on sign-in | Origin not trusted | `CLIENT_URL` must match the Vercel origin exactly |
-| "Too many attempts" for everyone | Rate limiter keyed on the proxy IP | `NODE_ENV=production` turns on trust-proxy |
-| `database "..." does not exist` | `DATABASE_URL` points at the wrong server | Check the host/database name |
+| Build fails with many `TS7016 Could not find a declaration file` | devDependencies skipped because `NODE_ENV=production` | Build command → `npm install --include=dev && npm run build` |
+| `BETTER_AUTH_SECRET environment variable is required in production` | Secret not set | Add it in the host's environment variables |
+| `403 {"code":"INVALID_ORIGIN"}` on login | `CLIENT_URL` doesn't match the site's origin | Set it to the exact stable domain, no trailing slash |
+| "Invalid credentials" for everyone | The database has no credential rows | Run step 4 (seed, or the one-time data copy) |
+| Login works, then bounces back to `/login` | Session cookie not stored cross-site | `NODE_ENV=production` (enables `SameSite=None; Secure`) and HTTPS on both sides |
+| Client calls `localhost:5000` in production | `NEXT_PUBLIC_API_URL` unset or not redeployed | Set it and redeploy Vercel |
+| "Too many attempts" for everyone at once | Rate limiter keyed on the proxy's IP | `NODE_ENV=production` turns on trust-proxy |
+| `database "..." does not exist` | `DATABASE_URL` points at the wrong server | Check host/database name; watch for another Postgres already on 5432 |
 
-## Backups
+---
 
-`npm run db:backup --workspace=server` shells out to `pg_dump` (set `PG_DUMP` if it isn't on PATH).
-Managed hosts like Neon also take automatic backups — that is the recommended safety net.
+## Operational notes
 
-## Note on uploads
-
-Uploaded files (checklist documents) are still written to local disk, so on an ephemeral host they
-are lost on redeploy. Moving them to object storage is follow-up work; it does not affect login.
+- **Free-tier sleep.** Render's free plan spins the API down after ~15 minutes idle; the next
+  request takes 30–60 seconds to wake it. A paid instance removes this.
+- **Backups.** `npm run db:backup --workspace=server` shells out to `pg_dump` (set `PG_DUMP`
+  if it isn't on PATH). Neon also takes automatic backups — the recommended safety net.
+- **Uploads.** Uploaded files (checklist documents) are still written to local disk, so on an
+  ephemeral host they are lost on redeploy. Moving them to object storage is follow-up work;
+  it does not affect login or any database-backed feature.

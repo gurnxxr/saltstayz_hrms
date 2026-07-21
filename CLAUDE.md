@@ -14,8 +14,12 @@ Internal HR Management System for SaltStayz hospitality chain. Monorepo with Nex
 
 ```bash
 # Dev servers (from project root)
+npm run dev                       # BOTH: Express :5000 + Next.js :3000
 npm run dev --workspace=server    # Express on :5000 (tsx watch)
 npm run dev --workspace=client    # Next.js on :3000 (Turbopack)
+
+# Needs a PostgreSQL to point DATABASE_URL at, e.g.
+# docker run -d --name hrms-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=hrms -p 5432:5432 postgres:16
 
 # Database
 npm run db:migrate --workspace=server
@@ -59,7 +63,8 @@ HRMS/
 │   ├── services/      # Business logic, DB queries via Knex
 │   ├── middleware/     # auth.ts (JWT verify), rbac.ts (authorize)
 │   ├── config/        # database.ts (Knex + SQLite config)
-│   ├── db/migrations/ # Knex migrations (001–012)
+│   ├── db/migrations/ # 001_baseline_postgres.ts (whole schema; the 82 SQLite
+│   │                  # originals are archived in db/migrations-sqlite-archive/)
 │   ├── db/seeds/      # Seed files (roles, org data, users, leave config)
 │   └── types/         # AuthRequest, JwtPayload interfaces
 └── package.json       # npm workspaces root
