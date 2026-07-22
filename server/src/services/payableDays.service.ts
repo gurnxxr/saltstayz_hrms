@@ -1,16 +1,18 @@
 import db from '../config/database';
 import { getPaySchedule } from './paySchedule.service';
 import { getEmployeeRegion } from './leave.service';
+import { isOffDay, parseOffDayRules, shiftLengthHours } from './shiftPattern';
 import type { AttendanceContext } from './payslip.calc';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Payable-days engine (Payroll Phase 3 — Shifts Drive Payable Days).
+// Payable-days engine.
 //
-// Each employee has their own working-day calendar, resolved roster-first:
-//   • a date with a shift_rosters entry is a working day; a date without one is
-//     that employee's off day (per-employee rotating week off);
-//   • when the employee has no roster at all for a month, fall back to the org
-//     Pay Schedule work week;
+// Each employee has their own working-day calendar, resolved from the shift they are
+// mapped to on each date:
+//   • the shift declares its own off days, including patterns like the 2nd and 4th
+//     Saturday — there is no weekly grid to fill in;
+//   • a shift declaring no off days falls back to the org Pay Schedule work week, so a
+//     shift with nothing configured never quietly turns weekends into working days;
 //   • regional/national holidays overlay on top;
 //   • days outside the employment span [date_of_joining, last_working_day] are
 //     "not employed" — they stay in the denominator but are never paid, so a
@@ -48,73 +50,46 @@ export interface PayableDays extends AttendanceContext {
   not_employed_days: number; // scheduled working days outside the employment span
   method: string;            // actual_days | fixed_days
   unmarked_policy: string;   // present | absent
-  roster_driven: boolean;    // true when the month's calendar came from the roster
+  shift_driven: boolean;     // true when the calendar came from a shift's own off days
   trace: DayTrace[];
 }
 
 const pad = (n: number) => String(n).padStart(2, '0');
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-/** Hours between two HH:MM times, overnight-safe (22:00 → 06:00 = 8h). */
-function shiftDurationHours(start?: string | null, end?: string | null): number {
-  if (!start || !end) return 0;
-  const toMin = (t: string) => {
-    const [h, m] = String(t).split(':').map(Number);
-    return (h || 0) * 60 + (m || 0);
-  };
-  let diff = toMin(end) - toMin(start);
-  if (diff <= 0) diff += 24 * 60;
-  return diff / 60;
-}
-
 const dowOf = (date: string): number => {
   const [y, m, d] = date.split('-').map(Number);
   return new Date(y, m - 1, d).getDay();
 };
 
-/** Add days to a YYYY-MM-DD date (UTC math, DST-safe). */
-function addDaysIso(date: string, n: number): string {
-  const [y, m, d] = date.split('-').map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  dt.setUTCDate(dt.getUTCDate() + n);
-  return dt.toISOString().slice(0, 10);
-}
-
-/** Monday (YYYY-MM-DD) of the week containing `date`. */
-function mondayOf(date: string): string {
-  const offset = (dowOf(date) + 6) % 7; // days since Monday
-  return addDaysIso(date, -offset);
-}
-
 interface DayInfo {
   base: 'working' | 'weekly_off' | 'holiday';
   employed: boolean;
   holidayName?: string;
-  shiftHours: number;   // rostered shift length (0 when no roster entry)
-  allowOt: boolean;     // rostered shift type allows overtime
+  shiftHours: number;   // length of the shift in effect (0 when the employee has none)
+  allowOt: boolean;     // that shift allows overtime
+  otAfter: number;      // hours after which overtime starts (0 = the shift's own length)
 }
 
 export interface WorkCalendar {
   classify(date: string): DayInfo;
-  /** True when this date's WEEK has a published roster for the employee. */
-  weekCovered(date: string): boolean;
+  /** True when the shift's own off-day pattern decided this date, not the work week. */
+  shiftDriven(date: string): boolean;
 }
 
 /**
- * Builds an employee's working-day calendar for a date range. Roster presence is
- * decided per calendar month (so a leave that spans only off-days still resolves
- * correctly when the rest of the month is rostered).
+ * Builds an employee's working-day calendar for a date range, from the shift they are mapped
+ * to on each date.
  *
- * useRoster (default true) drives the retrospective payroll view: a rostered
- * month treats un-rostered dates as off days. Leave counting passes useRoster:
- * false so a not-yet-published future roster does not make ordinary working days
- * read as offs — those fall back to the org work week (weekly-off pattern).
+ * The shift declares its own off days, so there is no weekly grid to fill in. A shift that
+ * declares none falls back to the company work week — deliberately, since a shift with nothing
+ * configured must not quietly turn weekends into working days.
+ *
+ * Holidays overlay on top, resolved through the employee's property and its state.
  */
 export async function buildWorkCalendar(
   employeeId: number, startDate: string, endDate: string,
-  opts: { useRoster?: boolean } = {},
 ): Promise<WorkCalendar> {
-  const useRoster = opts.useRoster !== false;
   const emp = await db('employees').where('id', employeeId)
     .select('date_of_joining', 'last_working_day', 'branch_name').first();
   const doj = emp?.date_of_joining ? String(emp.date_of_joining).slice(0, 10) : null;
@@ -123,39 +98,37 @@ export async function buildWorkCalendar(
   const schedule = await getPaySchedule();
   const workWeek = new Set<number>(schedule.work_week);
 
-  const monthStart = `${startDate.slice(0, 7)}-01`;
-  const [ey, em] = endDate.split('-').map(Number);
-  const monthEnd = `${endDate.slice(0, 7)}-${pad(new Date(ey, em, 0).getDate())}`;
+  // Every dated assignment in one query, resolved per date in memory — the alternative is a
+  // lookup per day, and this runs for every employee on every payroll run.
+  const assignments = await db('employee_shift_assignments as a')
+    .join('shift_types as st', 'st.id', 'a.shift_type_id')
+    .where('a.employee_id', employeeId)
+    .select('a.effective_from', 'st.start_time', 'st.end_time', 'st.ends_next_day',
+      'st.allow_overtime', 'st.overtime_after_hours', 'st.weekly_off_days', 'st.name')
+    .orderBy('a.effective_from');
 
-  // Roster is scoped to the employee's CURRENT property; a stale row from a prior
-  // property must never drag the old site's schedule into this employee's pay.
-  const prop = emp?.branch_name
-    ? await db('properties').where('name', emp.branch_name).select('id').first()
-    : null;
+  const prepared = assignments.map((a: any) => ({
+    from: String(a.effective_from).slice(0, 10),
+    name: a.name,
+    hours: shiftLengthHours(a.start_time, a.end_time),
+    allowOt: !!a.allow_overtime,
+    otAfter: Number(a.overtime_after_hours) || 0,
+    offRules: parseOffDayRules(a.weekly_off_days),
+  }));
 
-  // Only PUBLISHED rows drive pay — a draft never contaminates payroll. Coverage is
-  // decided per WEEK (Monday-start): a date is roster-controlled only when its own
-  // week has a published row, so publishing one week never reclassifies the rest of
-  // the month. The lookup is widened by a week at each edge so a Monday-start week
-  // that straddles the month boundary is fully loaded. A published weekly-off cell
-  // marks the week covered but is a rest day, not a working day.
-  const rosterQ = db('shift_rosters as r')
-    .leftJoin('shift_types as st', 'st.id', 'r.shift_type_id')
-    .where('r.employee_id', employeeId)
-    .where('r.is_published', true)
-    .whereBetween('r.date', [addDaysIso(monthStart, -6), addDaysIso(monthEnd, 6)]);
-  if (prop) rosterQ.where('r.property_id', prop.id);
-  else rosterQ.whereRaw('1 = 0'); // no current property → no roster; fall back to work week
-  const rosterRows = await rosterQ.select('r.date', 'r.day_type', 'st.start_time', 'st.end_time', 'st.allow_overtime');
-
-  const rosterByDate = new Map<string, { shiftHours: number; allowOt: boolean }>();
-  const rosterWeeks = new Set<string>(); // Monday ISO of each week with a published row
-  for (const r of rosterRows) {
-    const key = String(r.date).slice(0, 10);
-    rosterWeeks.add(mondayOf(key));
-    if (r.day_type === 'weekly_off') continue; // explicit rest day — not a working day
-    rosterByDate.set(key, { shiftHours: shiftDurationHours(r.start_time, r.end_time), allowOt: !!r.allow_overtime });
-  }
+  /**
+   * The shift in effect on a date: the latest assignment starting on or before it. A date
+   * earlier than every assignment falls back to the first one, so attendance older than the
+   * mapping still resolves rather than silently losing its shift.
+   */
+  const shiftOn = (date: string) => {
+    if (!prepared.length) return null;
+    let chosen = prepared[0];
+    for (const a of prepared) {
+      if (a.from <= date) chosen = a; else break;
+    }
+    return chosen;
+  };
 
   const region = await getEmployeeRegion(employeeId);
   const holidayRows = await db('holidays')
@@ -167,35 +140,40 @@ export async function buildWorkCalendar(
     .select('date', 'name');
   const holidayByDate = new Map<string, string>(holidayRows.map((h: any) => [String(h.date).slice(0, 10), h.name]));
 
-  const weekCovered = (date: string) => rosterWeeks.has(mondayOf(date));
+  /** True when the shift itself decided this date, rather than the company work week. */
+  const shiftDriven = (date: string) => (shiftOn(date)?.offRules.length ?? 0) > 0;
 
   const classify = (date: string): DayInfo => {
     const employed = (!doj || date >= doj) && (!lwd || date <= lwd);
-    const roster = rosterByDate.get(date);
-    const shiftHours = roster?.shiftHours ?? 0;
-    const allowOt = roster?.allowOt ?? false;
+    const shift = shiftOn(date);
+    const shiftHours = shift?.hours ?? 0;
+    const allowOt = shift?.allowOt ?? false;
+    const otAfter = shift?.otAfter ?? 0;
 
     const holidayName = holidayByDate.get(date);
-    if (holidayName !== undefined) return { base: 'holiday', employed, holidayName, shiftHours, allowOt };
+    if (holidayName !== undefined) return { base: 'holiday', employed, holidayName, shiftHours, allowOt, otAfter };
 
-    // Roster-controlled only within a published week; other weeks fall back to the
-    // org work-week, so a single published week never reclassifies the whole month.
-    const isWorking = (useRoster && weekCovered(date)) ? rosterByDate.has(date) : workWeek.has(dowOf(date));
-    return { base: isWorking ? 'working' : 'weekly_off', employed, shiftHours, allowOt };
+    // The shift's own off-day pattern decides. With no pattern — or no shift at all — the
+    // company work week does.
+    const rules = shift?.offRules ?? [];
+    const isWorking = rules.length ? !isOffDay(date, rules) : workWeek.has(dowOf(date));
+    return { base: isWorking ? 'working' : 'weekly_off', employed, shiftHours, allowOt, otAfter };
   };
 
-  return { classify, weekCovered };
+  return { classify, shiftDriven };
 }
 
 /**
- * Count of working days for the employee in [start, end], excluding holidays,
- * weekly offs, and days outside the employment span — on the work-week (weekly-off)
- * pattern, not the dated roster, so a leave applied before its roster is published
- * is sized correctly. Payroll re-derives LOP from the final roster when the month
- * is run; for a normal work-week month the two agree.
+ * Count of working days for the employee in [start, end], excluding holidays, off days, and
+ * days outside the employment span.
+ *
+ * Leave sizing and payroll now share one calendar. Previously they could disagree: leave
+ * deliberately ignored the roster so an unpublished future week didn't make ordinary working
+ * days read as offs, while payroll used it. A shift's off days are known in advance, so there
+ * is nothing to opt out of.
  */
 export async function countWorkingDaysInRange(employeeId: number, startDate: string, endDate: string): Promise<number> {
-  const cal = await buildWorkCalendar(employeeId, startDate, endDate, { useRoster: false });
+  const cal = await buildWorkCalendar(employeeId, startDate, endDate);
   let count = 0;
   const [sy, sm, sd] = startDate.split('-').map(Number);
   const [ey, em, ed] = endDate.split('-').map(Number);
@@ -211,9 +189,12 @@ export async function countWorkingDaysInRange(employeeId: number, startDate: str
 }
 
 /**
- * Overtime hours for the month: Σ max(0, worked − shift length) per attendance
- * day, using the shift rostered on that date (falling back to the employee's
- * standing assignment), and only when that shift type allows overtime.
+ * Overtime hours for the month: Σ max(0, worked − the threshold) per attendance day, using
+ * the shift in effect on that date, and only when that shift allows overtime.
+ *
+ * The threshold is the shift's own "overtime after hours" when set, otherwise its length —
+ * which is what this did before the figure existed, so nothing moves for a shift that hasn't
+ * set one.
  */
 export async function getOvertimeHours(employeeId: number, month: number, year: number): Promise<number> {
   const periodDays = new Date(year, month, 0).getDate();
@@ -221,15 +202,6 @@ export async function getOvertimeHours(employeeId: number, month: number, year: 
   const end = `${year}-${pad(month)}-${pad(periodDays)}`;
 
   const cal = await buildWorkCalendar(employeeId, start, end);
-
-  // Standing assignment as the fallback shift when a date has no roster entry.
-  const assign = await db('employee_shift_assignments as a')
-    .join('shift_types as st', 'st.id', 'a.shift_type_id')
-    .where('a.employee_id', employeeId)
-    .select('st.allow_overtime', 'st.start_time', 'st.end_time')
-    .first();
-  const assignHours = assign ? shiftDurationHours(assign.start_time, assign.end_time) : 0;
-  const assignAllowOt = !!assign?.allow_overtime;
 
   const rows = await db('attendance_records')
     .where('employee_id', employeeId)
@@ -241,14 +213,12 @@ export async function getOvertimeHours(employeeId: number, month: number, year: 
   for (const r of rows) {
     const date = String(r.date).slice(0, 10);
     const info = cal.classify(date);
-    if (!info.employed) continue; // no OT for days outside the employment span
-    if (info.base !== 'working') continue; // no OT on a rostered rest day / holiday
-    // Per-date rostered shift wins; otherwise the standing assignment.
-    const hasRoster = info.shiftHours > 0;
-    const shiftHours = hasRoster ? info.shiftHours : assignHours;
-    const allowOt = hasRoster ? info.allowOt : assignAllowOt;
-    if (!allowOt || shiftHours <= 0) continue;
-    total += Math.max(0, (Number(r.working_hours) || 0) - shiftHours);
+    if (!info.employed) continue;          // no OT outside the employment span
+    if (info.base !== 'working') continue; // no OT on a rest day or holiday
+    if (!info.allowOt) continue;
+    const threshold = info.otAfter > 0 ? info.otAfter : info.shiftHours;
+    if (threshold <= 0) continue;
+    total += Math.max(0, (Number(r.working_hours) || 0) - threshold);
   }
   return round2(total);
 }
@@ -314,12 +284,12 @@ export async function computePayableDays(employeeId: number, month: number, year
   let holidayCount = 0;
   let notEmployedDays = 0;  // scheduled working days outside the employment span
   let lop = 0;
-  let rosterDriven = false; // true once any day in the month sits in a published week
+  let shiftDriven = false; // true once any day in the month was decided by a shift's own off days
 
   for (let d = 1; d <= periodDays; d++) {
     const date = `${year}-${pad(month)}-${pad(d)}`;
     const info = cal.classify(date);
-    if (cal.weekCovered(date)) rosterDriven = true;
+    if (cal.shiftDriven(date)) shiftDriven = true;
 
     if (info.base === 'weekly_off') {
       if (info.employed) { weeklyOffs += 1; trace.push({ date, kind: 'weekly_off', status: null, lop: 0 }); }
@@ -432,7 +402,7 @@ export async function computePayableDays(employeeId: number, month: number, year
     holidays: holidayCount,
     method,
     unmarked_policy: unmarkedPolicy,
-    roster_driven: rosterDriven,
+    shift_driven: shiftDriven,
     trace,
   };
 }
