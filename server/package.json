@@ -12,6 +12,7 @@
     "db:seed": "tsx src/db/run-migrate.ts seed",
     "db:reset": "npm run db:rollback && npm run db:migrate && npm run db:seed",
     "db:backup": "tsx src/db/backup.ts",
+    "baseline:capture": "tsx src/db/capture-shift-baseline.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
