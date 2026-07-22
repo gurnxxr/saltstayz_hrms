@@ -16,9 +16,19 @@ The hard rule: **no month that has already been paid may change.**
 npm run db:migrate --workspace=server     # runs 002_freeze_paid_months
 ```
 
-This changes no behaviour. It marks every payslip that exists as "calculated under the old
-rules", and from then on those are always served from their saved copy — locked or not.
-Re-running or regenerating one is refused.
+This changes no behaviour. It marks every payslip from a month **before the current one** as
+"calculated under the old rules", and from then on those are always served from their saved
+copy — locked or not. Re-running, regenerating or correcting one is refused.
+
+The month in progress is deliberately left alone. Freezing is one-way, and previewing a draft
+of the current month is normal — freezing that draft would leave the month impossible to re-run
+or correct while still being lockable and payable at whatever partial figures the preview held.
+The migration prints exactly which periods it froze; check that list against what you expect.
+
+The refusal is scoped to the **month**, not to one person's payslip. Someone skipped by the
+original run has no saved payslip of their own, but writing a fresh one for them would still
+move that month's headline totals, because those are re-aggregated across every payslip in the
+period.
 
 Do this **first**, and let it settle, before deploying anything else.
 
@@ -84,11 +94,16 @@ npm run baseline:verify --workspace=server
 ```
 
 Compares every figure of every historical payslip against the baseline, to the rupee, with no
-tolerance. Two comparisons, because they fail independently:
+tolerance. Four comparisons, because they fail independently:
 
 - **Saved** — the row in the database. Catches anything that rewrote history.
 - **Served** — what the app hands back. Catches a read path that recomputes instead of serving
   the frozen copy.
+- **Appeared** — a payslip in a paid month that the baseline never had. Walking the baseline
+  alone can only notice rows that changed or vanished; an inserted one is invisible that way,
+  and it still moves the month's totals.
+- **Run totals** — `status`, `employee_count`, `total_net` and `total_ctc` per month. These are
+  an aggregate, so they can move while every individual payslip stays byte-identical.
 
 **Any difference is a stop-the-line failure.** Don't widen a tolerance; find out what moved.
 

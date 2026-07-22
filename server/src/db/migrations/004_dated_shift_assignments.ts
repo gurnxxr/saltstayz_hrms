@@ -39,13 +39,25 @@ export async function up(knex: Knex): Promise<void> {
 }
 
 export async function down(knex: Knex): Promise<void> {
-  // Collapse back to one row per employee, keeping the most recent.
+  // Collapse back to one row per employee, keeping the one actually IN EFFECT — the latest that
+  // has already started. Keeping the plain maximum would promote a future-dated assignment over
+  // the current one and delete the row that is really governing today, which the single-row
+  // model has no way to express: rolling back would silently move someone onto a shift they
+  // have not started yet. Where nothing has started, the earliest is kept as the placeholder.
   await knex.raw(`
     DELETE FROM employee_shift_assignments a
-     USING employee_shift_assignments b
-     WHERE a.employee_id = b.employee_id
-       AND (a.effective_from < b.effective_from
-            OR (a.effective_from = b.effective_from AND a.id < b.id))
+     USING (
+       SELECT DISTINCT ON (employee_id) id, employee_id
+         FROM employee_shift_assignments
+        ORDER BY employee_id,
+                 (effective_from <= to_char(CURRENT_DATE, 'YYYY-MM-DD')) DESC,
+                 CASE WHEN effective_from <= to_char(CURRENT_DATE, 'YYYY-MM-DD')
+                      THEN effective_from END DESC,
+                 effective_from ASC,
+                 id DESC
+     ) keep
+     WHERE a.employee_id = keep.employee_id
+       AND a.id <> keep.id
   `);
   await knex.schema.alterTable('employee_shift_assignments', (t) => {
     t.dropIndex(['employee_id', 'effective_from'], 'esa_employee_effective_index');

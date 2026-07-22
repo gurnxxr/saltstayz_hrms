@@ -90,6 +90,8 @@ async function main() {
   let storedMismatches = 0;
   let servedMismatches = 0;
   let missing = 0;
+  let appeared = 0;
+  let runMismatches = 0;
   let checked = 0;
   const shadowDrift: Array<{
     who: string; period: string; fields: number;
@@ -106,7 +108,7 @@ async function main() {
   }
 
   for (const [period, group] of [...byPeriod.entries()].sort()) {
-    let periodStored = 0, periodServed = 0, periodMissing = 0;
+    let periodStored = 0, periodServed = 0, periodMissing = 0, periodAppeared = 0;
 
     for (const base of group) {
       checked += 1;
@@ -171,15 +173,56 @@ async function main() {
       }
     }
 
-    const flag = (periodStored + periodServed + periodMissing) ? 'CHANGED' : 'identical';
+    // ── APPEARED: a payslip in this period that the baseline never had ──
+    // Iterating the baseline alone can only ever notice rows that changed or vanished. A slip
+    // INSERTED into a paid month is invisible that way, yet it moves the month's run totals,
+    // because those are re-aggregated across every slip in the period.
+    const liveIds = await db('payslip_history')
+      .where({ month: group[0].month, year: group[0].year }).pluck('employee_id');
+    const baselineIds = new Set(group.map((g: any) => g.employee_id));
+    for (const id of liveIds) {
+      if (!baselineIds.has(id)) {
+        appeared += 1; periodAppeared += 1;
+        failures.push(`${period} employee ${id}: a payslip APPEARED that the baseline never had`);
+      }
+    }
+
+    const flag = (periodStored + periodServed + periodMissing + periodAppeared) ? 'CHANGED' : 'identical';
     console.log(`  ${period}  ${String(group.length).padStart(4)} payslip(s)  ${flag}`);
+  }
+
+  // ── RUN TOTALS: the month's headline figures ──
+  // What finance actually reports and pays against. They are an aggregate, so they can move
+  // even when every individual payslip is byte-identical.
+  const baselineRuns: any[] = baseline.runs ?? [];
+  if (!baselineRuns.length) {
+    console.log('\n  (the baseline holds no payroll runs, so run totals are not covered)');
+  }
+  for (const b of baselineRuns) {
+    const live = await db('payroll_runs').where({ month: b.month, year: b.year }).first();
+    const period = `${b.year}-${String(b.month).padStart(2, '0')}`;
+    if (!live) {
+      runMismatches += 1;
+      failures.push(`${period}: the payroll run no longer exists`);
+      continue;
+    }
+    for (const f of ['status', 'employee_count', 'total_net', 'total_ctc'] as const) {
+      const before = b[f] === null || b[f] === undefined ? b[f] : String(b[f]);
+      const after = live[f] === null || live[f] === undefined ? live[f] : String(live[f]);
+      if (before !== after) {
+        runMismatches += 1;
+        failures.push(`${period}: the run's ${f} changed — ${JSON.stringify(b[f])} -> ${JSON.stringify(live[f])}`);
+      }
+    }
   }
 
   console.log('');
   console.log(`Checked            ${checked}`);
   console.log(`Saved payslips     ${storedMismatches ? `${storedMismatches} CHANGED` : 'all identical'}`);
   console.log(`Served payslips    ${servedMismatches ? `${servedMismatches} CHANGED` : 'all identical'}`);
+  console.log(`Run totals         ${runMismatches ? `${runMismatches} CHANGED` : baselineRuns.length ? 'all identical' : 'not covered'}`);
   if (missing) console.log(`Missing            ${missing}`);
+  if (appeared) console.log(`Appeared           ${appeared}`);
 
   if (failures.length) {
     console.log(`\nThe following moved — this is a stop-the-line failure, not something to tolerate:\n`);
@@ -213,7 +256,7 @@ async function main() {
     }
   }
 
-  const failed = storedMismatches + servedMismatches + missing > 0;
+  const failed = storedMismatches + servedMismatches + missing + appeared + runMismatches > 0;
   console.log(`\n${failed ? 'FAILED — a paid month moved.' : 'PASSED — every paid month reproduces exactly.'}\n`);
   await db.destroy();
   process.exit(failed ? 1 : 0);

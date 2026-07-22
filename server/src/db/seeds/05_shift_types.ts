@@ -15,11 +15,6 @@ import type { Knex } from 'knex';
  * Idempotent — matched on name, which is unique. Existing shifts are left untouched.
  */
 export async function seed(knex: Knex): Promise<void> {
-  // property_id is a vestigial NOT NULL column; shift types are org-wide in practice, so any
-  // property satisfies it. Mirrors what createShiftType does.
-  const property = await knex('properties').select('id').orderBy('id').first();
-  if (!property) return; // organisation seed hasn't run
-
   const shifts = [
     { name: 'General',  start_time: '09:00', end_time: '18:00', roster_color: 'Blue' },
     { name: 'Morning',  start_time: '06:00', end_time: '14:00', roster_color: 'Green' },
@@ -32,9 +27,5 @@ export async function seed(knex: Knex): Promise<void> {
   const missing = shifts.filter((s) => !existing.has(s.name));
   if (!missing.length) return;
 
-  await knex('shift_types').insert(missing.map((s) => ({
-    ...s,
-    property_id: property.id,
-    is_active: true,
-  })));
+  await knex('shift_types').insert(missing.map((s) => ({ ...s, is_active: true })));
 }

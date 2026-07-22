@@ -1,6 +1,7 @@
 import db from '../config/database';
 import { NotFoundError, ValidationError } from '../utils/errors';
 import { notifyEmployee } from './notification.service';
+import { pickAssignmentFor } from './shiftPattern';
 
 // ─── Shift Types (organization-wide) ───
 
@@ -241,25 +242,44 @@ const isoDate = (v: any) => String(v ?? '').slice(0, 10);
 const todayIso = () => new Date().toISOString().slice(0, 10);
 
 /**
- * The one place anything asks "which shift was this person on, on this date".
+ * Which shift a person was on, on a date — for one employee at a time.
  *
- * The answer is the latest assignment starting on or before that date. When a date falls
- * before every assignment — which happens for attendance older than the mapping itself —
- * the earliest assignment is used, so no historical date is left without a shift.
- *
- * Everything that needs a shift goes through here: the attendance upload, the daily
- * re-check, payable days and overtime. One lookup means they cannot disagree.
+ * The rule itself lives in `pickAssignmentFor`. The batch paths (the attendance upload, the
+ * daily re-check) fetch every assignment in one query and apply the same function in memory
+ * rather than calling this per row, so they share the rule without an N+1.
  */
 export async function resolveShiftForEmployee(employeeId: number, date: string) {
-  const on = isoDate(date) || todayIso();
   const rows = await db('employee_shift_assignments as a')
     .join('shift_types as st', 'st.id', 'a.shift_type_id')
     .where('a.employee_id', employeeId)
     .select('st.*', 'a.effective_from', 'a.id as assignment_id')
     .orderBy('a.effective_from');
-  if (!rows.length) return null;
-  const applicable = rows.filter((r: any) => isoDate(r.effective_from) <= on);
-  return mapShiftType(applicable.length ? applicable[applicable.length - 1] : rows[0]);
+  const chosen = pickAssignmentFor(rows as any[], isoDate(date) || todayIso(), todayIso());
+  return chosen ? mapShiftType(chosen) : null;
+}
+
+/**
+ * Refuses when a locked payroll month would be affected.
+ *
+ * `from` is the earliest date the change reaches; null means "reaches all the way back", which
+ * is the case when the assignment being removed is the employee's earliest and the historical
+ * fallback moves with it.
+ *
+ * Compares on `year * 12 + month` so the December-to-January boundary isn't a special case.
+ */
+async function assertNoLockedRunFrom(from: string | null): Promise<void> {
+  const q = db('payroll_runs').where('status', 'locked');
+  if (from) {
+    const [y, m] = from.split('-').map(Number);
+    q.whereRaw('(year * 12 + month) >= ?', [y * 12 + m]);
+  }
+  const locked = await q.orderBy(['year', 'month']).first();
+  if (locked) {
+    throw new ValidationError(
+      `Payroll for ${locked.month}/${locked.year} is locked, and this change would reach it — ` +
+      `unlock that month first, or use a later effective date.`,
+    );
+  }
 }
 
 /** Every employee with the shift they are on today, for the assignment screen. */
@@ -350,12 +370,11 @@ export async function assignShift(
     throw new ValidationError(`${shiftType.name} only takes effect from ${isoDate(shiftType.effective_from)}`);
   }
 
-  // Changing a month whose payroll is locked would contradict what was already paid.
-  const [y, m] = effectiveFrom.split('-').map(Number);
-  const run = await db('payroll_runs').where({ month: m, year: y }).first();
-  if (run?.status === 'locked') {
-    throw new ValidationError(`Payroll for ${m}/${y} is locked — unlock it before changing shifts from that month.`);
-  }
+  // An assignment applies from its date FORWARD, indefinitely — so checking only the month it
+  // starts in would let a backdated assignment silently rewrite every locked month after it.
+  // (The common case: someone joined before payroll runs began, so their joining month has no
+  // run row at all, and a "harmless" backdate reaches straight through the paid months.)
+  await assertNoLockedRunFrom(effectiveFrom);
 
   const existing = await db('employee_shift_assignments')
     .where({ employee_id: employeeId, effective_from: effectiveFrom }).first();
@@ -379,11 +398,13 @@ export async function removeShiftAssignment(id: number) {
   const row = await db('employee_shift_assignments').where('id', id).first();
   if (!row) throw new NotFoundError('Shift assignment');
 
-  const [y, m] = isoDate(row.effective_from).split('-').map(Number);
-  const run = await db('payroll_runs').where({ month: m, year: y }).first();
-  if (run?.status === 'locked') {
-    throw new ValidationError(`Payroll for ${m}/${y} is locked — unlock it before changing shifts from that month.`);
-  }
+  // Deleting shifts the dates this assignment covered onto whichever one remains. If it is the
+  // employee's earliest, the fallback moves too and dates before it are affected as well — so
+  // that case has to be clear of every locked run, not just the ones after its own date.
+  const earliest = await db('employee_shift_assignments')
+    .where('employee_id', row.employee_id).orderBy('effective_from').first();
+  const from = earliest && earliest.id === row.id ? null : isoDate(row.effective_from);
+  await assertNoLockedRunFrom(from);
 
   await db('employee_shift_assignments').where('id', id).del();
   return { id, employee_id: row.employee_id };

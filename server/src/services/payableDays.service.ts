@@ -1,7 +1,7 @@
 import db from '../config/database';
 import { getPaySchedule } from './paySchedule.service';
 import { getEmployeeRegion } from './leave.service';
-import { isOffDay, parseOffDayRules, shiftLengthHours } from './shiftPattern';
+import { isOffDay, parseOffDayRules, pickAssignmentFor, shiftLengthHours } from './shiftPattern';
 import type { AttendanceContext } from './payslip.calc';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -108,7 +108,7 @@ export async function buildWorkCalendar(
     .orderBy('a.effective_from');
 
   const prepared = assignments.map((a: any) => ({
-    from: String(a.effective_from).slice(0, 10),
+    effective_from: String(a.effective_from).slice(0, 10),
     name: a.name,
     hours: shiftLengthHours(a.start_time, a.end_time),
     allowOt: !!a.allow_overtime,
@@ -116,19 +116,9 @@ export async function buildWorkCalendar(
     offRules: parseOffDayRules(a.weekly_off_days),
   }));
 
-  /**
-   * The shift in effect on a date: the latest assignment starting on or before it. A date
-   * earlier than every assignment falls back to the first one, so attendance older than the
-   * mapping still resolves rather than silently losing its shift.
-   */
-  const shiftOn = (date: string) => {
-    if (!prepared.length) return null;
-    let chosen = prepared[0];
-    for (const a of prepared) {
-      if (a.from <= date) chosen = a; else break;
-    }
-    return chosen;
-  };
+  const today = new Date().toISOString().slice(0, 10);
+  /** The shift in effect on a date — same rule as everywhere else. */
+  const shiftOn = (date: string) => pickAssignmentFor(prepared, date, today);
 
   const region = await getEmployeeRegion(employeeId);
   const holidayRows = await db('holidays')

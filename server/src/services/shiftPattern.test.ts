@@ -1,7 +1,54 @@
 import { describe, it, expect } from 'vitest';
 import {
   dayOfWeek, occurrenceInMonth, parseOffDayRules, isOffDay, shiftLengthHours, fullDayHoursFor,
+  pickAssignmentFor,
 } from './shiftPattern';
+
+describe('pickAssignmentFor', () => {
+  const a = (effective_from: string, name: string) => ({ effective_from, name });
+  const TODAY = '2026-07-22';
+
+  it('picks the assignment in effect on the date', () => {
+    const rows = [a('2026-01-01', 'Morning'), a('2026-06-01', 'Night')];
+    expect(pickAssignmentFor(rows, '2026-03-15', TODAY)?.name).toBe('Morning');
+    expect(pickAssignmentFor(rows, '2026-06-01', TODAY)?.name).toBe('Night');
+    expect(pickAssignmentFor(rows, '2026-07-22', TODAY)?.name).toBe('Night');
+  });
+
+  it('falls back to the earliest for dates older than the mapping itself', () => {
+    // The mapping was only recorded in June; May attendance still needs a shift.
+    const rows = [a('2026-06-01', 'Morning')];
+    expect(pickAssignmentFor(rows, '2026-05-10', TODAY)?.name).toBe('Morning');
+  });
+
+  it('does NOT let a future-dated assignment govern the past', () => {
+    // Approving a shift-change request forces a date of today or later. If that is someone's
+    // only assignment, the earliest-fallback would otherwise back-apply September's shift to
+    // every month of their history and silently move their payable days.
+    const rows = [a('2026-09-01', 'Night')];
+    expect(pickAssignmentFor(rows, '2026-07-11', TODAY)).toBeNull();
+    expect(pickAssignmentFor(rows, '2026-06-01', TODAY)).toBeNull();
+    // It does apply once it starts.
+    expect(pickAssignmentFor(rows, '2026-09-01', TODAY)?.name).toBe('Night');
+    expect(pickAssignmentFor(rows, '2026-10-05', TODAY)?.name).toBe('Night');
+  });
+
+  it('still backfills from the earliest STARTED assignment when a later one is future-dated', () => {
+    const rows = [a('2026-06-01', 'Morning'), a('2026-09-01', 'Night')];
+    expect(pickAssignmentFor(rows, '2026-04-02', TODAY)?.name).toBe('Morning');
+    expect(pickAssignmentFor(rows, '2026-07-22', TODAY)?.name).toBe('Morning');
+    expect(pickAssignmentFor(rows, '2026-09-02', TODAY)?.name).toBe('Night');
+  });
+
+  it('returns null with no assignments at all', () => {
+    expect(pickAssignmentFor([], '2026-07-22', TODAY)).toBeNull();
+  });
+
+  it('tolerates timestamps and reads only the date part', () => {
+    const rows = [{ effective_from: '2026-06-01T00:00:00.000Z', name: 'Morning' }];
+    expect(pickAssignmentFor(rows, '2026-07-01', TODAY)?.name).toBe('Morning');
+  });
+});
 
 describe('dayOfWeek', () => {
   it('reads the weekday without timezone drift', () => {

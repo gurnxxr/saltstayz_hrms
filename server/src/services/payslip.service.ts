@@ -308,6 +308,25 @@ export async function getSelfServicePayslip(employeeId: number, month: number, y
 
 // ─── Generation + history ───
 
+/**
+ * Throws if any payslip in this month was calculated under the previous rules.
+ *
+ * Deliberately scoped to the month rather than to one employee's row. A month is frozen as a
+ * whole: its run totals are an aggregate over every slip in it, so writing a single new slip
+ * into a frozen month moves figures for a month that has already been paid — even when that
+ * particular employee had no slip of their own to protect.
+ */
+async function assertMonthNotFrozen(month: number, year: number, consequence: string): Promise<void> {
+  const frozen = await db('payslip_history')
+    .where({ month, year }).where('calc_version', '<', CALC_VERSION).count('id as c').first();
+  if (Number(frozen?.c ?? 0) > 0) {
+    throw new AppError(
+      `${monthName(month)} ${year} was calculated under the previous rules and is frozen — ${consequence}.`,
+      409,
+    );
+  }
+}
+
 /** Upserts a payslip_history row from a computed payslip. Returns the row id. */
 async function writePayslipRecord(
   computed: ComputedPayslip, runId: number | null, generatedBy?: number | null,
@@ -335,16 +354,14 @@ async function writePayslipRecord(
     calc_version: CALC_VERSION,
   };
 
+  // A month calculated under the older rules can't be reproduced by today's code. The check
+  // is on the MONTH, not on this employee's row: someone skipped by that run (no salary
+  // structure at the time) has no row to find, and inserting a fresh one for them would let
+  // refreshRunTotals re-aggregate and move the headline figures of a month people were paid.
+  await assertMonthNotFrozen(computed.month, computed.year, 'its payslips can\'t be regenerated');
+
   const existing = await db('payslip_history')
     .where({ employee_id: computed.employee.id, month: computed.month, year: computed.year }).first();
-  // A payslip from an older rules version can't be reproduced by today's code, so
-  // overwriting it would silently replace what someone was actually paid.
-  if (existing && Number(existing.calc_version) < CALC_VERSION) {
-    throw new AppError(
-      `${monthName(computed.month)} ${computed.year} was calculated under the previous rules and is frozen — its payslips can't be regenerated.`,
-      409,
-    );
-  }
   if (existing) {
     await db('payslip_history').where('id', existing.id).update({ ...record, updated_at: db.fn.now() });
     return existing.id;
@@ -470,14 +487,7 @@ export async function runPayroll(month: number, year: number, userId?: number | 
   // Refuse up front rather than failing per-employee: a month calculated under the previous
   // rules can't be reproduced, so re-running it would replace what people were actually paid
   // with whatever today's code computes. This holds even if the month was unlocked.
-  const frozen = await db('payslip_history')
-    .where({ month, year }).where('calc_version', '<', CALC_VERSION).count('id as c').first();
-  if (Number(frozen?.c ?? 0) > 0) {
-    throw new AppError(
-      `${monthName(month)} ${year} was calculated under the previous rules and is frozen — it can't be re-run.`,
-      409,
-    );
-  }
+  await assertMonthNotFrozen(month, year, 'it can\'t be re-run');
   if (!run) {
     const [{ id }] = await db('payroll_runs').insert({
       month, year, status: 'draft', generated_by: userId ?? null,
@@ -575,6 +585,11 @@ export async function upsertAdjustment(
   await employeeOrThrow(employeeId);
   const run = await getRun(month, year);
   if (run?.status === 'locked') throw new AppError('Payroll for this month is locked.', 409);
+  // Check BEFORE writing anything. The regeneration below throws on a frozen month, and the
+  // adjustment row is not written in the same transaction — so without this the correction
+  // would be recorded against an already-paid month whose figures never moved, leaving the
+  // payroll record claiming a correction that was never applied.
+  await assertMonthNotFrozen(month, year, 'corrections to it can\'t be applied');
 
   const lopOverride = data.lop_override === null || data.lop_override === undefined || data.lop_override === ('' as any)
     ? null : Number(data.lop_override);
@@ -600,10 +615,31 @@ export async function upsertAdjustment(
   else await db('payroll_adjustments').insert({ employee_id: employeeId, month, year, ...patch });
 
   // Regenerate this employee's slip so the review grid shows the corrected numbers.
-  const computed = await computeForEmployee(employeeId, month, year, { persistEsiPeriod: !!run });
-  if (run) {
-    await writePayslipRecord(computed, run.id, userId);
-    await refreshRunTotals(run.id, month, year);
+  //
+  // The regeneration can still be refused — a lock can land between the check above and the
+  // write below. If it is, put the adjustment back the way it was: a correction that did not
+  // reach the payslip must not survive in the record as though it had.
+  let computed;
+  try {
+    computed = await computeForEmployee(employeeId, month, year, { persistEsiPeriod: !!run });
+    if (run) {
+      await writePayslipRecord(computed, run.id, userId);
+      await refreshRunTotals(run.id, month, year);
+    }
+  } catch (err) {
+    if (existing) {
+      await db('payroll_adjustments').where('id', existing.id).update({
+        lop_override: existing.lop_override ?? null,
+        adjustment_amount: existing.adjustment_amount ?? 0,
+        adjustment_label: existing.adjustment_label ?? null,
+        note: existing.note ?? null,
+        updated_by: existing.updated_by ?? null,
+        updated_at: existing.updated_at ?? db.fn.now(),
+      });
+    } else {
+      await db('payroll_adjustments').where({ employee_id: employeeId, month, year }).del();
+    }
+    throw err;
   }
   return { adjustment: await getAdjustment(employeeId, month, year), breakdown: computed.breakdown };
 }

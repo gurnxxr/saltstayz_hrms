@@ -30,7 +30,10 @@ router.delete('/types/:id', SHIFT_TYPE_MANAGE, ctrl.deleteShiftType);
 router.get('/assignments', authorize('shifts', 'read'), SHIFT_STAFF, ctrl.listShiftAssignments);
 router.get('/assignments/employees/:employeeId', authorize('shifts', 'read'), SHIFT_STAFF, ctrl.getEmployeeShiftHistory);
 router.post('/assignments', authorize('shifts', 'create'), SHIFT_STAFF, ctrl.assignShift);
-router.delete('/assignments/:id', authorize('shifts', 'delete'), SHIFT_STAFF, ctrl.removeShiftAssignment);
+// Removing an assignment is the same class of write as creating one, so it is gated the same
+// way. `shifts:delete` is never granted to property_manager, who the nav and the screen both
+// expect to be able to do this — gating on it would show them a button that always 403s.
+router.delete('/assignments/:id', authorize('shifts', 'create'), SHIFT_STAFF, ctrl.removeShiftAssignment);
 
 // Shift-change requests — employees apply via /me/change-requests; managers/HR
 // review here. Listing needs shifts:read; approving writes an assignment (shifts:create).

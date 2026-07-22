@@ -5,8 +5,29 @@ import { notify } from './notification.service';
 import { getEmployeeRegion } from './leave.service';
 import { getPaySchedule } from './paySchedule.service';
 import { overnightHours, judgeDay } from './attendance.calc';
+import { pickAssignmentFor } from './shiftPattern';
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
+
+/**
+ * The shift whose hour thresholds are allowed to judge a date — or null when none are.
+ *
+ * Both attendance paths call this, so they cannot apply different gates to the same day. That
+ * was the whole point of collapsing the two engines: previously the upload applied a shift's
+ * absent/half-day hours with neither gate, while the daily catch-up pass applied both — so the
+ * pass that exists to correct the upload would skip exactly the days the upload got wrong.
+ *
+ * Two gates, and they are the reason this is a function rather than a lookup:
+ *  - a shift's rules do not exist before its own effective date;
+ *  - a shift with auto-attendance switched off does not judge anyone by hours at all.
+ */
+function applicableRules(list: any[] | undefined, date: string, today: string) {
+  const chosen = pickAssignmentFor(list ?? [], date, today);
+  if (!chosen) return null;
+  if (!chosen.enable_auto_attendance) return null;
+  if (chosen.shift_effective_from && String(chosen.shift_effective_from).slice(0, 10) > date) return null;
+  return chosen;
+}
 
 /**
  * Re-checks a day's attendance against the shift's hour thresholds.
@@ -37,12 +58,15 @@ export async function autoMarkAttendance(date?: string) {
   // One query for every assignment in play, resolved per employee in memory. A plain join
   // would now multiply rows, since an employee can have several dated assignments.
   const empIds = [...new Set(rows.map((r: any) => r.employee_id))];
+  // Deliberately NOT filtered by enable_auto_attendance. That flag belongs to the shift the
+  // employee turns out to be on, and filtering here would remove rows from the timeline before
+  // it is resolved — leaving the fallback to land on a superseded or not-yet-started shift and
+  // judge the day by rules that don't apply to it. Resolve first, then decide.
   const assignRows = await db('employee_shift_assignments as a')
     .join('shift_types as st', 'st.id', 'a.shift_type_id')
     .whereIn('a.employee_id', empIds)
-    .where('st.enable_auto_attendance', true)
     .select('a.employee_id', 'a.effective_from', 'st.absent_hours', 'st.half_day_hours',
-      'st.effective_from as shift_effective_from')
+      'st.enable_auto_attendance', 'st.effective_from as shift_effective_from')
     .orderBy(['a.employee_id', 'a.effective_from']);
 
   const byEmp = new Map<number, any[]>();
@@ -50,17 +74,7 @@ export async function autoMarkAttendance(date?: string) {
     if (!byEmp.has(a.employee_id)) byEmp.set(a.employee_id, []);
     byEmp.get(a.employee_id)!.push(a);
   }
-  const shiftFor = (employeeId: number) => {
-    const list = byEmp.get(employeeId);
-    if (!list?.length) return null;
-    let chosen = list[0];
-    for (const a of list) {
-      if (String(a.effective_from).slice(0, 10) <= target) chosen = a; else break;
-    }
-    // The shift's own rules don't apply before its effective date.
-    if (chosen.shift_effective_from && String(chosen.shift_effective_from).slice(0, 10) > target) return null;
-    return chosen;
-  };
+  const shiftFor = (employeeId: number) => applicableRules(byEmp.get(employeeId), target, todayStr());
 
   let updated = 0;
   let scanned = 0;
@@ -244,7 +258,8 @@ export async function uploadAttendanceCsv(csvContent: string) {
     .join('shift_types as st', 'st.id', 'a.shift_type_id')
     .whereIn('a.employee_id', empIds)
     .select('a.employee_id', 'a.effective_from', 'st.start_time', 'st.end_time',
-      'st.ends_next_day', 'st.absent_hours', 'st.half_day_hours', 'st.effective_from as shift_effective_from')
+      'st.ends_next_day', 'st.absent_hours', 'st.half_day_hours',
+      'st.enable_auto_attendance', 'st.effective_from as shift_effective_from')
     .orderBy(['a.employee_id', 'a.effective_from']) : [];
 
   const assignmentsByEmp = new Map<number, any[]>();
@@ -252,16 +267,13 @@ export async function uploadAttendanceCsv(csvContent: string) {
     if (!assignmentsByEmp.has(a.employee_id)) assignmentsByEmp.set(a.employee_id, []);
     assignmentsByEmp.get(a.employee_id)!.push(a);
   }
-  /** Latest assignment starting on or before the date; the earliest if the date predates all. */
-  const shiftFor = (employeeId: number, date: string) => {
-    const list = assignmentsByEmp.get(employeeId);
-    if (!list?.length) return null;
-    let chosen = list[0];
-    for (const a of list) {
-      if (String(a.effective_from).slice(0, 10) <= date) chosen = a; else break;
-    }
-    return chosen;
-  };
+  const today = todayStr();
+  /** Which shift they were on — used for the punch window (start/end times). */
+  const shiftFor = (employeeId: number, date: string) =>
+    pickAssignmentFor(assignmentsByEmp.get(employeeId) ?? [], date, today);
+  /** Whether that shift's hour thresholds may judge the day — the same gates the daily pass uses. */
+  const rulesFor = (employeeId: number, date: string) =>
+    applicableRules(assignmentsByEmp.get(employeeId), date, today);
 
   for (const row of rows) {
     const employeeId = empMap.get(row.empCode);
@@ -283,6 +295,10 @@ export async function uploadAttendanceCsv(csvContent: string) {
     const worked = (hasIn && hasOut) ? overnightHours(row.checkIn, row.checkOut) : 0;
     const shift = shiftFor(employeeId, row.date);
     const shiftHours = shift ? overnightHours(shift.start_time, shift.end_time) : 0;
+    // The punch window comes from the shift regardless; the hour ladder only applies when the
+    // shift's rules are actually in force on this date. Without this the upload would judge by
+    // thresholds the daily catch-up pass skips, and nothing would ever reconcile the two.
+    const rules = rulesFor(employeeId, row.date);
 
     // One verdict, from the shift's own rules: the punch-based judgement first, then the
     // shift's hour thresholds. Previously a separate daily job applied those thresholds
@@ -291,8 +307,8 @@ export async function uploadAttendanceCsv(csvContent: string) {
       hasIn, hasOut, workedHours: worked,
       shiftHours: shiftHours || standardDayHours,
       graceMinutes,
-      absentHours: Number(shift?.absent_hours) || 0,
-      halfDayHours: Number(shift?.half_day_hours) || 0,
+      absentHours: Number(rules?.absent_hours) || 0,
+      halfDayHours: Number(rules?.half_day_hours) || 0,
     });
 
     const checkInDatetime = hasIn ? `${row.date} ${row.checkIn}:00` : null;

@@ -67,6 +67,39 @@ export function isOffDay(iso: string, rules: OffDayRule[]): boolean {
 }
 
 /**
+ * Which of an employee's dated assignments governs a given date.
+ *
+ * The answer is the latest assignment starting on or before that date. When the date falls
+ * before every assignment — which happens for attendance older than the mapping itself — the
+ * earliest assignment is used instead, so no historical date is left without a shift.
+ *
+ * That backfill only applies to an assignment that has ACTUALLY STARTED. Without the check, an
+ * employee whose only assignment is future-dated — the normal result of approving a shift-change
+ * request, which forces a date of today or later — would have that future shift govern every
+ * date in their history, silently rewriting the work calendar of months already gone.
+ *
+ * Returns null when nothing applies; the caller then treats them as unassigned.
+ *
+ * `rows` must be sorted ascending by `effective_from`.
+ */
+export function pickAssignmentFor<T extends { effective_from?: string | null }>(
+  rows: T[], date: string, today: string,
+): T | null {
+  if (!rows.length) return null;
+  const on = String(date).slice(0, 10);
+  const startOf = (r: T) => String(r.effective_from ?? '').slice(0, 10);
+
+  let chosen: T | null = null;
+  for (const r of rows) {
+    if (startOf(r) <= on) chosen = r; else break;
+  }
+  if (chosen) return chosen;
+
+  const earliest = rows[0];
+  return startOf(earliest) <= String(today).slice(0, 10) ? earliest : null;
+}
+
+/**
  * Length of a shift in hours, wrapping past midnight when the end is at or before the start.
  *
  * Deliberately identical to the arithmetic this replaced, so shift lengths — and therefore

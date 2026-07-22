@@ -62,7 +62,13 @@ export async function seed(knex: Knex): Promise<void> {
     let s = 0;
     for (const id of allActive) {
       if (assigned.has(id)) continue;
-      await knex('employee_shift_assignments').insert({ employee_id: id, shift_type_id: shiftTypeIds[s % shiftTypeIds.length] });
+      // effective_from is NOT NULL with no default. Seeded staff are treated as having been on
+      // this shift all along, so history resolves rather than falling back.
+      await knex('employee_shift_assignments').insert({
+        employee_id: id,
+        shift_type_id: shiftTypeIds[s % shiftTypeIds.length],
+        effective_from: '2000-01-01',
+      });
       s++;
     }
   }

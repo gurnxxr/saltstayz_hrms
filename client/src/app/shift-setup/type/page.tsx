@@ -104,7 +104,11 @@ function hydrate(row: any): ShiftTypeForm {
     : [];
   return {
     name: row.name ?? '',
-    effective_from: (row.effective_from ?? '').slice(0, 10) || todayStr(),
+    // Deliberately NOT defaulted to today. Almost every existing shift has no effective date,
+    // and stamping one on open-and-save would silently make the shift start today — which then
+    // refuses any assignment backdated to cover the month being set up, the exact thing the
+    // rollout asks HR to do.
+    effective_from: (row.effective_from ?? '').slice(0, 10),
     roster_color: row.roster_color ?? 'Blue',
     start_time: (row.start_time ?? '').slice(0, 5),
     end_time: (row.end_time ?? '').slice(0, 5),
