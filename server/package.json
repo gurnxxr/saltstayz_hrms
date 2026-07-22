@@ -14,6 +14,7 @@
     "db:backup": "tsx src/db/backup.ts",
     "baseline:capture": "tsx src/db/capture-shift-baseline.ts",
     "patterns:report": "tsx src/db/apply-shift-patterns.ts",
+    "baseline:verify": "tsx src/db/verify-payslips-unchanged.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

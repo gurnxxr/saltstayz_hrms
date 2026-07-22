@@ -1,0 +1,222 @@
+import 'dotenv/config';
+import fs from 'fs';
+import path from 'path';
+import db from '../config/database';
+import * as payslip from '../services/payslip.service';
+
+/**
+ * Proves that no month which has already been paid has moved.
+ *
+ * This is the acceptance test for the whole Shift Management rework. Run
+ * `npm run baseline:capture` BEFORE any of the rework ships, then run this after — it compares
+ * every figure of every payslip ever issued against that copy, to the rupee, with no tolerance.
+ * Payroll is whole rupees; a tolerance would hide exactly the bug this exists to catch.
+ *
+ * Two comparisons, because they can fail independently:
+ *
+ *   STORED — the saved payslip row against the baseline. Catches anything that rewrote history
+ *   in the database.
+ *
+ *   SERVED — what the app hands back today against the baseline. Catches a read path that
+ *   recomputes instead of serving the frozen copy, even though the stored row is intact.
+ *
+ * With --shadow it also recomputes each month under the CURRENT rules and reports how far that
+ * would have drifted. Those differences are expected and are the point: they show the freeze is
+ * doing real work rather than the old and new engines happening to agree.
+ *
+ *   npm run baseline:verify --workspace=server
+ *   npm run baseline:verify --workspace=server -- --shadow
+ *   npm run baseline:verify --workspace=server -- --in some/other/dir
+ */
+
+/** Flattens a payslip to leaf paths so two of them can be compared field by field. */
+function flatten(value: unknown, prefix = '', out: Record<string, unknown> = {}): Record<string, unknown> {
+  if (value === null || typeof value !== 'object') { out[prefix] = value; return out; }
+  if (Array.isArray(value)) {
+    value.forEach((v, i) => flatten(v, `${prefix}[${i}]`, out));
+    return out;
+  }
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    flatten(v, prefix ? `${prefix}.${k}` : k, out);
+  }
+  return out;
+}
+
+/** Field paths that differ between two payslips, with both values. */
+function diffFields(a: unknown, b: unknown): Array<{ path: string; before: unknown; after: unknown }> {
+  const fa = flatten(a);
+  const fb = flatten(b);
+  const paths = new Set([...Object.keys(fa), ...Object.keys(fb)]);
+  const out: Array<{ path: string; before: unknown; after: unknown }> = [];
+  for (const p of paths) {
+    if (JSON.stringify(fa[p]) !== JSON.stringify(fb[p])) out.push({ path: p, before: fa[p], after: fb[p] });
+  }
+  return out;
+}
+
+function inputDir(): string {
+  const flag = process.argv.indexOf('--in');
+  return flag !== -1 && process.argv[flag + 1]
+    ? path.resolve(process.argv[flag + 1])
+    : path.join(process.cwd(), 'data', 'shift-rework-baseline');
+}
+
+const money = (n: unknown) => `₹${Math.round(Number(n) || 0).toLocaleString('en-IN')}`;
+
+async function main() {
+  const shadow = process.argv.includes('--shadow');
+  const dir = inputDir();
+  const file = path.join(dir, 'payslips.json');
+
+  if (!fs.existsSync(file)) {
+    console.error(`\nNo baseline at ${file}`);
+    console.error('Run `npm run baseline:capture --workspace=server` BEFORE the rework ships,');
+    console.error('otherwise there is nothing to check the current figures against.\n');
+    process.exit(1);
+  }
+
+  const baseline = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const rows: any[] = baseline.payslips ?? [];
+  console.log(`Baseline captured ${baseline.captured_at}`);
+  console.log(`${rows.length} payslip(s) to check\n`);
+
+  if (!rows.length) {
+    console.log('The baseline is empty — there were no payslips when it was taken, so there is');
+    console.log('nothing that could have moved. Nothing to prove here.\n');
+    await db.destroy();
+    return;
+  }
+
+  let storedMismatches = 0;
+  let servedMismatches = 0;
+  let missing = 0;
+  let checked = 0;
+  const shadowDrift: Array<{
+    who: string; period: string; fields: number;
+    netBefore: unknown; netAfter: unknown; paths: string[];
+  }> = [];
+  const failures: string[] = [];
+
+  // Month at a time, so a big history doesn't sit in memory all at once.
+  const byPeriod = new Map<string, any[]>();
+  for (const r of rows) {
+    const key = `${r.year}-${String(r.month).padStart(2, '0')}`;
+    if (!byPeriod.has(key)) byPeriod.set(key, []);
+    byPeriod.get(key)!.push(r);
+  }
+
+  for (const [period, group] of [...byPeriod.entries()].sort()) {
+    let periodStored = 0, periodServed = 0, periodMissing = 0;
+
+    for (const base of group) {
+      checked += 1;
+
+      // ── STORED: the row in the database against the baseline ──
+      const row = await db('payslip_history')
+        .where({ employee_id: base.employee_id, month: base.month, year: base.year })
+        .first();
+      if (!row) {
+        missing += 1; periodMissing += 1;
+        failures.push(`${period} employee ${base.employee_id}: the payslip no longer exists`);
+        continue;
+      }
+      let storedSnapshot: unknown = null;
+      try { storedSnapshot = JSON.parse(row.snapshot); } catch { storedSnapshot = { __unparseable: true }; }
+
+      const storedDiff = diffFields(base.snapshot, storedSnapshot);
+      if (storedDiff.length) {
+        storedMismatches += 1; periodStored += 1;
+        failures.push(
+          `${period} employee ${base.employee_id}: the SAVED payslip changed — ` +
+          storedDiff.slice(0, 3).map((d) => `${d.path}: ${JSON.stringify(d.before)} -> ${JSON.stringify(d.after)}`).join('; '),
+        );
+      }
+
+      // ── SERVED: what the app hands back today ──
+      let served: unknown = null;
+      try {
+        served = await payslip.getPayslipForStaff(base.employee_id, base.month, base.year);
+      } catch (e: any) {
+        servedMismatches += 1; periodServed += 1;
+        failures.push(`${period} employee ${base.employee_id}: could not be read back — ${e.message}`);
+        continue;
+      }
+      const servedDiff = diffFields(base.snapshot, served);
+      if (servedDiff.length) {
+        servedMismatches += 1; periodServed += 1;
+        failures.push(
+          `${period} employee ${base.employee_id}: the payslip SERVED to the app changed — ` +
+          servedDiff.slice(0, 3).map((d) => `${d.path}: ${JSON.stringify(d.before)} -> ${JSON.stringify(d.after)}`).join('; '),
+        );
+      }
+
+      // ── SHADOW: what today's rules would produce, if we let them ──
+      if (shadow) {
+        try {
+          const live = await payslip.computeForEmployee(base.employee_id, base.month, base.year);
+          const drift = diffFields(base.snapshot, live);
+          if (drift.length) {
+            shadowDrift.push({
+              who: String(base.employee_id),
+              period,
+              fields: drift.length,
+              netBefore: (base.snapshot as any)?.breakdown?.net_pay,
+              netAfter: (live as any)?.breakdown?.net_pay,
+              // Which fields moved matters as much as by how much: a month with no lost pay
+              // can shift its working-day count without the money changing at all.
+              paths: drift.slice(0, 4).map((d) => `${d.path}: ${JSON.stringify(d.before)} -> ${JSON.stringify(d.after)}`),
+            });
+          }
+        } catch { /* an employee whose salary can no longer be resolved isn't a reproducibility failure */ }
+      }
+    }
+
+    const flag = (periodStored + periodServed + periodMissing) ? 'CHANGED' : 'identical';
+    console.log(`  ${period}  ${String(group.length).padStart(4)} payslip(s)  ${flag}`);
+  }
+
+  console.log('');
+  console.log(`Checked            ${checked}`);
+  console.log(`Saved payslips     ${storedMismatches ? `${storedMismatches} CHANGED` : 'all identical'}`);
+  console.log(`Served payslips    ${servedMismatches ? `${servedMismatches} CHANGED` : 'all identical'}`);
+  if (missing) console.log(`Missing            ${missing}`);
+
+  if (failures.length) {
+    console.log(`\nThe following moved — this is a stop-the-line failure, not something to tolerate:\n`);
+    for (const f of failures.slice(0, 40)) console.log(`  ${f}`);
+    if (failures.length > 40) console.log(`  …and ${failures.length - 40} more`);
+  }
+
+  if (shadow) {
+    console.log(`\n── Shadow: what today's rules would have produced ──`);
+    if (!shadowDrift.length) {
+      console.log('  No difference. Either the calendars genuinely agree for this history, or these');
+      console.log('  employees have no attendance to differ over — worth knowing which.');
+    } else {
+      const moneyMoved = shadowDrift.filter((d) => Math.round(Number(d.netBefore) || 0) !== Math.round(Number(d.netAfter) || 0));
+      console.log(`  ${shadowDrift.length} of ${checked} payslip(s) would come out differently.`);
+      console.log(`  ${moneyMoved.length} of those would change what the person is actually paid.\n`);
+      for (const d of shadowDrift.slice(0, 10)) {
+        const moved = Math.round(Number(d.netBefore) || 0) !== Math.round(Number(d.netAfter) || 0);
+        console.log(`    ${d.period} employee ${d.who}: ${d.fields} field(s)` +
+          (moved ? `, net ${money(d.netBefore)} -> ${money(d.netAfter)}` : ', net unchanged'));
+        for (const p of d.paths) console.log(`        ${p}`);
+      }
+      if (shadowDrift.length > 10) console.log(`    …and ${shadowDrift.length - 10} more`);
+      console.log(`\n  These differences are expected and are the point: they are what the freeze is`);
+      console.log(`  preventing. If this list were empty the freeze would be untested, not proven.`);
+      if (shadowDrift.length && !moneyMoved.length) {
+        console.log(`\n  Note: the day counts moved but no pay did. That happens when nobody lost any`);
+        console.log(`  pay in these months — with no deductions the proration ratio stays 1 however`);
+        console.log(`  many working days there are. Months WITH absences are where money would move.`);
+      }
+    }
+  }
+
+  const failed = storedMismatches + servedMismatches + missing > 0;
+  console.log(`\n${failed ? 'FAILED — a paid month moved.' : 'PASSED — every paid month reproduces exactly.'}\n`);
+  await db.destroy();
+  process.exit(failed ? 1 : 0);
+}
+
+main().catch(async (e) => { console.error(`\n${e.message}\n`); await db.destroy(); process.exit(1); });
