@@ -256,6 +256,13 @@ export async function computeForEmployee(
   };
 }
 
+/**
+ * The rules version the current code produces. A payslip stored under an older version was
+ * calculated by rules that no longer exist in this codebase, so it can never be reproduced
+ * by recomputing — it is always served from its stored snapshot instead. See migration 002.
+ */
+export const CALC_VERSION = 2;
+
 /** The stored snapshot for a locked month, or null when the month isn't locked. */
 async function lockedSnapshot(employeeId: number, month: number, year: number): Promise<ComputedPayslip | null> {
   const run = await getRun(month, year);
@@ -265,16 +272,32 @@ async function lockedSnapshot(employeeId: number, month: number, year: number): 
 }
 
 /**
- * Staff view: a locked month serves the byte-identical stored snapshot; a draft
- * month computes live (so the review reflects the latest inputs).
+ * The stored snapshot when a payslip must not be recomputed, or null when computing live is
+ * correct. Frozen in two cases: an older rules version (unreproducible), or a locked month
+ * (immutable by policy). A current-version draft still computes live, so the payroll review
+ * screen keeps reflecting the latest attendance.
+ */
+async function frozenSnapshot(employeeId: number, month: number, year: number): Promise<ComputedPayslip | null> {
+  const row = await db('payslip_history').where({ employee_id: employeeId, month, year }).first();
+  if (!row) return null;
+  if (Number(row.calc_version) < CALC_VERSION) return parseSnapshot(row.snapshot);
+  const run = await getRun(month, year);
+  return run?.status === 'locked' ? parseSnapshot(row.snapshot) : null;
+}
+
+/**
+ * Staff view: a frozen month (older rules, or locked) serves the byte-identical stored
+ * snapshot; a current draft month computes live so the review reflects the latest inputs.
  */
 export async function getPayslipForStaff(employeeId: number, month: number, year: number): Promise<ComputedPayslip> {
-  return (await lockedSnapshot(employeeId, month, year)) ?? computeForEmployee(employeeId, month, year);
+  return (await frozenSnapshot(employeeId, month, year)) ?? computeForEmployee(employeeId, month, year);
 }
 
 /**
  * Self-service view: an employee only ever sees a LOCKED month, and only the
- * stored snapshot. A draft (or un-run) month is not yet published to them.
+ * stored snapshot. A draft (or un-run) month is not yet published to them — freezing an old
+ * month for reproducibility must not also publish it, so this deliberately keeps using the
+ * lock check rather than frozenSnapshot.
  */
 export async function getSelfServicePayslip(employeeId: number, month: number, year: number): Promise<ComputedPayslip> {
   assertValidPeriod(month, year);
@@ -309,10 +332,19 @@ async function writePayslipRecord(
     snapshot: JSON.stringify(computed),
     run_id: runId,
     generated_by: generatedBy ?? null,
+    calc_version: CALC_VERSION,
   };
 
   const existing = await db('payslip_history')
     .where({ employee_id: computed.employee.id, month: computed.month, year: computed.year }).first();
+  // A payslip from an older rules version can't be reproduced by today's code, so
+  // overwriting it would silently replace what someone was actually paid.
+  if (existing && Number(existing.calc_version) < CALC_VERSION) {
+    throw new AppError(
+      `${monthName(computed.month)} ${computed.year} was calculated under the previous rules and is frozen — its payslips can't be regenerated.`,
+      409,
+    );
+  }
   if (existing) {
     await db('payslip_history').where('id', existing.id).update({ ...record, updated_at: db.fn.now() });
     return existing.id;
@@ -327,10 +359,15 @@ export async function generatePayslip(
   // Once a month's payroll is locked, payslips are immutable — return the stored
   // snapshot rather than recomputing/overwriting.
   const run = await getRun(month, year);
+  const stored = await db('payslip_history').where({ employee_id: employeeId, month, year }).first();
+
+  // Frozen either way — a locked month is immutable by policy, and an older-rules month
+  // can't be reproduced. Both return what was actually issued rather than recomputing.
+  if (stored && Number(stored.calc_version) < CALC_VERSION) {
+    return { id: stored.id, ...parseSnapshot(stored.snapshot) };
+  }
   if (run?.status === 'locked') {
-    const existing = await db('payslip_history')
-      .where({ employee_id: employeeId, month, year }).first();
-    if (existing) return { id: existing.id, ...parseSnapshot(existing.snapshot) };
+    if (stored) return { id: stored.id, ...parseSnapshot(stored.snapshot) };
     throw new AppError('Payroll for this month is locked. Please contact HR.', 409);
   }
 
@@ -428,6 +465,18 @@ export async function runPayroll(month: number, year: number, userId?: number | 
   let run = await getRun(month, year);
   if (run?.status === 'locked') {
     throw new AppError('Payroll for this month is already locked.', 409);
+  }
+
+  // Refuse up front rather than failing per-employee: a month calculated under the previous
+  // rules can't be reproduced, so re-running it would replace what people were actually paid
+  // with whatever today's code computes. This holds even if the month was unlocked.
+  const frozen = await db('payslip_history')
+    .where({ month, year }).where('calc_version', '<', CALC_VERSION).count('id as c').first();
+  if (Number(frozen?.c ?? 0) > 0) {
+    throw new AppError(
+      `${monthName(month)} ${year} was calculated under the previous rules and is frozen — it can't be re-run.`,
+      409,
+    );
   }
   if (!run) {
     const [{ id }] = await db('payroll_runs').insert({
