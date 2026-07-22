@@ -31,15 +31,18 @@ export async function autoMarkAttendance(date?: string) {
     // An HR/manager-approved regularisation is authoritative too — never re-derive it.
     .whereRaw('COALESCE(ar.is_regularised, false) = false')
     .where(function (this: any) {
-      this.whereNull('st.process_attendance_after').orWhere('st.process_attendance_after', '<=', target);
+      this.whereNull('st.effective_from').orWhere('st.effective_from', '<=', target);
     })
-    .select('ar.id', 'ar.status', 'ar.working_hours', 'st.half_day_threshold', 'st.absent_threshold');
+    .select('ar.id', 'ar.status', 'ar.working_hours', 'st.half_day_hours', 'st.absent_hours');
 
   let updated = 0;
   for (const r of rows) {
     const hours = Number(r.working_hours) || 0;
-    const absentT = Number(r.absent_threshold) || 0;
-    const halfT = Number(r.half_day_threshold) || 0;
+    const absentT = Number(r.absent_hours) || 0;
+    const halfT = Number(r.half_day_hours) || 0;
+    // With neither figure configured there is nothing to judge against, so leave the day
+    // alone. Defaulting to "present" here would quietly clear real half-days and absences.
+    if (absentT <= 0 && halfT <= 0) continue;
     let status = 'present';
     if (absentT > 0 && hours < absentT) status = 'absent';
     else if (halfT > 0 && hours < halfT) status = 'half_day';

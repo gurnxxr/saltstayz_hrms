@@ -43,12 +43,6 @@ export async function deleteShiftType(req: AuthRequest, res: Response, next: Nex
   } catch (err) { next(err); }
 }
 
-export async function listHolidayLists(_req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    res.json(await shiftService.listHolidayLists());
-  } catch (err) { next(err); }
-}
-
 // ─── Roster ───
 
 export async function getWeeklyRoster(req: AuthRequest, res: Response, next: NextFunction) {

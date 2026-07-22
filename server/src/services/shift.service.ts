@@ -5,58 +5,136 @@ import { notifyEmployee } from './notification.service';
 // ─── Shift Types (organization-wide) ───
 
 export const ROSTER_COLORS = ['Blue', 'Cyan', 'Fuchsia', 'Green', 'Lime', 'Orange', 'Pink', 'Red', 'Violet', 'Yellow'] as const;
-const DETERMINE_OPTS = ['alternating', 'log_type'];
-const WORKING_HOURS_OPTS = ['first_last', 'every_valid'];
+
+/** How the day's in and out are picked from the punches. */
+export const ATTENDANCE_BASIS = ['first_last', 'every_valid'] as const;
+/** What a day with no attendance record counts as. Null defers to the company setting. */
+export const CONSIDER_NA = ['present', 'absent'] as const;
+
 const SHIFT_TYPE_BOOL_COLS = [
-  'is_active', 'enable_auto_attendance', 'mark_auto_attendance_on_holidays',
-  'auto_update_last_sync', 'enable_late_entry_marking', 'enable_early_exit_marking', 'allow_overtime',
+  'is_active', 'enable_auto_attendance', 'allow_overtime', 'ends_next_day', 'grace_enabled',
 ];
 
 const toBool = (v: any) => v === true || v === 1 || v === '1' || v === 'true';
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
-// SQLite stores booleans as 0/1 — hand the client real booleans for form hydration.
+/** Hand the client real booleans and a parsed off-day pattern for form hydration. */
 function mapShiftType(row: any) {
   if (!row) return row;
   const out: any = { ...row };
   for (const c of SHIFT_TYPE_BOOL_COLS) {
     if (c in out && out[c] !== null && out[c] !== undefined) out[c] = !!out[c];
   }
+  // jsonb comes back parsed from pg, but a legacy text value would not.
+  if (typeof out.weekly_off_days === 'string') {
+    try { out.weekly_off_days = JSON.parse(out.weekly_off_days); } catch { out.weekly_off_days = []; }
+  }
+  out.weekly_off_days = Array.isArray(out.weekly_off_days) ? out.weekly_off_days : [];
   return out;
 }
 
-// Pull only the config columns present in `data`, coercing/validating each. Used by
-// both create (spread over the row) and update (partial set), so keys absent from the
-// payload keep their existing/default value.
+/**
+ * The off-day pattern: which weekdays this shift doesn't work, and in which weeks.
+ * `{ day: 0-6, weeks: null }` is every week; `{ day: 6, weeks: [2, 4] }` is the 2nd and 4th
+ * Saturday of the month — the common Indian arrangement.
+ */
+function parseWeeklyOffDays(raw: any): Array<{ day: number; weeks: number[] | null }> {
+  if (!Array.isArray(raw)) throw new ValidationError('Weekly off days must be a list');
+  const seen = new Set<number>();
+  return raw.map((entry: any) => {
+    const day = Math.trunc(Number(entry?.day));
+    if (!Number.isInteger(day) || day < 0 || day > 6) {
+      throw new ValidationError('Each weekly off day must be a weekday from 0 (Sunday) to 6 (Saturday)');
+    }
+    if (seen.has(day)) throw new ValidationError('The same weekday is listed twice in the off-day pattern');
+    seen.add(day);
+
+    if (entry.weeks === null || entry.weeks === undefined || entry.weeks === '') return { day, weeks: null };
+    if (!Array.isArray(entry.weeks)) throw new ValidationError('Weeks must be a list, or empty for every week');
+    const weeks = entry.weeks.map((w: any) => Math.trunc(Number(w))).filter((w: number) => Number.isInteger(w));
+    if (weeks.some((w: number) => w < 1 || w > 5)) {
+      throw new ValidationError('Weeks must be between 1 and 5 (the 1st to 5th occurrence in the month)');
+    }
+    return { day, weeks: weeks.length ? [...new Set<number>(weeks)].sort() : null };
+  });
+}
+
+/**
+ * Pull only the columns present in `data`, coercing and validating each. Used by both create
+ * (spread over the row) and update (partial set), so a key absent from the payload keeps its
+ * existing value.
+ */
 function collectShiftTypeConfig(data: any): Record<string, any> {
   const out: Record<string, any> = {};
   const setBool = (k: string) => { if (k in data) out[k] = toBool(data[k]); };
   const setInt = (k: string) => { if (k in data) { const n = Math.trunc(Number(data[k])); out[k] = Number.isFinite(n) && n >= 0 ? n : 0; } };
   const setNum = (k: string) => { if (k in data) { const n = Number(data[k]); out[k] = Number.isFinite(n) && n >= 0 ? n : 0; } };
+  const setTime = (k: string, label: string) => {
+    if (!(k in data)) return;
+    const v = String(data[k] ?? '').trim();
+    if (!v) { out[k] = null; return; }
+    if (!HHMM.test(v)) throw new ValidationError(`${label} must be a time like 08:30`);
+    out[k] = v;
+  };
 
   setBool('enable_auto_attendance');
-  setBool('mark_auto_attendance_on_holidays');
-  setBool('auto_update_last_sync');
-  setBool('enable_late_entry_marking');
-  setBool('enable_early_exit_marking');
   setBool('allow_overtime');
+  setBool('ends_next_day');
+  setBool('grace_enabled');
 
-  setInt('begin_checkin_before_mins');
-  setInt('allow_checkout_after_mins');
-  setInt('late_entry_grace_period');
-  setInt('early_exit_grace_period');
+  setInt('max_early_in_mins');
+  setInt('max_late_out_mins');
+  setInt('late_in_grace_mins');
+  setInt('early_out_grace_mins');
+  setInt('grace_occurrences_per_month');
 
-  setNum('half_day_threshold');
-  setNum('absent_threshold');
+  setNum('absent_hours');
+  setNum('half_day_hours');
+  setNum('full_day_hours');
+  setNum('overtime_after_hours');
 
-  if ('roster_color' in data) out.roster_color = (ROSTER_COLORS as readonly string[]).includes(data.roster_color) ? data.roster_color : 'Blue';
-  if ('determine_checkin_checkout' in data) out.determine_checkin_checkout = DETERMINE_OPTS.includes(data.determine_checkin_checkout) ? data.determine_checkin_checkout : 'alternating';
-  if ('working_hours_calculation' in data) out.working_hours_calculation = WORKING_HOURS_OPTS.includes(data.working_hours_calculation) ? data.working_hours_calculation : 'first_last';
-  if ('holiday_region_id' in data) out.holiday_region_id = data.holiday_region_id ? Number(data.holiday_region_id) : null;
-  if ('overtime_type' in data) out.overtime_type = data.overtime_type ? String(data.overtime_type).trim() : null;
-  if ('process_attendance_after' in data) out.process_attendance_after = data.process_attendance_after || null;
-  if ('last_sync_of_checkin' in data) out.last_sync_of_checkin = data.last_sync_of_checkin || null;
+  setTime('office_hour_time', 'Office hour time');
+  setTime('force_time_out', 'Force time out');
+
+  if ('monthly_adjustment' in data) {
+    const v = String(data.monthly_adjustment ?? '').trim();
+    if (!v) out.monthly_adjustment = null;
+    else {
+      const n = Number(v);
+      if (!Number.isFinite(n)) throw new ValidationError('Monthly adjustment must be a number');
+      out.monthly_adjustment = n;
+    }
+  }
+
+  if ('roster_color' in data) {
+    out.roster_color = (ROSTER_COLORS as readonly string[]).includes(data.roster_color) ? data.roster_color : 'Blue';
+  }
+  if ('attendance_basis' in data) {
+    out.attendance_basis = (ATTENDANCE_BASIS as readonly string[]).includes(data.attendance_basis)
+      ? data.attendance_basis : 'first_last';
+  }
+  if ('consider_na' in data) {
+    const v = String(data.consider_na ?? '').trim();
+    out.consider_na = (CONSIDER_NA as readonly string[]).includes(v) ? v : null;
+  }
+  if ('effective_from' in data) out.effective_from = data.effective_from || null;
+  if ('weekly_off_days' in data) out.weekly_off_days = JSON.stringify(parseWeeklyOffDays(data.weekly_off_days));
 
   return out;
+}
+
+/**
+ * Absent, half-day and full-day are a ladder: work less than the absent figure and the day
+ * doesn't count, less than the half-day figure and it's half. A configuration where they
+ * aren't in order can't be applied sensibly, so it's rejected rather than silently ignored.
+ */
+function assertHourLadder(absent: number, half: number, full: number) {
+  if (absent > 0 && half > 0 && absent >= half) {
+    throw new ValidationError('Absent hours must be less than half-day hours');
+  }
+  if (half > 0 && full > 0 && half >= full) {
+    throw new ValidationError('Half-day hours must be less than full-day hours');
+  }
 }
 
 export async function listShiftTypes() {
@@ -70,32 +148,34 @@ export async function getShiftType(id: number) {
   return mapShiftType(row);
 }
 
-// Holiday lists are modelled as regions (each region groups a property's holidays).
-export async function listHolidayLists() {
-  return db('regions').select('id', 'name').orderBy('name');
-}
-
 export async function createShiftType(data: any) {
   const name = data.name?.trim();
   if (!name) throw new ValidationError('Shift name is required');
   if (!data.start_time) throw new ValidationError('Start time is required');
   if (!data.end_time) throw new ValidationError('End time is required');
+  if (!HHMM.test(String(data.start_time))) throw new ValidationError('Start time must be a time like 09:00');
+  if (!HHMM.test(String(data.end_time))) throw new ValidationError('End time must be a time like 18:00');
   const dup = await db('shift_types').whereRaw('lower(name) = lower(?)', [name]).first();
   if (dup) throw new ValidationError('A shift type with this name already exists');
 
   const config = collectShiftTypeConfig(data);
-  if (config.allow_overtime && !config.overtime_type) {
-    throw new ValidationError('Overtime Type is required when overtime is allowed');
+  assertHourLadder(config.absent_hours ?? 0, config.half_day_hours ?? 0, config.full_day_hours ?? 0);
+
+  // A shift whose end is at or before its start must cross midnight; don't let the form say
+  // otherwise, since that decides which day the hours belong to.
+  const endsNextDay = 'ends_next_day' in config
+    ? config.ends_next_day
+    : String(data.end_time) <= String(data.start_time);
+  if (!endsNextDay && String(data.end_time) <= String(data.start_time)) {
+    throw new ValidationError('This shift ends at or before it starts, so "ends next day" must be on');
   }
 
-  // property_id is a vestigial NOT NULL column — set it to any existing property.
-  const anyProperty = await db('properties').select('id').first();
   const [{ id }] = await db('shift_types').insert({
     name,
     start_time: data.start_time,
     end_time: data.end_time,
-    property_id: anyProperty?.id ?? 1,
     ...config,
+    ends_next_day: endsNextDay,
   }).returning('id');
   return getShiftType(id);
 }
@@ -112,14 +192,23 @@ export async function updateShiftType(id: number, data: any) {
     if (dup) throw new ValidationError('A shift type with this name already exists');
     set.name = name;
   }
-  if ('start_time' in data) set.start_time = data.start_time;
-  if ('end_time' in data) set.end_time = data.end_time;
+  if ('start_time' in data) {
+    if (!HHMM.test(String(data.start_time))) throw new ValidationError('Start time must be a time like 09:00');
+    set.start_time = data.start_time;
+  }
+  if ('end_time' in data) {
+    if (!HHMM.test(String(data.end_time))) throw new ValidationError('End time must be a time like 18:00');
+    set.end_time = data.end_time;
+  }
   if ('is_active' in data) set.is_active = toBool(data.is_active);
   Object.assign(set, collectShiftTypeConfig(data));
 
-  const allowOt = 'allow_overtime' in set ? set.allow_overtime : !!existing.allow_overtime;
-  const otType = 'overtime_type' in set ? set.overtime_type : existing.overtime_type;
-  if (allowOt && !otType) throw new ValidationError('Overtime Type is required when overtime is allowed');
+  // Validate the resulting shift, not just the fields that happen to be in this payload.
+  const merged = { ...existing, ...set };
+  assertHourLadder(Number(merged.absent_hours) || 0, Number(merged.half_day_hours) || 0, Number(merged.full_day_hours) || 0);
+  if (!toBool(merged.ends_next_day) && String(merged.end_time) <= String(merged.start_time)) {
+    throw new ValidationError('This shift ends at or before it starts, so "ends next day" must be on');
+  }
 
   await db('shift_types').where('id', id).update({ ...set, updated_at: db.fn.now() });
   return getShiftType(id);

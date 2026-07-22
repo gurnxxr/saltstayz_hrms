@@ -19,7 +19,6 @@ router.post('/me/change-requests', ctrl.createMyChangeRequest);
 
 // Shift types — read for all, management restricted to admin/CHRO/HR (Shift Setup)
 router.get('/types', authorize('shifts', 'read'), ctrl.listShiftTypes);
-router.get('/types/holiday-lists', authorize('shifts', 'read'), ctrl.listHolidayLists);
 router.get('/types/:id', authorize('shifts', 'read'), ctrl.getShiftType);
 router.post('/types', SHIFT_TYPE_MANAGE, ctrl.createShiftType);
 router.put('/types/:id', SHIFT_TYPE_MANAGE, ctrl.updateShiftType);
