@@ -25,9 +25,11 @@ export default function ShiftChangeRequestsPage() {
     mutationFn: ({ id, approve, note }: { id: number; approve: boolean; note?: string }) =>
       api.post(`/shifts/change-requests/${id}/decision`, { approve, note }),
     onSuccess: (_d, v) => {
-      toast.success(v.approve ? 'Request approved — roster updated' : 'Request rejected');
+      toast.success(v.approve ? 'Approved — the employee moves to the new shift' : 'Request rejected');
       qc.invalidateQueries({ queryKey: ['shift-change-requests'] });
-      qc.invalidateQueries({ queryKey: ['roster'] });
+      // The approval writes a dated assignment, so every view of the mapping is now stale.
+      qc.invalidateQueries({ queryKey: ['shift-assignments'] });
+      qc.invalidateQueries({ queryKey: ['my-shift'] });
     },
     onError: (e: any) => toast.error(e.response?.data?.error || 'Could not update the request'),
   });
@@ -38,7 +40,7 @@ export default function ShiftChangeRequestsPage() {
         <div>
           <Breadcrumb className="mb-2" items={[{ label: 'Shift Management' }, { label: 'Change Requests' }]} />
           <h1 className="text-2xl font-bold text-foreground">Shift Change Requests</h1>
-          <p className="text-secondary mt-1">Approve or decline shift changes your team has requested. Approving updates the published roster.</p>
+          <p className="text-secondary mt-1">Approve or decline shift changes your team has requested. Approving moves them onto the new shift from the date they asked for.</p>
         </div>
 
         <div className="flex gap-1 border-b border-border">
@@ -64,7 +66,7 @@ export default function ShiftChangeRequestsPage() {
                 <thead>
                   <tr className="border-b border-border bg-muted/40 text-left text-secondary">
                     <th className="px-6 py-2.5 text-xs font-semibold uppercase">Employee</th>
-                    <th className="px-4 py-2.5 text-xs font-semibold uppercase">Day</th>
+                    <th className="px-4 py-2.5 text-xs font-semibold uppercase">From date</th>
                     <th className="px-4 py-2.5 text-xs font-semibold uppercase">Change</th>
                     <th className="px-4 py-2.5 text-xs font-semibold uppercase">Reason</th>
                     {status === 'pending' && <th className="px-6 py-2.5 text-xs font-semibold uppercase text-right">Decision</th>}
@@ -80,9 +82,14 @@ export default function ShiftChangeRequestsPage() {
                       <td className="px-4 py-3 whitespace-nowrap text-foreground">{fmtDate(r.date)}</td>
                       <td className="px-4 py-3">
                         <span className="inline-flex items-center gap-1.5 text-foreground">
-                          <span className="text-secondary">{r.from_day_type === 'weekly_off' ? 'Weekly Off' : (r.from_shift_name || 'Shift')}</span>
+                          <span className="text-secondary">{r.from_shift_name || 'No shift'}</span>
                           <ArrowRight size={13} className="text-primary shrink-0" />
-                          <span className="font-medium">{r.to_day_type === 'weekly_off' ? 'Weekly Off' : (r.to_shift_name || 'Shift')}</span>
+                          <span className="font-medium">{r.to_shift_name || '—'}</span>
+                          {r.to_start_time && (
+                            <span className="text-xs text-secondary">
+                              {String(r.to_start_time).slice(0, 5)}–{String(r.to_end_time).slice(0, 5)}
+                            </span>
+                          )}
                         </span>
                       </td>
                       <td className="px-4 py-3 text-xs text-secondary max-w-56 truncate" title={r.reason || ''}>{r.reason || '—'}</td>

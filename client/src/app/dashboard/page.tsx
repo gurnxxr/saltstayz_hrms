@@ -26,7 +26,7 @@ function OrgDashboard() {
   // Only surface quick actions the user can actually open (no dead-end 403s).
   const quickActions = [
     { label: 'View Analytics', href: '/analytics', module: 'analytics' },
-    { label: 'Manage Shifts', href: '/shifts', module: 'shifts' },
+    { label: 'Manage Shifts', href: '/shifts/assignments', module: 'shifts' },
     { label: 'Recruitment', href: '/recruitment', module: 'recruitment' },
     { label: 'Employees', href: '/employees', module: 'employees' },
   ].filter(a => can(a.module, 'read'));

@@ -73,66 +73,16 @@ export async function removeShiftAssignment(req: AuthRequest, res: Response, nex
   } catch (err) { next(err); }
 }
 
-// ─── Roster ───
+// ─── Employee self-service: my shift + change requests ───
 
-export async function getWeeklyRoster(req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    const { property_id, week_start, week_end } = req.query;
-    if (!property_id || !week_start || !week_end) {
-      return res.status(400).json({ error: 'property_id, week_start, week_end are required' });
-    }
-    res.json(await shiftService.getWeeklyRoster(
-      Number(property_id),
-      week_start as string,
-      week_end as string
-    ));
-  } catch (err) { next(err); }
-}
-
-export async function getPropertyEmployees(req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    res.json(await shiftService.getPropertyEmployees(Number(req.params.propertyId)));
-  } catch (err) { next(err); }
-}
-
-export async function saveRoster(req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    res.json(await shiftService.saveRosterCells(Number(req.body.property_id), req.body.cells, req.user!.userId));
-  } catch (err) { next(err); }
-}
-
-export async function copyPreviousWeek(req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    const { property_id, week_start, week_end, employee_ids } = req.body;
-    const scope = Array.isArray(employee_ids) && employee_ids.length ? employee_ids.map(Number) : undefined;
-    res.json(await shiftService.copyPreviousWeek(Number(property_id), week_start, week_end, req.user!.userId, scope));
-  } catch (err) { next(err); }
-}
-
-export async function publishRoster(req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    const { property_id, week_start, week_end } = req.body;
-    res.json(await shiftService.publishRoster(Number(property_id), week_start, week_end, req.user!.userId));
-  } catch (err) { next(err); }
-}
-
-export async function unpublishRoster(req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    const { property_id, week_start, week_end } = req.body;
-    res.json(await shiftService.unpublishRoster(Number(property_id), week_start, week_end));
-  } catch (err) { next(err); }
-}
-
-// ─── Employee self-service: my roster + shift-change requests ───
-
-export async function getMyRoster(req: AuthRequest, res: Response, next: NextFunction) {
+export async function getMyShiftOverview(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     if (!req.user!.employeeId) return res.status(400).json({ error: 'No employee profile linked to this account' });
-    const [upcoming, shift_types] = await Promise.all([
-      changeReq.getMyUpcomingShifts(req.user!.employeeId),
+    const [overview, shift_types] = await Promise.all([
+      changeReq.getMyShiftOverview(req.user!.employeeId),
       changeReq.listActiveShiftTypes(),
     ]);
-    res.json({ upcoming, shift_types });
+    res.json({ ...overview, shift_types });
   } catch (err) { next(err); }
 }
 

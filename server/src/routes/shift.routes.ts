@@ -11,9 +11,9 @@ const SHIFT_STAFF = authorizeRoles('admin', 'chro', 'hr', 'property_manager');
 // Shift-type definitions (Shift Setup) are managed by admin/CHRO/HR only.
 const SHIFT_TYPE_MANAGE = authorizeRoles('admin', 'chro', 'hr');
 
-// Self-service — the employee's own shifts + change requests (any logged-in user).
+// Self-service — the employee's own shift + change requests (any logged-in user).
 router.get('/me', ctrl.getMyShift);
-router.get('/me/roster', ctrl.getMyRoster);
+router.get('/me/shift', ctrl.getMyShiftOverview);
 router.get('/me/change-requests', ctrl.listMyChangeRequests);
 router.post('/me/change-requests', ctrl.createMyChangeRequest);
 
@@ -32,18 +32,8 @@ router.get('/assignments/employees/:employeeId', authorize('shifts', 'read'), SH
 router.post('/assignments', authorize('shifts', 'create'), SHIFT_STAFF, ctrl.assignShift);
 router.delete('/assignments/:id', authorize('shifts', 'delete'), SHIFT_STAFF, ctrl.removeShiftAssignment);
 
-// Roster — read + build/publish. Writes are gated by BOTH shifts:create and the
-// SHIFT_STAFF role (admin/CHRO/HR/property manager), so a write is never less
-// protected than a read.
-router.get('/roster', authorize('shifts', 'read'), SHIFT_STAFF, ctrl.getWeeklyRoster);
-router.get('/roster/employees/:propertyId', authorize('shifts', 'read'), SHIFT_STAFF, ctrl.getPropertyEmployees);
-router.post('/roster/save', authorize('shifts', 'create'), SHIFT_STAFF, ctrl.saveRoster);
-router.post('/roster/copy-previous', authorize('shifts', 'create'), SHIFT_STAFF, ctrl.copyPreviousWeek);
-router.post('/roster/publish', authorize('shifts', 'create'), SHIFT_STAFF, ctrl.publishRoster);
-router.post('/roster/unpublish', authorize('shifts', 'create'), SHIFT_STAFF, ctrl.unpublishRoster);
-
 // Shift-change requests — employees apply via /me/change-requests; managers/HR
-// review here. Listing needs shifts:read; deciding writes the roster (shifts:create).
+// review here. Listing needs shifts:read; approving writes an assignment (shifts:create).
 router.get('/change-requests', authorize('shifts', 'read'), SHIFT_STAFF, ctrl.listChangeRequests);
 router.post('/change-requests/:id/decision', authorize('shifts', 'create'), SHIFT_STAFF, ctrl.decideChangeRequest);
 

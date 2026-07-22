@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
@@ -8,25 +8,52 @@ import Breadcrumb from '@/components/ui/Breadcrumb';
 import LoadError from '@/components/ui/LoadError';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { Clock, CalendarClock, ArrowRight, Loader2, Send } from 'lucide-react';
+import { Clock, CalendarClock, Loader2, Send, Moon, ArrowRight } from 'lucide-react';
 
-const fmtDate = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
+const DAYS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const inputCls =
+  'w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50';
+
 const STATUS_STYLE: Record<string, string> = {
   pending: 'bg-amber-100 text-amber-700',
   approved: 'bg-green-100 text-green-700',
   rejected: 'bg-red-100 text-red-700',
 };
 
+const fmtDate = (d: string) =>
+  d ? new Date(`${String(d).slice(0, 10)}T00:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+
+const todayStr = () => {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
+
+/** "Every Sunday, plus the 2nd and 4th Saturday" — in words. */
+function offDaysInWords(offs: any): string {
+  if (!Array.isArray(offs) || offs.length === 0) return 'Follows the company work week';
+  return offs
+    .slice()
+    .sort((a: any, b: any) => a.day - b.day)
+    .map((o: any) => {
+      const day = DAYS_SHORT[Number(o.day)] ?? '?';
+      if (!Array.isArray(o.weeks) || !o.weeks.length) return `every ${day}`;
+      const ord = o.weeks.map((w: number) => `${w}${['st', 'nd', 'rd', 'th', 'th'][w - 1]}`).join(' & ');
+      return `the ${ord} ${day}`;
+    })
+    .join(', ');
+}
+
 export default function MyShiftsPage() {
   const qc = useQueryClient();
   const { user } = useAuth();
   const hasProfile = !!user?.employeeId;
 
-  const [form, setForm] = useState({ date: '', target: '', reason: '' });
+  const [form, setForm] = useState({ date: todayStr(), target: '', reason: '' });
 
-  const { data: roster, isError, refetch } = useQuery({
-    queryKey: ['my-roster'],
-    queryFn: () => api.get('/shifts/me/roster').then(r => r.data),
+  const { data, isError, refetch } = useQuery({
+    queryKey: ['my-shift'],
+    queryFn: () => api.get('/shifts/me/shift').then(r => r.data),
     enabled: hasProfile,
   });
   const { data: requests = [] } = useQuery({
@@ -35,167 +62,226 @@ export default function MyShiftsPage() {
     enabled: hasProfile,
   });
 
-  const upcoming: any[] = roster?.upcoming ?? [];
-  const shiftTypes: any[] = roster?.shift_types ?? [];
+  const current = data?.current ?? null;
+  const upcoming: any[] = data?.upcoming ?? [];
+  const shiftTypes: any[] = data?.shift_types ?? [];
+  const pending = requests.some((r: any) => r.status === 'pending');
 
   const apply = useMutation({
-    mutationFn: () => {
-      const to_day_type = form.target === 'off' ? 'weekly_off' : 'working';
-      const to_shift_type_id = form.target === 'off' ? undefined : Number(form.target);
-      return api.post('/shifts/me/change-requests', { date: form.date, to_day_type, to_shift_type_id, reason: form.reason });
-    },
+    mutationFn: () => api.post('/shifts/me/change-requests', {
+      date: form.date,
+      to_shift_type_id: Number(form.target),
+      reason: form.reason,
+    }),
     onSuccess: () => {
       toast.success('Change request submitted');
-      setForm({ date: '', target: '', reason: '' });
+      setForm({ date: todayStr(), target: '', reason: '' });
       qc.invalidateQueries({ queryKey: ['my-change-requests'] });
     },
     onError: (e: any) => toast.error(e.response?.data?.error || 'Could not submit the request'),
   });
 
-  const canSubmit = form.date && form.target;
-  const selectedDay = useMemo(() => upcoming.find((u) => u.date === form.date), [upcoming, form.date]);
+  const selected = shiftTypes.find((s: any) => String(s.id) === form.target);
+  const canSubmit = !!form.date && !!form.target && !pending;
+
+  if (!hasProfile) {
+    return (
+      <AppShell>
+        <div className="space-y-6">
+          <Breadcrumb items={[{ label: 'My Shifts' }]} />
+          <div className="bg-card rounded-xl border border-border p-10 text-center text-secondary">
+            This account isn&apos;t linked to an employee record, so there is no shift to show.
+          </div>
+        </div>
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell>
-      <div className="space-y-6">
+      <div className="space-y-6 max-w-3xl">
+        <Breadcrumb items={[{ label: 'My Shifts' }]} />
+
         <div>
-          <Breadcrumb className="mb-2" items={[{ label: 'My Shifts' }]} />
-          <h1 className="text-2xl font-bold text-foreground">My Shifts</h1>
-          <p className="text-secondary mt-1">Your upcoming shifts, and requests to change them</p>
+          <h1 className="text-2xl font-bold text-foreground">My Shift</h1>
+          <p className="text-secondary mt-1">Your working hours and off days, and how to ask for a change.</p>
         </div>
 
-        {!hasProfile ? (
-          <div className="bg-card rounded-xl border border-border p-8 text-center">
-            <Clock size={32} className="mx-auto text-secondary/30 mb-2" />
-            <p className="text-sm font-medium text-foreground">No shifts on this account</p>
-            <p className="text-sm text-secondary mt-1">Your login isn&apos;t linked to an employee profile.</p>
-          </div>
+        {isError ? (
+          <LoadError message="Couldn't load your shift." onRetry={() => refetch()} />
         ) : (
           <>
-            {/* Upcoming shifts */}
-            <div className="bg-card rounded-xl border border-border overflow-hidden">
-              <div className="px-6 py-4 border-b border-border">
-                <h2 className="text-sm font-semibold text-foreground flex items-center gap-2"><CalendarClock size={16} className="text-primary" /> Upcoming Shifts</h2>
-                <p className="text-xs text-secondary mt-0.5">Published by your manager. Only published shifts affect attendance and pay.</p>
-              </div>
-              {isError ? (
-                <LoadError message="Couldn't load your shifts." onRetry={() => refetch()} />
-              ) : upcoming.length === 0 ? (
-                <div className="py-12 text-center">
-                  <CalendarClock size={34} className="mx-auto text-secondary/30 mb-2" />
-                  <p className="text-sm text-secondary">No upcoming published shifts.</p>
-                </div>
+            {/* ── The shift you're on ── */}
+            <div className="bg-card rounded-xl border border-border p-5">
+              {current ? (
+                <>
+                  <div className="flex items-start justify-between gap-4 flex-wrap">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <Clock size={18} className="text-primary" />
+                        <h2 className="text-lg font-semibold text-foreground">{current.name}</h2>
+                        {current.ends_next_day && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-purple-100 text-purple-700">
+                            <Moon size={11} /> ends next day
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-2xl font-bold text-foreground mt-2 tabular-nums">
+                        {current.start_time} – {current.end_time}
+                      </p>
+                    </div>
+                    {current.effective_from && (
+                      <div className="text-right">
+                        <p className="text-xs text-secondary">On this shift since</p>
+                        <p className="text-sm font-medium text-foreground">{fmtDate(current.effective_from)}</p>
+                      </div>
+                    )}
+                  </div>
+                  <div className="mt-4 pt-4 border-t border-border grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <p className="text-xs text-secondary">Off days</p>
+                      <p className="text-foreground capitalize">{offDaysInWords(current.weekly_off_days)}</p>
+                    </div>
+                    {current.office_hour_time && (
+                      <div>
+                        <p className="text-xs text-secondary">Expected hours a day</p>
+                        <p className="text-foreground">{current.office_hour_time}</p>
+                      </div>
+                    )}
+                  </div>
+                </>
               ) : (
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-border bg-muted/40 text-left text-secondary">
-                      <th className="px-6 py-2.5 text-xs font-semibold uppercase">Date</th>
-                      <th className="px-4 py-2.5 text-xs font-semibold uppercase">Shift</th>
-                      <th className="px-4 py-2.5 text-xs font-semibold uppercase">Timing</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {upcoming.map((u) => (
-                      <tr key={u.date} className="hover:bg-muted/20">
-                        <td className="px-6 py-3 font-medium text-foreground">{fmtDate(u.date)}</td>
-                        <td className="px-4 py-3">
-                          {u.day_type === 'weekly_off'
-                            ? <span className="text-secondary italic">Weekly Off</span>
-                            : <span className="text-foreground">{u.shift_name || 'Shift'}</span>}
-                        </td>
-                        <td className="px-4 py-3 text-secondary">
-                          {u.day_type === 'weekly_off' || !u.start_time ? '—' : `${u.start_time}–${u.end_time}`}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <div className="text-center py-6">
+                  <Clock className="w-8 h-8 text-secondary mx-auto mb-2" />
+                  <p className="text-sm font-medium text-foreground">No shift assigned yet</p>
+                  <p className="text-sm text-secondary mt-1">Ask HR to put you on a shift.</p>
+                </div>
               )}
             </div>
 
-            {/* Request a change */}
-            <div className="bg-card rounded-xl border border-border p-6">
-              <h2 className="text-sm font-semibold text-foreground flex items-center gap-2 mb-1"><Send size={15} className="text-primary" /> Request a Shift Change</h2>
-              <p className="text-xs text-secondary mb-4">Ask your reporting manager to change one of your upcoming shifts.</p>
-              {upcoming.length === 0 ? (
-                <p className="text-sm text-secondary">You have no upcoming shifts to request a change for.</p>
-              ) : (
-                <div className="flex flex-wrap items-end gap-3">
-                  <div>
-                    <label className="block text-xs font-medium text-secondary mb-1">Day</label>
-                    <select value={form.date} onChange={(e) => setForm(p => ({ ...p, date: e.target.value }))}
-                      className="px-3 py-2.5 border border-border rounded-lg bg-background text-sm min-w-[190px] focus:outline-none focus:ring-2 focus:ring-primary/50">
-                      <option value="">Select a day…</option>
-                      {upcoming.map((u) => (
-                        <option key={u.date} value={u.date}>{fmtDate(u.date)} — {u.day_type === 'weekly_off' ? 'Weekly Off' : (u.shift_name || 'Shift')}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-secondary mb-1">Change to</label>
-                    <select value={form.target} onChange={(e) => setForm(p => ({ ...p, target: e.target.value }))}
-                      className="px-3 py-2.5 border border-border rounded-lg bg-background text-sm min-w-[220px] focus:outline-none focus:ring-2 focus:ring-primary/50">
-                      <option value="">Select…</option>
-                      <option value="off">Weekly Off</option>
-                      {shiftTypes.map((s) => (
-                        <option key={s.id} value={s.id}>{s.name}{s.start_time ? ` (${s.start_time}–${s.end_time})` : ''}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="flex-1 min-w-[200px]">
-                    <label className="block text-xs font-medium text-secondary mb-1">Reason</label>
-                    <input value={form.reason} onChange={(e) => setForm(p => ({ ...p, reason: e.target.value }))}
-                      placeholder="Optional context for your manager"
-                      className="w-full px-3 py-2.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
-                  </div>
-                  <button onClick={() => apply.mutate()} disabled={!canSubmit || apply.isPending}
-                    className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors">
-                    {apply.isPending ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
-                    Submit
-                  </button>
-                </div>
-              )}
-              {selectedDay && (
-                <p className="text-xs text-secondary mt-3">
-                  Currently rostered: <span className="font-medium text-foreground">{selectedDay.day_type === 'weekly_off' ? 'Weekly Off' : (selectedDay.shift_name || 'Shift')}</span>
+            {/* ── Anything already lined up ── */}
+            {upcoming.length > 0 && (
+              <div className="bg-card rounded-xl border border-border p-5">
+                <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground mb-3">
+                  <CalendarClock size={15} /> Coming up
+                </h2>
+                <ul className="space-y-2">
+                  {upcoming.map((u: any, i: number) => (
+                    <li key={i} className="flex items-center gap-2 text-sm">
+                      <span className="text-secondary tabular-nums">{fmtDate(u.effective_from)}</span>
+                      <ArrowRight size={13} className="text-secondary" />
+                      <span className="font-medium text-foreground">{u.shift_name}</span>
+                      <span className="text-xs text-secondary">{u.start_time}–{u.end_time}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* ── Ask to move shift ── */}
+            <div className="bg-card rounded-xl border border-border p-5 space-y-4">
+              <div>
+                <h2 className="text-sm font-semibold text-foreground">Request a different shift</h2>
+                <p className="text-xs text-secondary mt-0.5">
+                  Goes to your reporting manager or HR. If approved, you move onto the new shift from the date you pick.
+                </p>
+              </div>
+
+              {pending && (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  You already have a request waiting to be reviewed.
                 </p>
               )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-1">Move me to</label>
+                  <select
+                    className={inputCls}
+                    value={form.target}
+                    disabled={pending}
+                    onChange={(e) => setForm(f => ({ ...f, target: e.target.value }))}
+                  >
+                    <option value="">Select a shift…</option>
+                    {shiftTypes
+                      .filter((s: any) => s.id !== current?.shift_type_id)
+                      .map((s: any) => (
+                        <option key={s.id} value={s.id}>{s.name} ({s.start_time}–{s.end_time})</option>
+                      ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-1">From</label>
+                  <input
+                    type="date"
+                    className={inputCls}
+                    value={form.date}
+                    min={todayStr()}
+                    disabled={pending}
+                    onChange={(e) => setForm(f => ({ ...f, date: e.target.value }))}
+                  />
+                </div>
+              </div>
+
+              {selected && (
+                <p className="text-xs text-secondary">
+                  {selected.name} runs {selected.start_time}–{selected.end_time}
+                  {selected.ends_next_day ? ' (ends the next day)' : ''} · off days: {offDaysInWords(selected.weekly_off_days)}
+                </p>
+              )}
+
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-1">Reason</label>
+                <textarea
+                  rows={2}
+                  className={`${inputCls} resize-none`}
+                  value={form.reason}
+                  disabled={pending}
+                  placeholder="Optional"
+                  onChange={(e) => setForm(f => ({ ...f, reason: e.target.value }))}
+                />
+              </div>
+
+              <button
+                onClick={() => apply.mutate()}
+                disabled={!canSubmit || apply.isPending}
+                className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
+              >
+                {apply.isPending ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
+                Submit request
+              </button>
             </div>
 
-            {/* My requests */}
+            {/* ── History ── */}
             <div className="bg-card rounded-xl border border-border overflow-hidden">
-              <div className="px-6 py-4 border-b border-border">
-                <h2 className="text-sm font-semibold text-foreground">My Requests</h2>
+              <div className="px-5 py-3 border-b border-border">
+                <h2 className="text-sm font-semibold text-foreground">My requests</h2>
               </div>
               {requests.length === 0 ? (
-                <div className="py-12 text-center">
-                  <Send size={30} className="mx-auto text-secondary/30 mb-2" />
-                  <p className="text-sm text-secondary">No change requests yet.</p>
-                </div>
+                <p className="p-6 text-sm text-secondary text-center">You haven&apos;t asked for a shift change yet.</p>
               ) : (
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border bg-muted/40 text-left text-secondary">
-                      <th className="px-6 py-2.5 text-xs font-semibold uppercase">Day</th>
-                      <th className="px-4 py-2.5 text-xs font-semibold uppercase">Change</th>
-                      <th className="px-4 py-2.5 text-xs font-semibold uppercase">Reason</th>
-                      <th className="px-6 py-2.5 text-xs font-semibold uppercase">Status</th>
+                      <th className="px-4 py-2.5 font-medium">From date</th>
+                      <th className="px-4 py-2.5 font-medium">Change</th>
+                      <th className="px-4 py-2.5 font-medium">Reason</th>
+                      <th className="px-4 py-2.5 font-medium">Status</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
                     {requests.map((r: any) => (
-                      <tr key={r.id} className="hover:bg-muted/20">
-                        <td className="px-6 py-3 font-medium text-foreground whitespace-nowrap">{fmtDate(String(r.date).slice(0, 10))}</td>
-                        <td className="px-4 py-3">
-                          <span className="inline-flex items-center gap-1.5 text-foreground">
-                            <span className="text-secondary">{r.from_day_type === 'weekly_off' ? 'Weekly Off' : (r.from_shift_name || 'Shift')}</span>
-                            <ArrowRight size={13} className="text-primary shrink-0" />
-                            <span className="font-medium">{r.to_day_type === 'weekly_off' ? 'Weekly Off' : (r.to_shift_name || 'Shift')}</span>
-                          </span>
+                      <tr key={r.id}>
+                        <td className="px-4 py-2.5 text-secondary tabular-nums">{fmtDate(r.date)}</td>
+                        <td className="px-4 py-2.5 text-foreground">
+                          {r.from_shift_name || '—'} → <span className="font-medium">{r.to_shift_name || '—'}</span>
                         </td>
-                        <td className="px-4 py-3 text-xs text-secondary max-w-48 truncate" title={r.reason || ''}>{r.reason || '—'}{r.status === 'rejected' && r.review_note ? ` · ${r.review_note}` : ''}</td>
-                        <td className="px-6 py-3">
-                          <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium capitalize ${STATUS_STYLE[r.status] || 'bg-muted text-secondary'}`}>{r.status}</span>
+                        <td className="px-4 py-2.5 text-secondary">{r.reason || '—'}</td>
+                        <td className="px-4 py-2.5">
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize ${STATUS_STYLE[r.status] || 'bg-muted text-secondary'}`}>
+                            {r.status}
+                          </span>
+                          {r.review_note && <p className="text-xs text-secondary mt-1">{r.review_note}</p>}
                         </td>
                       </tr>
                     ))}
