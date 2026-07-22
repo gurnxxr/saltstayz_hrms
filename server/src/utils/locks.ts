@@ -20,6 +20,8 @@ export const LOCK = {
   JOB_ID: 811003,
   /** Leave applications for one employee (balance + overlap check then insert). */
   LEAVE_APPLY: 811004,
+  /** Adding an applicant to one vacancy (duplicate check then insert). */
+  CANDIDATE_APPLY: 811005,
 } as const;
 
 /**

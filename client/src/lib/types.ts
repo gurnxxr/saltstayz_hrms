@@ -158,11 +158,20 @@ export interface Candidate {
   id: number;
   vacancy_id: number;
   name: string;
-  email: string;
-  phone: string;
+  email: string | null;
+  phone: string | null;
+  address: string | null;
   resume_url: string | null;
-  stage: 'screening' | 'interview' | 'shortlisted' | 'offered' | 'rejected';
-  notes: string;
+  /**
+   * Kept in step with CANDIDATE_STAGES in lib/constants.ts (spelled out here rather than
+   * imported, because constants.ts already imports RoleName from this file). The server
+   * is authoritative — see recruitment.service.ts.
+   */
+  stage:
+    | 'applied' | 'interview' | 'selected' | 'document_collection' | 'offer_released'
+    | 'offer_accepted' | 'pre_joining' | 'joining' | 'transferred'
+    | 'rejected' | 'offer_declined' | 'no_show';
+  notes: string | null;
   archived?: boolean;
   employee_id?: number | null;
   vacancy?: Vacancy;

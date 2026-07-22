@@ -9,7 +9,9 @@ import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import LoadError from '@/components/ui/LoadError';
-import { Briefcase, Users, TrendingUp, CheckCircle2, Plus, User, ListChecks, ChevronDown, ChevronRight, Upload, X } from 'lucide-react';
+import AddApplicantDialog from '@/components/recruitment/AddApplicantDialog';
+import { CANDIDATE_QUERY_KEYS } from '@/lib/constants';
+import { Briefcase, Users, TrendingUp, CheckCircle2, Plus, User, ListChecks, ChevronDown, ChevronRight, Upload, UserPlus, X } from 'lucide-react';
 
 // The server (recruitment.service.ts) is authoritative for the funnel — GET
 // /recruitment/stages mirrors it. These locals are the fallback vocabulary so the
@@ -64,6 +66,7 @@ export default function RecruitmentPage() {
   const queryClient = useQueryClient();
   const { can } = useAuth();
   const [showUpload, setShowUpload] = useState(false);
+  const [showAddApplicant, setShowAddApplicant] = useState(false);
   const [uploadVacancyId, setUploadVacancyId] = useState('');
   const [uploadResult, setUploadResult] = useState<any>(null);
   const uploadFileRef = useRef<HTMLInputElement>(null);
@@ -83,12 +86,7 @@ export default function RecruitmentPage() {
     },
     onSuccess: (data) => {
       setUploadResult(data);
-      // Refresh every view that reads candidates for this vacancy — the board, the stat
-      // cards, All Candidates, the per-vacancy applicants tables, the vacancy header, and
-      // the by-stage counts — so uploaded rows show up without a hard reload.
-      ['pipeline-candidates', 'vacancy-stats', 'all-candidates', 'vacancy-candidates',
-        'vacancy-candidates-archived', 'vacancy', 'candidates-by-stage', 'vacancies']
-        .forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
+      CANDIDATE_QUERY_KEYS.forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
       toast.success(`${data.created} candidate(s) added to Shortlisting${data.skipped ? `, ${data.skipped} skipped` : ''}`);
     },
     onError: (e: any) => toast.error(e.response?.data?.error || 'Upload failed'),
@@ -190,12 +188,20 @@ export default function RecruitmentPage() {
               All Candidates
             </Link>
             {can('recruitment', 'create') && (
-              <button
-                onClick={() => { setUploadResult(null); setShowUpload(true); }}
-                className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted transition-colors"
-              >
-                <Upload size={16} /> Upload Candidates
-              </button>
+              <>
+                <button
+                  onClick={() => setShowAddApplicant(true)}
+                  className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted transition-colors"
+                >
+                  <UserPlus size={16} /> Add Applicant
+                </button>
+                <button
+                  onClick={() => { setUploadResult(null); setShowUpload(true); }}
+                  className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted transition-colors"
+                >
+                  <Upload size={16} /> Upload Candidates
+                </button>
+              </>
             )}
             <button
               onClick={() => router.push('/recruitment/vacancies/new')}
@@ -250,6 +256,8 @@ export default function RecruitmentPage() {
           </div>
         )}
       </div>
+
+      {showAddApplicant && <AddApplicantDialog onClose={() => setShowAddApplicant(false)} />}
 
       {showUpload && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={closeUpload}>

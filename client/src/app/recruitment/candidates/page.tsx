@@ -5,20 +5,20 @@ import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
-import { Search, ArrowLeft, User, Archive } from 'lucide-react';
+import AddApplicantDialog from '@/components/recruitment/AddApplicantDialog';
+import { CANDIDATE_STAGES, OFF_RAMPS, STAGE_COLORS, STAGE_LABELS } from '@/lib/constants';
+import { Search, ArrowLeft, User, Archive, UserPlus } from 'lucide-react';
 
-const STAGES = ['screening', 'interview', 'shortlisted', 'offered', 'rejected'] as const;
-const STAGE_COLORS: Record<string, string> = {
-  screening: 'bg-gray-100 text-gray-700',
-  interview: 'bg-blue-100 text-blue-700',
-  shortlisted: 'bg-purple-100 text-purple-700',
-  offered: 'bg-green-100 text-green-700',
-  rejected: 'bg-red-100 text-red-700',
-};
+// Every off-ramp (rejected / offer declined / no show) archives the candidate, so
+// filtering to one of them has to include the archive or the table comes back empty.
+const isOffRamp = (stage: string) => (OFF_RAMPS as readonly string[]).includes(stage);
 
 export default function CandidatesPage() {
   const router = useRouter();
+  const { can } = useAuth();
+  const [showAddApplicant, setShowAddApplicant] = useState(false);
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search, 300);
   const [stageFilter, setStageFilter] = useState('');
@@ -32,8 +32,8 @@ export default function CandidatesPage() {
       if (debouncedSearch) params.set('search', debouncedSearch);
       if (stageFilter) params.set('stage', stageFilter);
       if (vacancyFilter) params.set('vacancy_id', vacancyFilter);
-      // Rejected candidates are archived; show them when explicitly requested
-      if (includeArchived || stageFilter === 'rejected') params.set('archived', 'all');
+      // Off-ramped candidates are archived; show them when explicitly requested
+      if (includeArchived || isOffRamp(stageFilter)) params.set('archived', 'all');
       return api.get(`/recruitment/candidates?${params}`).then(r => r.data);
     },
   });
@@ -54,9 +54,19 @@ export default function CandidatesPage() {
           Back to Recruitment
         </button>
 
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">All Candidates</h1>
-          <p className="text-secondary mt-1">Search and filter across all vacancies</p>
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-bold text-foreground">All Candidates</h1>
+            <p className="text-secondary mt-1">Search and filter across all vacancies</p>
+          </div>
+          {can('recruitment', 'create') && (
+            <button
+              onClick={() => setShowAddApplicant(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
+            >
+              <UserPlus size={16} /> Add Applicant
+            </button>
+          )}
         </div>
 
         {/* Filters */}
@@ -76,8 +86,8 @@ export default function CandidatesPage() {
             className="px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
           >
             <option value="">All Stages</option>
-            {STAGES.map(s => (
-              <option key={s} value={s} className="capitalize">{s}</option>
+            {CANDIDATE_STAGES.map(s => (
+              <option key={s} value={s}>{STAGE_LABELS[s] || s}</option>
             ))}
           </select>
           <select
@@ -90,12 +100,12 @@ export default function CandidatesPage() {
               <option key={v.id} value={v.id}>{v.job_title} - {v.property_name}</option>
             ))}
           </select>
-          <label className={`flex items-center gap-2 px-3 py-2 text-sm text-secondary select-none ${stageFilter === 'rejected' ? 'cursor-default opacity-70' : 'cursor-pointer'}`}>
+          <label className={`flex items-center gap-2 px-3 py-2 text-sm text-secondary select-none ${isOffRamp(stageFilter) ? 'cursor-default opacity-70' : 'cursor-pointer'}`}>
             <input
               type="checkbox"
-              // Rejected candidates live in the archive, so archived are forced on for that filter.
-              checked={includeArchived || stageFilter === 'rejected'}
-              disabled={stageFilter === 'rejected'}
+              // Off-ramped candidates live in the archive, so archived are forced on there.
+              checked={includeArchived || isOffRamp(stageFilter)}
+              disabled={isOffRamp(stageFilter)}
               onChange={(e) => setIncludeArchived(e.target.checked)}
               className="rounded border-border"
             />
@@ -103,10 +113,10 @@ export default function CandidatesPage() {
           </label>
         </div>
 
-        {stageFilter === 'rejected' && (
+        {isOffRamp(stageFilter) && (
           <p className="flex items-center gap-1.5 text-xs text-secondary -mt-3">
             <Archive size={13} className="shrink-0" />
-            Rejected applicants are archived — they&apos;re included here automatically.
+            {STAGE_LABELS[stageFilter]} applicants are archived — they&apos;re included here automatically.
           </p>
         )}
 
@@ -152,8 +162,8 @@ export default function CandidatesPage() {
                     </td>
                     <td className="px-4 py-3 text-sm text-foreground">{c.job_title}</td>
                     <td className="px-4 py-3">
-                      <span className={`px-2.5 py-1 rounded-full text-xs font-medium capitalize ${STAGE_COLORS[c.stage] || 'bg-gray-100 text-gray-700'}`}>
-                        {c.stage}
+                      <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${STAGE_COLORS[c.stage] || 'bg-gray-100 text-gray-700'}`}>
+                        {STAGE_LABELS[c.stage] || c.stage}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-sm text-secondary">
@@ -166,6 +176,8 @@ export default function CandidatesPage() {
           )}
         </div>
       </div>
+
+      {showAddApplicant && <AddApplicantDialog onClose={() => setShowAddApplicant(false)} />}
     </AppShell>
   );
 }
