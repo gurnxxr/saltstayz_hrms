@@ -24,6 +24,14 @@ router.post('/types', SHIFT_TYPE_MANAGE, ctrl.createShiftType);
 router.put('/types/:id', SHIFT_TYPE_MANAGE, ctrl.updateShiftType);
 router.delete('/types/:id', SHIFT_TYPE_MANAGE, ctrl.deleteShiftType);
 
+// Employee → shift mapping. Reading everyone's assignment is staff-only; writing is
+// gated by BOTH shifts:create and the staff role, so a write is never less protected
+// than a read. Routes are ordered so /assignments/employees/:id can't match /:id.
+router.get('/assignments', authorize('shifts', 'read'), SHIFT_STAFF, ctrl.listShiftAssignments);
+router.get('/assignments/employees/:employeeId', authorize('shifts', 'read'), SHIFT_STAFF, ctrl.getEmployeeShiftHistory);
+router.post('/assignments', authorize('shifts', 'create'), SHIFT_STAFF, ctrl.assignShift);
+router.delete('/assignments/:id', authorize('shifts', 'delete'), SHIFT_STAFF, ctrl.removeShiftAssignment);
+
 // Roster — read + build/publish. Writes are gated by BOTH shifts:create and the
 // SHIFT_STAFF role (admin/CHRO/HR/property manager), so a write is never less
 // protected than a read.

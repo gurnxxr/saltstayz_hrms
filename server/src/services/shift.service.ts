@@ -570,13 +570,172 @@ export async function copyPreviousWeek(
 
 // ─── Employee self-service: my current shift (dashboard card) ───
 
-export async function getMyShift(employeeId: number | null | undefined) {
-  if (!employeeId) return null;
-  const row = await db('employee_shift_assignments as a')
+// ─── Employee → shift mapping ───
+
+const isoDate = (v: any) => String(v ?? '').slice(0, 10);
+const todayIso = () => new Date().toISOString().slice(0, 10);
+
+/**
+ * The one place anything asks "which shift was this person on, on this date".
+ *
+ * The answer is the latest assignment starting on or before that date. When a date falls
+ * before every assignment — which happens for attendance older than the mapping itself —
+ * the earliest assignment is used, so no historical date is left without a shift.
+ *
+ * Everything that needs a shift goes through here: the attendance upload, the daily
+ * re-check, payable days and overtime. One lookup means they cannot disagree.
+ */
+export async function resolveShiftForEmployee(employeeId: number, date: string) {
+  const on = isoDate(date) || todayIso();
+  const rows = await db('employee_shift_assignments as a')
     .join('shift_types as st', 'st.id', 'a.shift_type_id')
     .where('a.employee_id', employeeId)
-    .select('st.id as shift_type_id', 'st.name', 'st.start_time', 'st.end_time')
-    .first();
-  return row ?? null;
+    .select('st.*', 'a.effective_from', 'a.id as assignment_id')
+    .orderBy('a.effective_from');
+  if (!rows.length) return null;
+  const applicable = rows.filter((r: any) => isoDate(r.effective_from) <= on);
+  return mapShiftType(applicable.length ? applicable[applicable.length - 1] : rows[0]);
+}
+
+/** Every employee with the shift they are on today, for the assignment screen. */
+export async function listShiftAssignments(filters: { search?: string; property?: string; unassigned?: boolean } = {}) {
+  const employees = await db('employees as e')
+    .leftJoin('job_titles as jt', 'jt.id', 'e.job_title_id')
+    .where('e.is_active', true)
+    .modify((q) => {
+      if (filters.search) {
+        const term = `%${filters.search.trim()}%`;
+        q.where((w) => w
+          .where('e.first_name', 'ilike', term)
+          .orWhere('e.last_name', 'ilike', term)
+          .orWhere('e.employee_code', 'ilike', term));
+      }
+      if (filters.property) q.where('e.branch_name', filters.property);
+    })
+    .select('e.id', 'e.employee_code', 'e.first_name', 'e.last_name', 'e.branch_name', 'e.dept_name',
+      'jt.title as designation')
+    .orderBy(['e.first_name', 'e.last_name']);
+
+  // One query for every assignment, then resolve in memory — avoids a lookup per employee.
+  const assignments = await db('employee_shift_assignments as a')
+    .join('shift_types as st', 'st.id', 'a.shift_type_id')
+    .whereIn('a.employee_id', employees.length ? employees.map((e: any) => e.id) : [-1])
+    .select('a.id as assignment_id', 'a.employee_id', 'a.effective_from',
+      'st.id as shift_type_id', 'st.name as shift_name', 'st.start_time', 'st.end_time',
+      'st.ends_next_day', 'st.weekly_off_days')
+    .orderBy(['a.employee_id', 'a.effective_from']);
+
+  const today = todayIso();
+  const byEmp = new Map<number, any[]>();
+  for (const a of assignments) {
+    if (!byEmp.has(a.employee_id)) byEmp.set(a.employee_id, []);
+    byEmp.get(a.employee_id)!.push(a);
+  }
+
+  const rows = employees.map((e: any) => {
+    const list = byEmp.get(e.id) ?? [];
+    const current = list.filter((a: any) => isoDate(a.effective_from) <= today).pop() ?? null;
+    const upcoming = list.find((a: any) => isoDate(a.effective_from) > today) ?? null;
+    return {
+      ...e,
+      current: current ? { ...current, weekly_off_days: mapShiftType(current).weekly_off_days } : null,
+      upcoming: upcoming ? { ...upcoming, weekly_off_days: mapShiftType(upcoming).weekly_off_days } : null,
+      history_count: list.length,
+    };
+  });
+
+  return filters.unassigned ? rows.filter((r: any) => !r.current) : rows;
+}
+
+/** Every shift this employee has been on, newest first. */
+export async function getEmployeeShiftHistory(employeeId: number) {
+  return db('employee_shift_assignments as a')
+    .join('shift_types as st', 'st.id', 'a.shift_type_id')
+    .leftJoin('users as u', 'u.id', 'a.assigned_by')
+    .where('a.employee_id', employeeId)
+    .select('a.id', 'a.effective_from', 'a.created_at', 'st.id as shift_type_id', 'st.name as shift_name',
+      'st.start_time', 'st.end_time', 'st.ends_next_day', 'u.email as assigned_by_email')
+    .orderBy('a.effective_from', 'desc');
+}
+
+/**
+ * Put an employee on a shift from a date. Re-assigning the same start date replaces that
+ * entry rather than stacking a second one.
+ */
+export async function assignShift(
+  input: { employee_id: number; shift_type_id: number; effective_from?: string },
+  userId?: number | null,
+) {
+  const employeeId = Number(input.employee_id);
+  const shiftTypeId = Number(input.shift_type_id);
+  if (!Number.isInteger(employeeId) || employeeId <= 0) throw new ValidationError('Select an employee');
+  if (!Number.isInteger(shiftTypeId) || shiftTypeId <= 0) throw new ValidationError('Select a shift');
+
+  const employee = await db('employees').where('id', employeeId).first();
+  if (!employee) throw new NotFoundError('Employee');
+  const shiftType = await db('shift_types').where('id', shiftTypeId).first();
+  if (!shiftType) throw new NotFoundError('Shift type');
+  if (!shiftType.is_active) throw new ValidationError('That shift is inactive — reactivate it before assigning anyone to it');
+
+  const effectiveFrom = isoDate(input.effective_from) || todayIso();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom)) throw new ValidationError('Effective date must be a date like 2026-08-01');
+
+  // Don't let a mapping start before the shift's own rules do — the shift wouldn't apply.
+  if (shiftType.effective_from && effectiveFrom < isoDate(shiftType.effective_from)) {
+    throw new ValidationError(`${shiftType.name} only takes effect from ${isoDate(shiftType.effective_from)}`);
+  }
+
+  // Changing a month whose payroll is locked would contradict what was already paid.
+  const [y, m] = effectiveFrom.split('-').map(Number);
+  const run = await db('payroll_runs').where({ month: m, year: y }).first();
+  if (run?.status === 'locked') {
+    throw new ValidationError(`Payroll for ${m}/${y} is locked — unlock it before changing shifts from that month.`);
+  }
+
+  const existing = await db('employee_shift_assignments')
+    .where({ employee_id: employeeId, effective_from: effectiveFrom }).first();
+  if (existing) {
+    await db('employee_shift_assignments').where('id', existing.id)
+      .update({ shift_type_id: shiftTypeId, assigned_by: userId ?? null, updated_at: db.fn.now() });
+    return getEmployeeShiftHistory(employeeId);
+  }
+
+  await db('employee_shift_assignments').insert({
+    employee_id: employeeId,
+    shift_type_id: shiftTypeId,
+    effective_from: effectiveFrom,
+    assigned_by: userId ?? null,
+  });
+  return getEmployeeShiftHistory(employeeId);
+}
+
+/** Remove one dated assignment. The employee keeps whatever earlier one remains. */
+export async function removeShiftAssignment(id: number) {
+  const row = await db('employee_shift_assignments').where('id', id).first();
+  if (!row) throw new NotFoundError('Shift assignment');
+
+  const [y, m] = isoDate(row.effective_from).split('-').map(Number);
+  const run = await db('payroll_runs').where({ month: m, year: y }).first();
+  if (run?.status === 'locked') {
+    throw new ValidationError(`Payroll for ${m}/${y} is locked — unlock it before changing shifts from that month.`);
+  }
+
+  await db('employee_shift_assignments').where('id', id).del();
+  return { id, employee_id: row.employee_id };
+}
+
+export async function getMyShift(employeeId: number | null | undefined) {
+  if (!employeeId) return null;
+  const shift = await resolveShiftForEmployee(employeeId, todayIso());
+  if (!shift) return null;
+  return {
+    shift_type_id: shift.id,
+    name: shift.name,
+    start_time: shift.start_time,
+    end_time: shift.end_time,
+    ends_next_day: shift.ends_next_day,
+    weekly_off_days: shift.weekly_off_days,
+    office_hour_time: shift.office_hour_time,
+  };
 }
 

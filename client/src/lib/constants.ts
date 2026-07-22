@@ -114,6 +114,8 @@ export const NAVIGATION: NavItem[] = [
     roles: ['admin', 'chro', 'hr', 'property_manager'],
     module: 'shifts',
     children: [
+      // Put each employee on a shift; everything else follows from the shift's own rules.
+      { label: 'Shift Assignments', href: '/shifts/assignments', icon: 'UserCog', roles: ['admin', 'chro', 'hr', 'property_manager'], module: 'shifts' },
       // Roster: build + publish the weekly plan. Property managers roster their own site.
       { label: 'Roster', href: '/shifts/roster', icon: 'CalendarDays', roles: ['admin', 'chro', 'hr', 'property_manager'], module: 'shifts' },
       // Approve/decline the shift-change requests employees raise from "My Shifts".

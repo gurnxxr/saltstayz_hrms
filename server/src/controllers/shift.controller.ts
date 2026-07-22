@@ -43,6 +43,36 @@ export async function deleteShiftType(req: AuthRequest, res: Response, next: Nex
   } catch (err) { next(err); }
 }
 
+// ─── Employee → shift mapping ───
+
+export async function listShiftAssignments(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json(await shiftService.listShiftAssignments({
+      search: req.query.search ? String(req.query.search) : undefined,
+      property: req.query.property ? String(req.query.property) : undefined,
+      unassigned: req.query.unassigned === 'true',
+    }));
+  } catch (err) { next(err); }
+}
+
+export async function getEmployeeShiftHistory(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json(await shiftService.getEmployeeShiftHistory(Number(req.params.employeeId)));
+  } catch (err) { next(err); }
+}
+
+export async function assignShift(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.status(201).json(await shiftService.assignShift(req.body, req.user!.userId));
+  } catch (err) { next(err); }
+}
+
+export async function removeShiftAssignment(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json(await shiftService.removeShiftAssignment(Number(req.params.id)));
+  } catch (err) { next(err); }
+}
+
 // ─── Roster ───
 
 export async function getWeeklyRoster(req: AuthRequest, res: Response, next: NextFunction) {
