@@ -217,14 +217,17 @@ export async function updateShiftType(id: number, data: any) {
 export async function deleteShiftType(id: number) {
   const row = await db('shift_types').where('id', id).first();
   if (!row) throw new NotFoundError('Shift type');
+  // Any assignment counts, including a historical one — deleting the shift would leave a past
+  // month unable to resolve which shift somebody was on.
   const assigned = await db('employee_shift_assignments').where('shift_type_id', id).count('* as c').first();
-  const rostered = await db('shift_rosters').where('shift_type_id', id).count('* as c').first();
-  if (Number((assigned as any)?.c || 0) + Number((rostered as any)?.c || 0) > 0) {
-    throw new ValidationError('Cannot delete: this shift type is assigned to employees or used in the roster');
+  if (Number((assigned as any)?.c || 0) > 0) {
+    throw new ValidationError('Cannot delete: this shift is assigned to employees. Deactivate it instead — past months still need to resolve which shift someone was on.');
   }
-  const scheduled = await db('shift_schedules').where('shift_type_id', id).count('* as c').first();
-  if (Number((scheduled as any)?.c || 0) > 0) {
-    throw new ValidationError('Cannot delete: this shift type is used by a shift schedule');
+  const requested = await db('employee_shift_change_requests')
+    .where((q) => q.where('from_shift_type_id', id).orWhere('to_shift_type_id', id))
+    .count('* as c').first();
+  if (Number((requested as any)?.c || 0) > 0) {
+    throw new ValidationError('Cannot delete: this shift appears in a shift-change request. Deactivate it instead.');
   }
   await db('shift_types').where('id', id).del();
   return { id };

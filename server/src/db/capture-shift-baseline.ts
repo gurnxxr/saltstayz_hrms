@@ -107,6 +107,11 @@ async function capturePayslips(dir: string) {
 
 async function captureRosterProvenance(dir: string) {
   console.log('\n2. Roster provenance — which months actually followed a roster');
+  if (!(await db.schema.hasTable('shift_rosters'))) {
+    console.log('   the roster table has already been dropped — nothing to capture');
+    write(dir, 'roster-provenance.json', { captured_at: new Date().toISOString(), periods: [], covered_weeks_by_employee: {} });
+    return { periods: 0, cells: 0 };
+  }
   const rows = await db('shift_rosters')
     .select('employee_id', 'date', 'day_type', 'is_published', 'property_id');
   console.log(`   ${rows.length} roster cell(s) total`);
@@ -158,6 +163,11 @@ async function captureRosterProvenance(dir: string) {
 
 async function captureWeeklyPatterns(dir: string) {
   console.log('\n3. Weekly patterns — each employee\'s observed off days and usual shift');
+  if (!(await db.schema.hasTable('shift_rosters'))) {
+    console.log('   the roster table has already been dropped — patterns can no longer be derived');
+    write(dir, 'weekly-patterns.json', { captured_at: new Date().toISOString(), employees: [] });
+    return { employees: 0, confident: 0 };
+  }
   const rows = await db('shift_rosters as r')
     .leftJoin('shift_types as st', 'st.id', 'r.shift_type_id')
     .where('r.is_published', true)

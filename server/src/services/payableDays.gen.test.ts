@@ -4,8 +4,8 @@ import * as payableDays from './payableDays.service';
 // ─────────────────────────────────────────────────────────────────────────────
 // payableDays.service.ts exposes NO exported PURE functions.
 //
-// Every exported function is async and reads the live SQLite DB:
-//   • buildWorkCalendar        — queries employees / shift_rosters / holidays
+// Every exported function is async and reads the live DB:
+//   • buildWorkCalendar        — queries employees / shift assignments / holidays
 //   • countWorkingDaysInRange  — builds a work calendar (DB)
 //   • getOvertimeHours         — queries employee_shift_assignments / attendance
 //   • getMonthlyHours          — sums attendance_records.working_hours

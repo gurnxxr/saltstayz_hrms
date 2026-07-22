@@ -112,13 +112,17 @@ Months **with** absences are where money moves.
 **The first payroll run after this.** Compare it against the previous month before locking it —
 the working-day count is the number to look at.
 
-**`shift_rosters` is kept but never written.** It is the only record of why a past month treated
-a given day as an off day; the payslip snapshot does not store that. Drop it only once nobody
-needs to answer questions about a month predating the change.
+**Migration 006 drops the roster and the biometric tables.** The biometric ones go without
+ceremony — the code that used them is gone and nothing can write to them.
 
-**The biometric tables are still there.** The code that used them is gone. Confirm
-`biometric_logs`, `biometric_devices` and `biometric_api_keys` are empty before dropping them —
-that is a deliberate decision, not a migration to run blind.
+The roster is different, and 006 guards it. `shift_rosters` is the only record of why a past
+month treated a given day as an off day; the payslip snapshot does not store that, and
+`patterns:report` reads the roster to work out each shift's off days. So if the roster still
+holds rows and no shift has a pattern set, 006 **refuses to run** and tells you to derive the
+patterns first. Once at least one shift has a pattern, the roster's job is done and it goes.
+
+Its `down()` recreates the table shapes so the schema lines up again, but **not** their
+contents. Once 006 has run forward, the only way back to the data is a database backup.
 
 **Two shift fields are inert.** "Monthly adjustment" and "force time out" are stored and shown
 but deliberately do not affect pay, because their meaning was never confirmed. They are labelled

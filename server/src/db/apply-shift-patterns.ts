@@ -83,6 +83,13 @@ async function main() {
   const apply = process.argv.includes('--apply');
   console.log(apply ? 'APPLYING derived off-day patterns\n' : 'Reporting derived off-day patterns (nothing will be changed)\n');
 
+  if (!(await db.schema.hasTable('shift_rosters'))) {
+    console.log('The roster table has been dropped, so there is nothing left to derive patterns from.');
+    console.log('Set each shift\'s off days by hand on the Shift Type screen.\n');
+    await db.destroy();
+    return;
+  }
+
   const cells = await db('shift_rosters')
     .where('is_published', true)
     .select('employee_id', 'date', 'day_type');
