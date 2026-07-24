@@ -7,6 +7,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "start:prod": "npm run db:migrate && node dist/index.js",
+    "db:create": "tsx src/db/create-local-db.ts",
     "db:migrate": "tsx src/db/run-migrate.ts",
     "db:rollback": "tsx src/db/run-migrate.ts rollback",
     "db:seed": "tsx src/db/run-migrate.ts seed",

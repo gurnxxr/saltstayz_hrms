@@ -12,6 +12,7 @@ import * as checklist from './checklist.service';
 import { notifyEmployee, notifyRole } from './notification.service';
 import { nextJobId } from '../utils/jobId';
 import { parseCsv } from '../utils/csv';
+import { advisoryXactLock, LOCK } from '../utils/locks';
 
 // ─── The eleven-step hiring process ───
 //
@@ -306,19 +307,85 @@ export async function getCandidate(id: number) {
   return candidate;
 }
 
-export async function createCandidate(data: {
+// ─── Adding applicants ───
+//
+// Two entry points — one applicant at a time, and a CSV import. They share the guards
+// below so the two can never disagree about what a valid applicant is.
+
+/** Applicants may only be added to a vacancy that exists and is still live. */
+async function assertVacancyAcceptsApplicants(vacancyId: number) {
+  const vacancy = await db('vacancies').where('id', vacancyId).first();
+  if (!vacancy) throw new ValidationError('Select a vacancy to add applicants to');
+  if (vacancy.status === 'closed') throw new ValidationError('This vacancy is closed — reopen it before adding applicants');
+  return vacancy;
+}
+
+/**
+ * A repeat applicant on THIS vacancy, matched on email when we have one and phone otherwise.
+ * The same person may legitimately apply to a different vacancy, so the check is always
+ * scoped to one. Returns the existing row, or undefined when this is a new applicant.
+ */
+function findDuplicateApplicant(
+  cx: Knex | Knex.Transaction, vacancyId: number, email: string | null, phone: string | null,
+) {
+  if (!email && !phone) return Promise.resolve(undefined);
+  return cx('candidates').where('vacancy_id', vacancyId).where((q) => {
+    if (email) q.whereRaw('lower(email) = ?', [email.toLowerCase()]);
+    else q.where('phone', phone);
+  }).first();
+}
+
+const trimmed = (v: unknown) => String(v ?? '').trim() || null;
+
+/** Add one applicant, entering the funnel at Shortlisting. */
+export async function createCandidate(input: {
   vacancy_id: number;
   name: string;
-  email?: string;
-  phone?: string;
-  resume_url?: string;
-  notes?: string;
+  email?: string | null;
+  phone?: string | null;
+  address?: string | null;
+  resume_url?: string | null;
+  notes?: string | null;
   added_by: number;
 }) {
-  // The column default is still the retired 'screening' (SQLite cannot alter a default
-  // without rebuilding the table). Set the entry stage explicitly: a candidate parked
-  // in a dead stage has no allowedNextStages and can never move.
-  const [{ id }] = await db('candidates').insert({ ...data, stage: FUNNEL_ORDER[0] }).returning('id');
+  const vacancyId = Number(input.vacancy_id);
+  if (!Number.isInteger(vacancyId) || vacancyId <= 0) throw new ValidationError('Select a vacancy to add applicants to');
+  await assertVacancyAcceptsApplicants(vacancyId);
+
+  const name = trimmed(input.name);
+  if (!name) throw new ValidationError('Applicant name is required');
+  const email = trimmed(input.email);
+  const phone = trimmed(input.phone);
+
+  const id = await db.transaction(async (trx) => {
+    // Check-then-insert: Postgres is MVCC, so without this lock two simultaneous adds of
+    // the same person would both pass the duplicate check. Keyed on the vacancy, so adding
+    // to different vacancies never blocks.
+    await advisoryXactLock(trx, LOCK.CANDIDATE_APPLY, vacancyId);
+
+    const existing = await findDuplicateApplicant(trx, vacancyId, email, phone);
+    if (existing) throw new ValidationError(`${email || phone} has already applied to this vacancy`);
+
+    // Explicit columns, never a spread of the caller's object: this is reached straight
+    // from req.body, and a spread would let anyone set archived / employee_id / offer_*,
+    // or crash with a raw driver error on an unknown column.
+    const [row] = await trx('candidates').insert({
+      vacancy_id: vacancyId,
+      name,
+      email,
+      phone,
+      address: trimmed(input.address),
+      resume_url: trimmed(input.resume_url),
+      notes: trimmed(input.notes),
+      // The column default is still the retired 'screening'. Set the entry stage
+      // explicitly: a candidate parked in a dead stage has no allowedNextStages and can
+      // never move.
+      stage: FUNNEL_ORDER[0],
+      added_by: input.added_by,
+    }).returning('id');
+    return row.id as number;
+  });
+
   return getCandidate(id);
 }
 
@@ -341,9 +408,7 @@ const CANDIDATE_HEADER_ALIASES: Record<string, string> = {
  * vacancy — matched on email or phone — is skipped rather than duplicated.
  */
 export async function bulkUploadCandidates(vacancyId: number, csvContent: string, addedBy: number) {
-  const vacancy = await db('vacancies').where('id', vacancyId).first();
-  if (!vacancy) throw new ValidationError('Select a vacancy to upload candidates against');
-  if (vacancy.status === 'closed') throw new ValidationError('This vacancy is closed — reopen it before adding applicants');
+  await assertVacancyAcceptsApplicants(vacancyId);
 
   const rows = parseCsv(csvContent);
   if (rows.length < 2) throw new ValidationError('CSV must have a header row and at least one applicant row');
@@ -386,10 +451,7 @@ export async function bulkUploadCandidates(vacancyId: number, csvContent: string
     const dupKey = emailRaw ? `e:${emailRaw.toLowerCase()}` : phone ? `p:${phone}` : null;
     if (dupKey) {
       if (seen.has(dupKey)) { results.skipped++; results.errors.push(`Row ${rowNo}: duplicate of an earlier row in this file`); continue; }
-      const existing = await db('candidates').where('vacancy_id', vacancyId).where((q) => {
-        if (emailRaw) q.whereRaw('lower(email) = ?', [emailRaw.toLowerCase()]);
-        else q.where('phone', phone);
-      }).first();
+      const existing = await findDuplicateApplicant(db, vacancyId, emailRaw, phone);
       if (existing) { results.skipped++; results.errors.push(`Row ${rowNo}: ${emailRaw || phone} already applied to this vacancy`); continue; }
       seen.add(dupKey);
     }

@@ -181,6 +181,22 @@ export const STAGE_LABELS: Record<string, string> = {
   rejected: 'Rejected', offer_declined: 'Offer Declined', no_show: 'No Show',
 };
 
+/** Badge tint per stage — every funnel step and every off-ramp. */
+export const STAGE_COLORS: Record<string, string> = {
+  applied: 'bg-gray-100 text-gray-700',
+  interview: 'bg-blue-100 text-blue-700',
+  selected: 'bg-indigo-100 text-indigo-700',
+  document_collection: 'bg-amber-100 text-amber-700',
+  offer_released: 'bg-green-100 text-green-700',
+  offer_accepted: 'bg-emerald-100 text-emerald-700',
+  pre_joining: 'bg-purple-100 text-purple-700',
+  joining: 'bg-teal-100 text-teal-700',
+  transferred: 'bg-slate-100 text-slate-700',
+  rejected: 'bg-red-100 text-red-700',
+  offer_declined: 'bg-orange-100 text-orange-700',
+  no_show: 'bg-rose-100 text-rose-700',
+};
+
 /** A stage whose checklist must be complete before the candidate may leave it. */
 export const STAGE_CHECKLIST: Record<string, 'document_collection' | 'pre_joining' | 'joining_day'> = {
   document_collection: 'document_collection',
@@ -226,6 +242,18 @@ export function allowedNextStages(from: string): string[] {
   else if (from === 'pre_joining' || from === 'joining') next.push('no_show');
   return next;
 }
+
+/**
+ * Every cached view that reads candidates. Adding or moving an applicant changes the board,
+ * the stat cards, All Candidates, the per-vacancy tables and the vacancy header at once, so
+ * they refresh together — three pages used to hand-roll their own shorter lists and had
+ * drifted, which is why adding an applicant from a vacancy left the board stale.
+ * Prefix keys (`['vacancy-candidates', id]`) are matched by React Query.
+ */
+export const CANDIDATE_QUERY_KEYS = [
+  'pipeline-candidates', 'all-candidates', 'vacancy-candidates', 'vacancy-candidates-archived',
+  'vacancy', 'vacancies', 'vacancy-stats', 'candidates-by-stage',
+] as const;
 
 export const ROLE_DEFAULT_DASHBOARD: Record<RoleName, string> = {
   admin: '/analytics',
