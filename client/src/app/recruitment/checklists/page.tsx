@@ -28,8 +28,8 @@ export default function ChecklistTemplatesPage() {
     <AppShell>
       <div className="space-y-6">
         <div>
-          <Breadcrumb className="mb-2" items={[{ label: 'Recruitment', href: '/recruitment' }, { label: 'Checklist Templates' }]} />
-          <h1 className="text-2xl font-bold text-foreground">Checklist Templates</h1>
+          <Breadcrumb className="mb-2" items={[{ label: 'Recruitment', href: '/recruitment' }, { label: 'Checklist' }]} />
+          <h1 className="text-2xl font-bold text-foreground">Checklist</h1>
           <p className="text-secondary mt-1">The standard checklists used to bring new hires on board — document collection, pre-joining formalities and joining day.</p>
         </div>
 

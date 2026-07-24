@@ -1,17 +1,19 @@
 import type { Knex } from 'knex';
 import db from '../config/database';
 import { NotFoundError, ValidationError } from '../utils/errors';
+import { getDefaultTemplateId } from './leaveTemplate.service';
 import {
   getCtcRange, getStructureByJobTitle, seedEmployeeStructureFromTemplate,
   editorLines, previewStructure, saveEmployeeStructure, getMonthlyCtcMap,
 } from './salaryStructure.service';
 import { listSalaryComponents } from './salaryComponent.service';
 import { assertCtcMeetsMinimumWage } from './statutory.service';
-import { getVacancySanctionContext, getRoleBand } from './manpower.service';
+import { getVacancySanctionContext, getRoleBand, assertHireAllowed, createCandidateException, consumeCandidateApproval, computeAvailability } from './manpower.service';
 import * as checklist from './checklist.service';
 import { notifyEmployee, notifyRole } from './notification.service';
 import { nextJobId } from '../utils/jobId';
 import { parseCsv } from '../utils/csv';
+import { advisoryXactLock, LOCK } from '../utils/locks';
 
 // ─── The eleven-step hiring process ───
 //
@@ -464,6 +466,8 @@ export async function createEmployeeFromCandidate(
   const [{ id: employeeId }] = await cx('employees').insert({
     employee_code: employeeCode,
     job_id: await nextJobId(cx),
+    leave_template_id: await getDefaultTemplateId(), // new hires land on the Default leave template
+
     first_name: firstName,
     last_name: lastName,
     email: candidate.email || null,
@@ -490,6 +494,7 @@ async function assertGate(candidate: any, toStage: string, trx?: Knex.Transactio
   const fromStage = candidate.stage;
 
   if (!CANDIDATE_STAGES.includes(toStage as any)) throw new ValidationError(`Invalid stage: ${toStage}`);
+  if (candidate.on_hold) throw new ValidationError('This candidate is on hold — resume them before changing stage.');
   if (TERMINAL.includes(fromStage)) throw new ValidationError("This candidate's stage is final and cannot be changed.");
   if (toStage === fromStage) throw new ValidationError('Candidate is already at this stage.');
   if (!allowedNextStages(fromStage).includes(toStage)) {
@@ -535,6 +540,36 @@ async function transition(
   if (OFF_RAMPS.includes(toStage as any)) {
     await cx('candidates').where('id', candidate.id).update({ archived: true });
   }
+}
+
+/**
+ * Park a candidate at their current stage, or resume them. A held candidate cannot change
+ * stage until resumed (enforced in assertGate). Holding requires a reason; both hold and
+ * resume are written to candidate_history so the pause is auditable.
+ */
+export async function setCandidateHold(id: number, onHold: boolean, reason: string | undefined, userId: number) {
+  const candidate = await db('candidates').where('id', id).first();
+  if (!candidate) throw new NotFoundError('Candidate');
+  const wantHold = !!onHold;
+  if (wantHold && TERMINAL.includes(candidate.stage)) {
+    throw new ValidationError('This candidate has reached a final stage and cannot be put on hold.');
+  }
+  if (wantHold === !!candidate.on_hold) {
+    throw new ValidationError(wantHold ? 'This candidate is already on hold.' : 'This candidate is not on hold.');
+  }
+  const note = String(reason || '').trim();
+  if (wantHold && !note) throw new ValidationError('A reason is required to put a candidate on hold.');
+
+  await db.transaction(async (trx) => {
+    await trx('candidates').where('id', id).update({
+      on_hold: wantHold, hold_reason: wantHold ? note : null, updated_at: trx.fn.now(),
+    });
+    await trx('candidate_history').insert({
+      candidate_id: id, from_stage: candidate.stage, to_stage: candidate.stage,
+      notes: wantHold ? `Put on hold: ${note}` : 'Resumed from hold', changed_by: userId,
+    });
+  });
+  return getCandidate(id);
 }
 
 /**
@@ -585,6 +620,12 @@ export async function transferToManager(id: number, userId: number, notes?: stri
   const employee = await db('employees').where('id', candidate.employee_id).first();
   if (!employee) throw new NotFoundError('Employee');
 
+  // The final money gate must key off the vacancy's property_id (a real FK), NOT the employee's
+  // branch_name text — a property rename between acceptance and transfer would leave branch_name
+  // stale, matching no property, silently skipping the gate and committing an unbounded cost into
+  // the unassigned bucket. releaseOffer/acceptOffer already gate on the vacancy's property_id.
+  const vac = candidate.vacancy_id ? await db('vacancies').where('id', candidate.vacancy_id).first() : null;
+
   // Stamp the monthly CTC (planning figure) so the Manpower & Budget Control guardrail
   // counts this hire — it only sees employees with employees.monthly_ctc set. Prefer the
   // live salary structure (cloned onto the employee at offer acceptance); fall back to the
@@ -599,6 +640,13 @@ export async function transferToManager(id: number, userId: number, notes?: stri
   }
 
   await db.transaction(async (trx) => {
+    if (monthlyCtc != null && vac) {
+      // The cost is about to land in `committed`. The body already holds its slot (skipHeadcount),
+      // and its own pending-offer cost is excluded so it doesn't count against itself. Blocks if
+      // the free budget can no longer fit it (e.g. the sanction was lowered since acceptance).
+      await advisoryXactLock(trx, LOCK.HIRE_BUDGET, vac.property_id);
+      await assertHireAllowed(vac.property_id, vac.job_title_id, monthlyCtc, trx, { skipHeadcount: true, excludeCandidateId: id, candidateId: id });
+    }
     await transition(candidate, 'transferred', userId, notes, trx);
     await trx('employees').where('id', employee.id).update({
       is_active: true,
@@ -606,6 +654,9 @@ export async function transferToManager(id: number, userId: number, notes?: stri
       ...(monthlyCtc != null ? { monthly_ctc: monthlyCtc } : {}),
       updated_at: trx.fn.now(),
     });
+    // The cost has now landed in `committed`; spend any approved over-limit exception so a single
+    // approval can't wave a second hire through, and leaves a clean audit trail.
+    await consumeCandidateApproval(trx, id, employee.id);
   });
 
   if (employee.reporting_manager_id) {
@@ -651,6 +702,15 @@ export async function markNoShow(id: number, userId: number, notes?: string) {
       await trx('vacancies').where('id', candidate.vacancy_id)
         .where('filled', '>', 0).decrement('filled', 1);
     }
+    // The accepted offer must stop RESERVING budget — the body left before its cost ever landed in
+    // committed. Left as 'accepted' it keeps matching the reservation query (employee_id set but
+    // monthly_ctc still null) and would sequester its offered budget at the property forever.
+    await trx('offer_letters').where('candidate_id', id).whereIn('status', ['issued', 'accepted'])
+      .update({ status: 'cancelled', updated_at: trx.fn.now() });
+    // Release any approval token — this candidate is now terminal, so a lingering 'approved' row
+    // would only mislead the audit trail and block a fresh request were the candidate ever revisited.
+    await trx('manpower_exceptions').where('candidate_id', id).whereIn('status', ['pending', 'approved']).whereNull('consumed_at')
+      .update({ status: 'cancelled', updated_at: trx.fn.now() });
   });
   return getCandidate(id);
 }
@@ -754,12 +814,26 @@ export async function getOfferDefaults(candidateId: number) {
   const issuedTpl = issued
     ? (typeof issued.template_data === 'string' ? JSON.parse(issued.template_data) : issued.template_data)
     : null;
+  // The same sanctioned-cap picture the release gate enforces, so the editor can warn (and offer
+  // "request approval") BEFORE a release is attempted. Exclude this candidate's own pending offer.
+  const avail = await computeAvailability(c.property_id, c.job_title_id, undefined, { excludeCandidateId: candidateId });
+  // A live approval request for THIS candidate: 'pending' (awaiting an admin) or 'approved' (its
+  // requested_ctc is the ceiling the release gate will accept). Lets the editor re-enable Release.
+  const liveEx = await db('manpower_exceptions')
+    .where({ candidate_id: candidateId }).whereIn('status', ['pending', 'approved']).whereNull('consumed_at')
+    .orderBy('created_at', 'desc').first();
   return {
     candidate_name: c.name,
     designation: c.designation,
     configured: range.configured,
     base_gross: structure ? Math.round(Number(structure.default_base) || 0) : 0,
     band_max: band.configured ? band.band_max : null,
+    property_configured: avail.property_configured,
+    band_configured: avail.band_configured,
+    remaining_budget: avail.remaining_budget,
+    remaining_slots: avail.remaining_slots,
+    exception_status: liveEx?.status ?? null,
+    approved_ctc: liveEx?.status === 'approved' ? Number(liveEx.requested_ctc) : null,
     already_issued: !!issued,
     status: issued?.status ?? null,
     // Seed the line editor: an issued letter shows what was actually offered, an
@@ -788,26 +862,12 @@ async function buildOfferLetter(
   const ob = await breakdownFor(c.job_title_id, Number(opts.base_gross) || 0, c.property_state, opts.lines);
   if (!ob) throw new ValidationError('This designation has no salary structure — configure one first.');
 
-  // Manpower & Budget Control: the offered salary cannot exceed the sanctioned band.
-  // Only ISSUING is gated — a preview is a read-only look at the numbers, and refusing
-  // to render one is how you hide from an operator why they can't proceed.
-  //
-  // NOTE: this caps CTC only. Now that the offer's lines are editable, CTC is no longer
-  // a monotonic function of what the candidate is actually paid — CTC includes employer
-  // PF/ESI, and moving money out of PF-eligible Basic into a non-PF-eligible allowance
-  // lowers CTC while RAISING take-home. Capping gross_earnings as well as CTC would
-  // close that; it was a deliberate decision not to. Reviewers: this is a known hole,
-  // not an oversight.
+  // Only the statutory floor is checked here. The full sanctioned-cap gate (role maximum +
+  // free budget + open headcount, with pending-offer reservations) runs inside releaseOffer's
+  // locked transaction — that's where a real commitment is made, and the lock stops two HRs
+  // racing into the same last slot/rupee. previewOffer passes enforceBand=false so HR can see
+  // the numbers (and why an offer would be blocked) before committing.
   if (enforceBand) {
-    const band = await getRoleBand(c.property_id, c.job_title_id);
-    if (band.configured && ob.breakdown.ctc > band.band_max) {
-      throw new ValidationError(
-        `Offered monthly CTC ₹${inrAmount(ob.breakdown.ctc)} exceeds the sanctioned salary band maximum ` +
-        `₹${inrAmount(band.band_max)} for this role at ${c.property_name}. ` +
-        'Lower the base salary or raise the band in Admin → Budget Control.',
-      );
-    }
-    // Statutory floor: the offered monthly CTC can't be below the property state's minimum wage.
     await assertCtcMeetsMinimumWage(c.property_state, ob.breakdown.ctc);
   }
 
@@ -855,6 +915,11 @@ export async function releaseOffer(candidateId: number, opts: OfferInput, userId
 
   const built = await buildOfferLetter(candidateId, opts);
   await db.transaction(async (trx) => {
+    // Authoritative sanctioned-cap gate, inside the advisory lock so two HRs can't both release
+    // an offer into the same last slot/rupee. Blocks over role-max, over free budget, headcount
+    // full, or an unconfigured property/role. (An admin-approved exception will pass here in BC4.)
+    await advisoryXactLock(trx, LOCK.HIRE_BUDGET, built.candidate.property_id);
+    await assertHireAllowed(built.candidate.property_id, built.candidate.job_title_id, built.template_data.breakdown.ctc, trx, { candidateId });
     await transition(built.candidate, 'offer_released', userId, 'Offer letter issued', trx);
     await trx('offer_letters').insert({
       candidate_id: candidateId,
@@ -867,6 +932,27 @@ export async function releaseOffer(candidateId: number, opts: OfferInput, userId
     });
   });
   return getCandidate(candidateId);
+}
+
+/**
+ * The escape hatch when releaseOffer is blocked by the sanctioned cap: instead of being dead-ended,
+ * HR raises an approval request for THIS offer (its exact CTC), which a different admin can approve in
+ * the Approvals inbox. Once approved, releaseOffer/acceptOffer/transferToManager for this candidate
+ * pass the gate. No offer is filed here — this only records the request.
+ */
+export async function requestOfferApproval(candidateId: number, opts: OfferInput, reason: string, userId: number) {
+  const existing = await db('offer_letters').where('candidate_id', candidateId).first();
+  if (existing) throw new ValidationError('An offer letter has already been issued for this candidate.');
+  const built = await buildOfferLetter(candidateId, opts, { enforceBand: false });
+  return createCandidateException({
+    candidateId,
+    propertyId: built.candidate.property_id,
+    jobTitleId: built.candidate.job_title_id,
+    candidateName: built.candidate.name,
+    monthlyCtc: built.template_data.breakdown.ctc,
+    joinDate: opts.joining_date || null,
+    reason,
+  }, userId);
 }
 
 export async function getOfferLetter(candidateId: number) {
@@ -893,8 +979,17 @@ export async function acceptOffer(candidateId: number, userId: number, joiningDa
 
   const tpl = typeof letter.template_data === 'string' ? JSON.parse(letter.template_data) : letter.template_data;
   const joining = joiningDate || tpl.joining_date || undefined;
+  const monthlyCtc = Math.round(Number(letter.offered_ctc) / 12);
 
   const employeeId = await db.transaction(async (trx) => {
+    // Re-check the cap now that the body is about to land — the sanction may have been lowered or
+    // the slot taken by another hire since release. Exclude THIS candidate's own pending offer
+    // (its reservation is being converted into the hire, so it must not count against itself).
+    const vac = await trx('vacancies').where('id', candidate.vacancy_id).first();
+    if (vac) {
+      await advisoryXactLock(trx, LOCK.HIRE_BUDGET, vac.property_id);
+      await assertHireAllowed(vac.property_id, vac.job_title_id, monthlyCtc, trx, { excludeCandidateId: candidateId, candidateId });
+    }
     await transition(candidate, 'offer_accepted', userId, 'Offer accepted', trx);
     const newEmployeeId = await createEmployeeFromCandidate(candidate, joining, trx);
 
@@ -954,6 +1049,10 @@ export async function declineOffer(candidateId: number, userId: number, reason?:
         status: 'declined', responded_at: trx.fn.now(), updated_at: trx.fn.now(),
       });
     }
+    // Release any approval token — the candidate declined, so a lingering 'approved'/'pending' row
+    // would only clutter the audit trail and the Admin inbox.
+    await trx('manpower_exceptions').where('candidate_id', candidateId).whereIn('status', ['pending', 'approved']).whereNull('consumed_at')
+      .update({ status: 'cancelled', updated_at: trx.fn.now() });
     await trx('candidates').where('id', candidateId).update({ offer_responded_at: trx.fn.now() });
   });
   return getCandidate(candidateId);

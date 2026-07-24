@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { Building2, ClipboardList, ShieldCheck, ScrollText, DatabaseBackup, Play, Wallet, SlidersHorizontal, AlertTriangle, Users, Landmark, CalendarDays, Coins, FileText, KeyRound } from 'lucide-react';
+import { Building2, ClipboardList, ShieldCheck, ScrollText, DatabaseBackup, Play, Wallet, SlidersHorizontal, AlertTriangle, Users, Landmark, CalendarDays, Coins, FileText, KeyRound, Contact, Gavel } from 'lucide-react';
 
 const adminModules = [
   { label: 'Employee Details', href: '/employees', icon: Users, description: 'Full employee directory — profiles, contacts & org details', roles: ['admin', 'chro', 'hr', 'hr_manager', 'property_manager'] },
@@ -13,13 +13,15 @@ const adminModules = [
   { label: 'Salary Details', href: '/admin/salary-overview', icon: Coins, description: 'Every employee’s salary components & CTC in one table', roles: ['admin'] },
   { label: 'Property Configuration', href: '/admin/property-config', icon: SlidersHorizontal, description: 'Per-property workers, salaries, spend, budget & status', roles: ['admin'] },
   { label: 'Budget Control', href: '/admin/budget-control', icon: Wallet, description: 'Set sanctioned budget & headcount per property', roles: ['admin'] },
+  { label: 'Hiring Approvals', href: '/admin/approvals', icon: Gavel, description: 'Approve or reject over-limit hires (maker ≠ checker)', roles: ['admin'] },
   { label: 'Module Access', href: '/admin/access', icon: ShieldCheck, description: 'Grant or revoke module access per employee', roles: ['admin'] },
-  { label: 'User Credentials', href: '/admin/credentials', icon: KeyRound, description: 'Login email & password for every user — copy & share for new hires', roles: ['admin'] },
+  { label: 'User Credentials', href: '/admin/credentials', icon: KeyRound, description: 'Create logins and set each employee’s password — shown once, never stored', roles: ['admin'] },
   { label: 'Payroll Runs', href: '/admin/payroll-runs', icon: Play, description: 'Run and lock monthly payroll', roles: ['admin'] },
   { label: 'Salary Slips', href: '/admin/salary-slips', icon: FileText, description: 'Generate & download any employee’s salary slip', roles: ['admin'] },
   { label: 'Audit Log', href: '/admin/audit-log', icon: ScrollText, description: 'Who changed what, when — full activity trail', roles: ['admin'] },
   { label: 'Database Backups', href: '/admin/backups', icon: DatabaseBackup, description: 'Create and review database snapshots', roles: ['admin'] },
   { label: 'Organization', href: '/admin/organization', icon: Building2, description: 'Properties, departments, and employee categories', roles: ['admin'] },
+  { label: 'Employment Types', href: '/admin/employment-types', icon: Contact, description: 'Define employment types & their variables — probation, notice, restrictions', roles: ['admin'] },
   { label: 'Attendance Admin', href: '/admin/attendance', icon: ClipboardList, description: 'Upload & review property attendance', roles: ['admin', 'chro', 'hr'] },
   { label: 'Holidays', href: '/admin/holidays', icon: CalendarDays, description: 'Upload & manage national + per-state holiday calendars', roles: ['admin', 'chro', 'hr'] },
 ];
@@ -38,6 +40,14 @@ export default function AdminPage() {
     enabled: isAdmin,
   });
   const overLimitCount = budgets.filter((b: any) => b.over_worker_limit).length;
+
+  // Over-limit hires waiting for a decision — badged on the Hiring Approvals card.
+  const { data: pendingApprovals = [] } = useQuery({
+    queryKey: ['admin-pending-approvals'],
+    queryFn: () => api.get('/manpower/exceptions?status=pending').then(r => r.data).catch(() => []),
+    enabled: isAdmin,
+  });
+  const pendingCount = pendingApprovals.length;
 
   return (
     <AppShell>
@@ -61,6 +71,11 @@ export default function AdminPage() {
                   {mod.href === '/admin/property-config' && overLimitCount > 0 && (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-[11px] font-semibold" title="Properties with more workers hired than sanctioned">
                       <AlertTriangle size={11} /> {overLimitCount} over limit
+                    </span>
+                  )}
+                  {mod.href === '/admin/approvals' && pendingCount > 0 && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[11px] font-semibold" title="Over-limit hires waiting for a decision">
+                      {pendingCount} pending
                     </span>
                   )}
                 </h3>

@@ -78,14 +78,17 @@ export async function seed(knex: Knex): Promise<void> {
   // Admin: everything
   modules.forEach(mod => grant('admin', mod, crudApprove));
 
-  // CHRO: everything except admin.users and permissions
+  // CHRO: everything except admin.users and permissions.
+  // manpower:approve is deliberately withheld — an over-limit hiring exception can be approved
+  // ONLY by Admin (and never by its own requester: maker≠checker), enforced at the route with
+  // authorizeRoles('admin'). Granting approve here would be dead, misleading config.
   modules.filter(m => m !== 'admin.users' && m !== 'permissions').forEach(mod => {
-    grant('chro', mod, crudApprove);
+    grant('chro', mod, mod === 'manpower' ? crud : crudApprove);
   });
 
-  // HR: everything except permissions and admin.users
+  // HR: everything except permissions and admin.users (manpower:approve withheld — see CHRO note).
   modules.filter(m => m !== 'permissions' && m !== 'admin.users').forEach(mod => {
-    grant('hr', mod, crudApprove);
+    grant('hr', mod, mod === 'manpower' ? crud : crudApprove);
   });
 
   // HR Manager

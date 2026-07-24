@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
-import Breadcrumb from '@/components/ui/Breadcrumb';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { formatINR } from '@/lib/utils';
@@ -74,7 +73,6 @@ export default function SalaryPage() {
     <AppShell>
       <div className="space-y-6">
         <div>
-          <Breadcrumb className="mb-2" items={[{ label: 'Salary' }]} />
           <h1 className="text-2xl font-bold text-foreground">Salary</h1>
           <p className="text-secondary mt-1">Your salary structure and payslips</p>
         </div>

@@ -11,6 +11,13 @@ export async function getRates(req: AuthRequest, res: Response, next: NextFuncti
   try { res.json(await service.getStatutoryRates(req.query.city ? String(req.query.city) : null)); } catch (err) { next(err); }
 }
 
+/** Operating states (data-derived: properties + configured statutory rows) — the
+ *  state picker on the salary-structure preview. Statutory rates are keyed by state,
+ *  so the picker offers states, never cities. */
+export async function listStates(_req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await service.getOperatingStates()); } catch (err) { next(err); }
+}
+
 export async function saveEpf(req: AuthRequest, res: Response, next: NextFunction) {
   try { res.json(await service.saveEpf(req.body, req.user!.userId)); } catch (err) { next(err); }
 }

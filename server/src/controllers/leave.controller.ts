@@ -2,6 +2,33 @@ import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../types';
 import * as leaveService from '../services/leave.service';
 import * as encashmentService from '../services/leaveEncashment.service';
+import * as templateService from '../services/leaveTemplate.service';
+
+// ─── Leave Templates (Control Panel → Templates / By Employee) ───
+export async function listLeaveTemplates(_req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await templateService.listTemplates()); } catch (err) { next(err); }
+}
+export async function getLeaveTemplate(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await templateService.getTemplate(Number(req.params.id))); } catch (err) { next(err); }
+}
+export async function createLeaveTemplate(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.status(201).json(await templateService.createTemplate(req.body)); } catch (err) { next(err); }
+}
+export async function updateLeaveTemplate(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await templateService.updateTemplate(Number(req.params.id), req.body)); } catch (err) { next(err); }
+}
+export async function deleteLeaveTemplate(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await templateService.deleteTemplate(Number(req.params.id))); } catch (err) { next(err); }
+}
+export async function listLeaveTemplateAssignments(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await templateService.listTemplateAssignments({ search: req.query.search ? String(req.query.search) : undefined })); } catch (err) { next(err); }
+}
+export async function setEmployeeLeaveTemplate(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await templateService.setEmployeeTemplate(Number(req.params.employeeId), Number(req.body.template_id))); } catch (err) { next(err); }
+}
+export async function bulkAssignLeaveTemplate(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await templateService.bulkAssignTemplate(req.body.employee_ids, Number(req.body.template_id))); } catch (err) { next(err); }
+}
 
 // Scoped to the caller: types their department can't take are hidden from the
 // apply screen's dropdown. Users without an employee record see the full list.

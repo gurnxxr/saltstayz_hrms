@@ -336,7 +336,6 @@ function OrgAnalytics() {
       <div className="space-y-5">
         <div>
           <h1 className="text-2xl font-bold text-foreground">HR Analytics</h1>
-          <p className="text-secondary mt-1">Organization-wide insights — click a metric or chart to drill in</p>
         </div>
 
         {/* KPI strip */}

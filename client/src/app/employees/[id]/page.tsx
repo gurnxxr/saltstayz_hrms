@@ -71,35 +71,30 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
     onError: (err: any) => { toast.error(err.response?.data?.error || 'Status update failed'); setConfirmDeactivate(false); },
   });
 
-  // Warn before leaving with unsaved employee edits.
+  // Warn before leaving with unsaved employee edits. Only the fields that can actually be
+  // edited — the onboarding-fixed ones can never differ, and testing them would be dead code.
   const dirty = editing && !!emp && (
     form.first_name !== emp.first_name ||
     form.last_name !== emp.last_name ||
-    form.date_of_birth !== (emp.date_of_birth || '') ||
-    form.father_name !== (emp.father_name || '') ||
     String(form.reporting_manager_id) !== String(emp.reporting_manager_id || '') ||
     form.email !== (emp.email || '') ||
-    form.date_of_joining !== (emp.date_of_joining || '') ||
     form.phone !== (emp.phone || '') ||
     form.aadhaar_number !== (emp.aadhaar_number || '') ||
     form.dept_name !== (emp.dept_name || '') ||
     form.branch_name !== (emp.branch_name || '') ||
-    form.gender !== (emp.gender || '') ||
     String(form.job_title_id) !== String(emp.job_title_id || '')
   );
   useUnsavedChangesWarning(dirty);
 
   function startEditing() {
     if (!emp) return;
+    // The onboarding-fixed fields are deliberately absent: the server strips them from any
+    // update, so carrying them in the form would only invite them to be sent and dropped.
     setForm({
       first_name: emp.first_name,
       last_name: emp.last_name,
-      date_of_birth: emp.date_of_birth || '',
-      gender: emp.gender || '',
-      father_name: emp.father_name || '',
       reporting_manager_id: emp.reporting_manager_id || '',
       email: emp.email || '',
-      date_of_joining: emp.date_of_joining || '',
       phone: emp.phone || '',
       aadhaar_number: emp.aadhaar_number || '',
       dept_name: emp.dept_name || '',
@@ -230,13 +225,19 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
             <div className="p-8 grid grid-cols-1 md:grid-cols-2 gap-6">
               <FormField label="First Name" value={form.first_name} onChange={(v) => setForm((p: any) => ({ ...p, first_name: v }))} />
               <FormField label="Last Name" value={form.last_name} onChange={(v) => setForm((p: any) => ({ ...p, last_name: v }))} />
-              <FormField label="Date of Birth" value={form.date_of_birth} onChange={(v) => setForm((p: any) => ({ ...p, date_of_birth: v }))} type="date" />
-              {/* Gender drives eligibility for gender-restricted leave (Maternity / Paternity). */}
-              <SelectField label="Gender" value={form.gender} onChange={(v) => setForm((p: any) => ({ ...p, gender: v }))} options={[{ value: 'male', label: 'Male' }, { value: 'female', label: 'Female' }, { value: 'other', label: 'Other' }]} />
-              <FormField label="Father's Name (As per UID)" value={form.father_name} onChange={(v) => setForm((p: any) => ({ ...p, father_name: v }))} />
+              {/* Fixed at onboarding — see FIXED_AT_ONBOARDING in employee.service.ts. These come
+                  off the UID/PAN card and are verified once; editing them later would leave the
+                  record no longer matching the document it was checked against. Date of joining
+                  is set by the hire at the end of recruitment, and moving it would shift payable
+                  days and leave accrual. The server drops them on save, so these are shown
+                  read-only rather than left editable and silently ignored. */}
+              <ReadOnlyField label="Date of Birth (As per UID)" value={fmtDate(emp.date_of_birth)} />
+              <ReadOnlyField label="Gender" value={emp.gender ? emp.gender[0].toUpperCase() + emp.gender.slice(1) : ''} />
+              <ReadOnlyField label="Father's Name (As per UID)" value={emp.father_name} />
+              <ReadOnlyField label="PAN Card No" value={emp.pan_number} />
+              <ReadOnlyField label="Date of Joining" value={fmtDate(emp.date_of_joining)} hint="Set when the hire is completed in Recruitment" />
               <SelectField label="Reporting Manager" value={form.reporting_manager_id} onChange={(v) => setForm((p: any) => ({ ...p, reporting_manager_id: v ? Number(v) : null }))} options={managers.filter((m: any) => m.id !== Number(id)).map((m: any) => ({ value: m.id, label: `${m.first_name} ${m.last_name}` }))} />
               <FormField label="Email Address" value={form.email} onChange={(v) => setForm((p: any) => ({ ...p, email: v }))} type="email" />
-              <FormField label="Date of Joining" value={form.date_of_joining} onChange={(v) => setForm((p: any) => ({ ...p, date_of_joining: v }))} type="date" />
               <FormField label="Phone Number" value={form.phone} onChange={(v) => setForm((p: any) => ({ ...p, phone: v }))} />
               <FormField label="Aadhaar Card No" value={form.aadhaar_number} onChange={(v) => setForm((p: any) => ({ ...p, aadhaar_number: v.replace(/\D/g, '') }))} maxLength={12} />
               <SelectField label="Dept Name" value={form.dept_name} onChange={(v) => setForm((p: any) => ({ ...p, dept_name: v }))} options={deptOptions} />
@@ -258,6 +259,10 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
               <InfoRow icon={Calendar} label="Date of Joining" value={emp.date_of_joining ? new Date(emp.date_of_joining).toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' }) : 'N/A'} />
               <InfoRow icon={Phone} label="Phone Number" value={emp.phone || 'Not set'} />
               <InfoRow icon={Shield} label="Aadhaar Card No" value={emp.aadhaar_number ? maskValue(emp.aadhaar_number, 4) : 'Not set'} />
+              {/* HR's own copy, captured with the identity documents. Finance keeps a separate
+                  PAN on the bank-details record, and that is the one payroll and TDS use — the
+                  two are not synchronised, so they can disagree. */}
+              <InfoRow icon={Shield} label="PAN Card No" value={emp.pan_number ? maskValue(emp.pan_number, 4) : 'Not set'} />
               <InfoRow icon={Briefcase} label="Dept Name" value={emp.dept_name || 'N/A'} />
               <InfoRow icon={Briefcase} label="Designation Name" value={emp.designation_name || 'N/A'} />
               <InfoRow icon={Briefcase} label="Branch Name" value={emp.branch_name || 'N/A'} />
@@ -304,6 +309,33 @@ function InfoRow({ icon: Icon, label, value }: { icon: React.ElementType; label:
         <p className="text-xs text-secondary">{label}</p>
         <p className="text-sm font-medium text-foreground">{value}</p>
       </div>
+    </div>
+  );
+}
+
+/** A date the way the rest of the page shows them, or an em dash when there isn't one. */
+function fmtDate(v?: string | null) {
+  if (!v) return '';
+  return new Date(v).toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+/**
+ * A field shown inside the edit form that cannot be edited.
+ *
+ * Deliberately not a disabled <input>: a greyed-out box invites people to click it and wonder
+ * why nothing happens. This reads as a stated fact, with a note saying where it comes from.
+ */
+function ReadOnlyField({ label, value, hint }: { label: string; value?: string | null; hint?: string }) {
+  return (
+    <div>
+      <label className="block text-sm font-medium text-foreground mb-1.5">
+        {label}
+        <span className="ml-2 text-xs font-normal text-secondary">· not editable</span>
+      </label>
+      <div className="w-full px-3 py-2.5 border border-border border-dashed rounded-lg bg-muted/40 text-sm text-secondary">
+        {value || 'Not set'}
+      </div>
+      {hint && <p className="mt-1 text-xs text-secondary">{hint}</p>}
     </div>
   );
 }

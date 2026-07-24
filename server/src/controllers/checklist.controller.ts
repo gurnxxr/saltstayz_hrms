@@ -61,6 +61,12 @@ export async function toggleItem(req: AuthRequest, res: Response, next: NextFunc
   } catch (err) { next(err); }
 }
 
+export async function completeAllItems(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json(await checklistService.completeAllItems(Number(req.params.id), req.user!.userId));
+  } catch (err) { next(err); }
+}
+
 export async function deleteItem(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     res.json(await checklistService.deleteItem(Number(req.params.itemId)));

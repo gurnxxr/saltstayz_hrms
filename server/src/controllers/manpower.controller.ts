@@ -59,6 +59,14 @@ export async function upsertPropertyBudget(req: AuthRequest, res: Response, next
   try { res.json(await svc.upsertPropertyBudget(Number(req.params.id), req.body, req.user!)); } catch (err) { next(err); }
 }
 
+export async function unassignedCommitment(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await svc.unassignedCommitment(req.user!)); } catch (err) { next(err); }
+}
+
+export async function propertyCommittedBreakdown(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await svc.propertyCommittedBreakdown(Number(req.params.id), req.user!)); } catch (err) { next(err); }
+}
+
 // ─── Admin property console ───
 
 export async function getPropertyConsole(req: AuthRequest, res: Response, next: NextFunction) {

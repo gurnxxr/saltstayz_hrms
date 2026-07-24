@@ -1,7 +1,19 @@
 import db from '../config/database';
 import { NotFoundError, ValidationError } from '../utils/errors';
 import { notifyEmployee } from './notification.service';
-import { pickAssignmentFor } from './shiftPattern';
+import { pickAssignmentFor, parseOffDayRules } from './shiftPattern';
+import { buildCsv, parseCsv } from '../utils/csv';
+
+const DAYS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/** "Sun, Sat(2,4)" — a shift's off days as text, for the CSV export. */
+function offDaySummary(raw: unknown): string {
+  const rules = parseOffDayRules(raw);
+  if (!rules.length) return 'Company work week';
+  return rules.slice().sort((a, b) => a.day - b.day)
+    .map((r) => (r.weeks && r.weeks.length ? `${DAYS_SHORT[r.day]}(${r.weeks.join(',')})` : DAYS_SHORT[r.day]))
+    .join(', ');
+}
 
 // ─── Shift Types (organization-wide) ───
 
@@ -282,42 +294,58 @@ async function assertNoLockedRunFrom(from: string | null): Promise<void> {
   }
 }
 
-/** Every employee with the shift they are on today, for the assignment screen. */
-export async function listShiftAssignments(filters: { search?: string; property?: string; unassigned?: boolean } = {}) {
-  const employees = await db('employees as e')
-    .leftJoin('job_titles as jt', 'jt.id', 'e.job_title_id')
-    .where('e.is_active', true)
-    .modify((q) => {
-      if (filters.search) {
-        const term = `%${filters.search.trim()}%`;
-        q.where((w) => w
-          .where('e.first_name', 'ilike', term)
-          .orWhere('e.last_name', 'ilike', term)
-          .orWhere('e.employee_code', 'ilike', term));
-      }
-      if (filters.property) q.where('e.branch_name', filters.property);
-    })
-    .select('e.id', 'e.employee_code', 'e.first_name', 'e.last_name', 'e.branch_name', 'e.dept_name',
-      'jt.title as designation')
-    .orderBy(['e.first_name', 'e.last_name']);
+export interface ShiftAssignmentFilters {
+  search?: string;
+  property?: string;
+  unassigned?: boolean;
+  page?: number;
+  pageSize?: number;
+}
 
-  // One query for every assignment, then resolve in memory — avoids a lookup per employee.
+/**
+ * Shared WHERE builder for the assignment list, its count and its CSV export, so all three
+ * select the same people. `unassigned` ("no shift as of today") is pushed into SQL as a
+ * whereNotExists rather than filtered in memory, so it composes correctly with offset paging —
+ * an in-memory post-filter would make page counts wrong.
+ */
+function applyAssignmentFilters(q: any, filters: ShiftAssignmentFilters, today: string) {
+  q.where('e.is_active', true);
+  if (filters.search) {
+    const term = `%${filters.search.trim()}%`;
+    q.where((w: any) => w
+      .where('e.first_name', 'ilike', term)
+      .orWhere('e.last_name', 'ilike', term)
+      .orWhere('e.employee_code', 'ilike', term));
+  }
+  if (filters.property) q.where('e.branch_name', filters.property);
+  if (filters.unassigned) {
+    q.whereNotExists(function (this: any) {
+      this.select(db.raw('1')).from('employee_shift_assignments as a2')
+        .whereRaw('a2.employee_id = e.id')
+        .where('a2.effective_from', '<=', today);
+    });
+  }
+  return q;
+}
+
+/** Resolve each employee's current/upcoming shift from one assignments query. */
+async function resolveAssignmentRows(employees: any[], today: string) {
+  if (!employees.length) return [];
   const assignments = await db('employee_shift_assignments as a')
     .join('shift_types as st', 'st.id', 'a.shift_type_id')
-    .whereIn('a.employee_id', employees.length ? employees.map((e: any) => e.id) : [-1])
+    .whereIn('a.employee_id', employees.map((e: any) => e.id))
     .select('a.id as assignment_id', 'a.employee_id', 'a.effective_from',
       'st.id as shift_type_id', 'st.name as shift_name', 'st.start_time', 'st.end_time',
       'st.ends_next_day', 'st.weekly_off_days')
     .orderBy(['a.employee_id', 'a.effective_from']);
 
-  const today = todayIso();
   const byEmp = new Map<number, any[]>();
   for (const a of assignments) {
     if (!byEmp.has(a.employee_id)) byEmp.set(a.employee_id, []);
     byEmp.get(a.employee_id)!.push(a);
   }
 
-  const rows = employees.map((e: any) => {
+  return employees.map((e: any) => {
     const list = byEmp.get(e.id) ?? [];
     const current = list.filter((a: any) => isoDate(a.effective_from) <= today).pop() ?? null;
     const upcoming = list.find((a: any) => isoDate(a.effective_from) > today) ?? null;
@@ -328,8 +356,41 @@ export async function listShiftAssignments(filters: { search?: string; property?
       history_count: list.length,
     };
   });
+}
 
-  return filters.unassigned ? rows.filter((r: any) => !r.current) : rows;
+const ASSIGNMENT_SELECT = ['e.id', 'e.employee_code', 'e.first_name', 'e.last_name',
+  'e.branch_name', 'e.dept_name', 'jt.title as designation'];
+
+/**
+ * Every employee with the shift they are on today, for the assignment screen.
+ *
+ * Returns a plain array when no `page` is given (unchanged for any existing caller), or
+ * `{ data, total, page, pageSize, totalPages }` when paginated — mirroring listEmployees.
+ */
+export async function listShiftAssignments(filters: ShiftAssignmentFilters = {}) {
+  const today = todayIso();
+  const base = () => db('employees as e').leftJoin('job_titles as jt', 'jt.id', 'e.job_title_id');
+
+  if (!filters.page) {
+    const employees = await applyAssignmentFilters(base(), filters, today)
+      .select(...ASSIGNMENT_SELECT).orderBy(['e.first_name', 'e.last_name']);
+    return resolveAssignmentRows(employees, today);
+  }
+
+  const page = Math.max(1, filters.page);
+  const pageSize = Math.min(Math.max(1, filters.pageSize || 10), 100);
+  const offset = (page - 1) * pageSize;
+
+  const countRow = await applyAssignmentFilters(db('employees as e'), filters, today)
+    .count('e.id as total').first();
+  const total = Number((countRow as any)?.total ?? 0);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  const employees = await applyAssignmentFilters(base(), filters, today)
+    .select(...ASSIGNMENT_SELECT).orderBy(['e.first_name', 'e.last_name'])
+    .limit(pageSize).offset(offset);
+
+  return { data: await resolveAssignmentRows(employees, today), total, page, pageSize, totalPages };
 }
 
 /** Every shift this employee has been on, newest first. */
@@ -391,6 +452,116 @@ export async function assignShift(
     assigned_by: userId ?? null,
   });
   return getEmployeeShiftHistory(employeeId);
+}
+
+// ─── CSV export / import of assignments ───
+
+/**
+ * The assignment list as CSV — one row per active employee with the shift they are on today,
+ * honouring the screen's filters so the file matches what's shown. Unassigned employees export
+ * with blank shift/date columns, so the file doubles as a fill-in template for the importer.
+ *
+ * The columns the importer reads are `employee_code`, `shift_name` and `effective_from`; the
+ * rest (name, property, off days) are there for a human to read.
+ */
+export async function exportShiftAssignmentsCsv(filters: ShiftAssignmentFilters): Promise<string> {
+  // Reuse the list (unpaginated) so export selects exactly the same people as the screen.
+  const rows = await listShiftAssignments({ ...filters, page: undefined, pageSize: undefined }) as any[];
+
+  const header = ['employee_code', 'employee_name', 'property', 'shift_name', 'effective_from', 'off_days'];
+  return buildCsv(header, rows.map((r) => [
+    r.employee_code,
+    `${r.first_name} ${r.last_name}`.trim(),
+    r.branch_name,
+    r.current?.shift_name ?? '',
+    r.current ? isoDate(r.current.effective_from) : '',
+    r.current ? offDaySummary(r.current.weekly_off_days) : '',
+  ]));
+}
+
+const SHIFT_HEADER_ALIASES: Record<string, string> = {
+  employee_code: 'employee_code', emp_code: 'employee_code', code: 'employee_code',
+  shift_name: 'shift_name', shift: 'shift_name',
+  effective_from: 'effective_from', from: 'effective_from', effective_date: 'effective_from', date: 'effective_from',
+};
+
+/**
+ * Bulk-assign employees to shifts from a CSV of employee_code, shift_name, effective_from.
+ *
+ * Every row is written through `assignShift`, never by a raw insert — so the locked-payroll
+ * guard, the active-shift check, the shift's own effective-date rule and the
+ * (employee_id, effective_from) upsert all apply. A row that would reach a locked month, or is
+ * otherwise refused, is skipped and reported; the table is never touched directly.
+ */
+export async function bulkUploadShiftAssignments(csvContent: string, userId?: number | null) {
+  const grid = parseCsv(csvContent);
+  if (grid.length < 2) throw Object.assign(new Error('CSV must have a header row and at least one data row'), { status: 400 });
+
+  const header = grid[0].map((h) => {
+    const key = h.trim().toLowerCase().replace(/\s+/g, '_');
+    return SHIFT_HEADER_ALIASES[key] || key;
+  });
+  const col = (name: string) => header.indexOf(name);
+  const codeIdx = col('employee_code'), shiftIdx = col('shift_name'), fromIdx = col('effective_from');
+  if (codeIdx === -1) throw Object.assign(new Error('CSV must have an "Employee Code" column'), { status: 400 });
+  if (shiftIdx === -1) throw Object.assign(new Error('CSV must have a "Shift" column'), { status: 400 });
+  if (fromIdx === -1) throw Object.assign(new Error('CSV must have an "Effective From" column'), { status: 400 });
+
+  // Case-insensitive shift lookup by name (names are unique lower-cased). Only active shifts can
+  // be assigned; an inactive one resolves to no id and the row is reported as unknown.
+  const shiftRows = await db('shift_types').where('is_active', true).select('id', 'name');
+  const shiftByName = new Map<string, number>(shiftRows.map((s: any) => [String(s.name).trim().toLowerCase(), s.id]));
+
+  const results = { total: 0, created: 0, updated: 0, skipped: 0, errors: [] as string[] };
+
+  for (let i = 1; i < grid.length; i++) {
+    const cells = grid[i];
+    const employee_code = (cells[codeIdx] ?? '').trim();
+    const shift_name = (cells[shiftIdx] ?? '').trim();
+    const effective_from = (cells[fromIdx] ?? '').trim();
+    results.total++;
+    const rowNo = i + 1;
+
+    if (!employee_code || !shift_name || !effective_from) {
+      results.skipped++;
+      results.errors.push(`Row ${rowNo}: employee code, shift and effective-from date are all required`);
+      continue;
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(effective_from)) {
+      results.skipped++;
+      results.errors.push(`Row ${rowNo}: "${effective_from}" is not a date like 2026-08-01`);
+      continue;
+    }
+
+    const employee = await db('employees').where('employee_code', employee_code).first();
+    if (!employee) {
+      results.skipped++;
+      results.errors.push(`Row ${rowNo}: no employee with code "${employee_code}"`);
+      continue;
+    }
+    const shiftTypeId = shiftByName.get(shift_name.toLowerCase());
+    if (!shiftTypeId) {
+      results.skipped++;
+      results.errors.push(`Row ${rowNo}: no active shift named "${shift_name}"`);
+      continue;
+    }
+
+    // Did this exact (employee, date) row already exist? — so we can report created vs updated,
+    // since assignShift upserts and doesn't tell us which happened.
+    const existing = await db('employee_shift_assignments')
+      .where({ employee_id: employee.id, effective_from }).first();
+
+    try {
+      // The one safe write path — carries the locked-month guard and every other rule.
+      await assignShift({ employee_id: employee.id, shift_type_id: shiftTypeId, effective_from }, userId);
+      if (existing) results.updated++; else results.created++;
+    } catch (err: any) {
+      results.skipped++;
+      results.errors.push(`Row ${rowNo} (${employee_code}): ${err.message || 'could not assign'}`);
+    }
+  }
+
+  return results;
 }
 
 /** Remove one dated assignment. The employee keeps whatever earlier one remains. */

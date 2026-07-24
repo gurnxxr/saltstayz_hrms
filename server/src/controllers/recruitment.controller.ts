@@ -199,6 +199,20 @@ export async function moveCandidateStage(req: AuthRequest, res: Response, next: 
   }
 }
 
+export async function setCandidateHold(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const candidate = await recruitmentService.setCandidateHold(
+      Number(req.params.id),
+      !!req.body.on_hold,
+      req.body.reason,
+      req.user!.userId,
+    );
+    res.json(candidate);
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function getCandidateHistory(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     const history = await recruitmentService.getCandidateHistory(Number(req.params.id));
@@ -312,6 +326,25 @@ export async function releaseOffer(req: AuthRequest, res: Response, next: NextFu
       req.user!.userId
     );
     res.status(201).json(candidate);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function requestOfferApproval(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const exception = await recruitmentService.requestOfferApproval(
+      Number(req.params.id),
+      {
+        base_gross: Number(req.body.base_gross) || 0,
+        joining_date: req.body.joining_date,
+        designation: req.body.designation,
+        lines: Array.isArray(req.body.lines) ? req.body.lines : null,
+      },
+      String(req.body.reason || ''),
+      req.user!.userId
+    );
+    res.status(201).json(exception);
   } catch (err) {
     next(err);
   }

@@ -3,8 +3,11 @@ import { AuthRequest } from '../types';
 import db from '../config/database';
 import * as service from '../services/salaryStructure.service';
 
-export async function list(_req: AuthRequest, res: Response, next: NextFunction) {
-  try { res.json(await service.listStructures()); } catch (err) { next(err); }
+export async function list(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const scope = req.query.scope === 'department' ? 'department' : 'designation';
+    res.json(await service.listStructures(scope));
+  } catch (err) { next(err); }
 }
 
 export async function get(req: AuthRequest, res: Response, next: NextFunction) {
@@ -32,10 +35,6 @@ export async function preview(req: AuthRequest, res: Response, next: NextFunctio
 
 export async function listEmployeeSalary(_req: AuthRequest, res: Response, next: NextFunction) {
   try { res.json(await service.listEmployeeSalary()); } catch (err) { next(err); }
-}
-
-export async function getCtcRegister(_req: AuthRequest, res: Response, next: NextFunction) {
-  try { res.json(await service.getCtcRegister()); } catch (err) { next(err); }
 }
 
 export async function getSalaryOverview(_req: AuthRequest, res: Response, next: NextFunction) {

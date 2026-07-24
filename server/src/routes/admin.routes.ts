@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import { authenticate } from '../middleware/auth';
 import { authorize } from '../middleware/rbac';
@@ -6,10 +6,31 @@ import * as userCtrl from '../controllers/user.controller';
 import * as orgCtrl from '../controllers/organization.controller';
 import * as accessCtrl from '../controllers/moduleAccess.controller';
 import * as salaryStructureCtrl from '../controllers/salaryStructure.controller';
+import * as employmentTypeCtrl from '../controllers/employmentType.controller';
 import * as auditCtrl from '../controllers/audit.controller';
 import * as backupCtrl from '../controllers/backup.controller';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } });
+
+// CSV-only upload for the Employment Types import — reject a non-CSV and turn multer's
+// size/type rejections into a clean 400 (a bare MulterError becomes a generic 500 otherwise).
+const csvUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: (_req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+    if (/\.csv$/i.test(file.originalname) || ['text/csv', 'application/csv', 'application/vnd.ms-excel'].includes(file.mimetype)) cb(null, true);
+    else cb(new Error('Please upload a .csv file'));
+  },
+});
+function uploadCsv(req: Request, res: Response, next: NextFunction) {
+  csvUpload.single('file')(req, res, (err: any) => {
+    if (err) {
+      const msg = err.code === 'LIMIT_FILE_SIZE' ? 'CSV file is too large (max 2 MB)' : (err.message || 'Upload failed');
+      return res.status(400).json({ error: msg });
+    }
+    next();
+  });
+}
 
 const router = Router();
 router.use(authenticate);
@@ -56,6 +77,16 @@ router.post('/employment-statuses', authorize('admin', 'create'), orgCtrl.create
 router.put('/employment-statuses/:id', authorize('admin', 'update'), orgCtrl.updateStatus);
 router.delete('/employment-statuses/:id', authorize('admin', 'delete'), orgCtrl.deleteStatus);
 
+// ─── Employment Types master (admin config; catalog-only) ───
+// Static sub-paths before the :id routes, or Express reads "export"/"import" as an :id.
+router.get('/employment-types', authorize('admin', 'read'), employmentTypeCtrl.list);
+router.get('/employment-types/export', authorize('admin', 'read'), employmentTypeCtrl.exportCsv);
+router.post('/employment-types/import', authorize('admin', 'create'), uploadCsv, employmentTypeCtrl.importCsv);
+router.get('/employment-types/:id', authorize('admin', 'read'), employmentTypeCtrl.get);
+router.post('/employment-types', authorize('admin', 'create'), employmentTypeCtrl.create);
+router.put('/employment-types/:id', authorize('admin', 'update'), employmentTypeCtrl.update);
+router.delete('/employment-types/:id', authorize('admin', 'delete'), employmentTypeCtrl.remove);
+
 // ─── User Management (admin only) ───
 
 router.get('/users', authorize('admin.users', 'read'), userCtrl.listUsers);
@@ -83,7 +114,6 @@ router.delete('/salary-structures/:id', authorize('admin', 'delete'), salaryStru
 
 // ─── Per-employee salary structures (admin only) ───
 router.get('/employee-salary', authorize('admin', 'read'), salaryStructureCtrl.listEmployeeSalary);
-router.get('/employee-salary-register', authorize('admin', 'read'), salaryStructureCtrl.getCtcRegister);
 router.get('/salary-overview', authorize('admin', 'read'), salaryStructureCtrl.getSalaryOverview);
 router.get('/employee-salary/:employeeId', authorize('admin', 'read'), salaryStructureCtrl.getEmployeeSalary);
 router.put('/employee-salary/:employeeId', authorize('admin', 'update'), salaryStructureCtrl.saveEmployeeSalary);

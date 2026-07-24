@@ -18,6 +18,7 @@ router.delete('/template-items/:id', authorize('recruitment', 'delete'), authori
 // Instances
 router.get('/instances/:id', authorize('recruitment', 'read'), ctrl.getInstance);
 router.post('/instances/:id/items', authorize('recruitment', 'update'), ctrl.addItem);
+router.put('/instances/:id/complete-all', authorize('recruitment', 'update'), ctrl.completeAllItems);
 
 // Items
 router.put('/items/:itemId/toggle', authorize('recruitment', 'update'), ctrl.toggleItem);

@@ -3,12 +3,31 @@
 import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, X, ClipboardCheck } from 'lucide-react';
+import RaiseRegularisationDialog from './RaiseRegularisationDialog';
+
+// What a clicked day carries into the detail card — computed once when the cell renders so the
+// card doesn't re-derive the badge/label.
+interface SelectedDay {
+  dateStr: string;
+  label: string;            // "Wednesday, 1 July 2026"
+  statusLabel: string;      // "Present", "Absent", "No attendance recorded", …
+  badgeBg: string;
+  badgeText: string;
+  checkIn?: string;
+  checkOut?: string;
+  hours?: number;
+  isRegularised?: boolean;
+  isOnLeave: boolean;       // approved leave — the server won't override it, so no regularise
+}
 
 export default function AttendanceCalendar() {
   const now = new Date();
   const [calYear, setCalYear] = useState(now.getFullYear());
   const [calMonth, setCalMonth] = useState(now.getMonth());
+  // The day whose detail card is open, and whether the regularise form is showing for it.
+  const [selectedDay, setSelectedDay] = useState<SelectedDay | null>(null);
+  const [regularising, setRegularising] = useState(false);
   const monthStr = `${calYear}-${String(calMonth + 1).padStart(2, '0')}`;
   const { data: calendarData, isLoading: calLoading } = useQuery({
     queryKey: ['attendance-calendar', monthStr],
@@ -156,28 +175,35 @@ export default function AttendanceCalendar() {
                   let badgeBg = '';
                   let badgeText = '';
                   let tooltip = '';
+                  // A plain human label for the day-detail card (the badge is an abbreviation).
+                  let statusLabel = 'No attendance recorded';
 
                   if (holiday) {
                     badge = 'H'; badgeBg = 'bg-orange-100'; badgeText = 'text-orange-700'; tooltip = holiday;
+                    statusLabel = `Holiday — ${holiday}`;
                   } else if (leave) {
                     badge = 'L'; badgeBg = 'bg-blue-100'; badgeText = 'text-blue-700'; tooltip = leave;
+                    statusLabel = `On leave — ${leave}`;
                   } else if (record) {
                     if (record.status === 'present') {
                       badge = 'P'; badgeBg = 'bg-green-100'; badgeText = 'text-green-700';
-                      tooltip = `Present${record.hours ? ` • ${record.hours}h` : ''}`;
+                      tooltip = `Present${record.hours ? ` • ${record.hours}h` : ''}`; statusLabel = 'Present';
                     } else if (record.status === 'absent') {
-                      badge = 'A'; badgeBg = 'bg-red-100'; badgeText = 'text-red-700'; tooltip = 'Absent';
+                      badge = 'A'; badgeBg = 'bg-red-100'; badgeText = 'text-red-700'; tooltip = 'Absent'; statusLabel = 'Absent';
                     } else if (record.status === 'half_day') {
                       badge = 'HD'; badgeBg = 'bg-yellow-100'; badgeText = 'text-yellow-700';
-                      tooltip = `Half Day${record.hours ? ` • ${record.hours}h` : ''}`;
+                      tooltip = `Half Day${record.hours ? ` • ${record.hours}h` : ''}`; statusLabel = 'Half Day';
+                    } else if (record.status === 'hhd') {
+                      badge = 'HHD'; badgeBg = 'bg-teal-100'; badgeText = 'text-teal-700';
+                      tooltip = 'Half-day Holiday — paid ½'; statusLabel = 'Half-day Holiday';
                     } else if (record.status === 'short_punch') {
                       badge = 'SP'; badgeBg = 'bg-amber-100'; badgeText = 'text-amber-700';
-                      tooltip = `Short Punch — left early${record.hours ? ` • ${record.hours}h` : ''}`;
+                      tooltip = `Short Punch — left early${record.hours ? ` • ${record.hours}h` : ''}`; statusLabel = 'Short Punch — left early';
                     } else if (record.status === 'miss_punch') {
                       badge = 'MP'; badgeBg = 'bg-orange-100'; badgeText = 'text-orange-700';
-                      tooltip = 'Miss Punch — marked only once';
+                      tooltip = 'Miss Punch — marked only once'; statusLabel = 'Miss Punch — marked only once';
                     } else if (record.status === 'on_leave') {
-                      badge = 'L'; badgeBg = 'bg-blue-100'; badgeText = 'text-blue-700'; tooltip = 'On Leave';
+                      badge = 'L'; badgeBg = 'bg-blue-100'; badgeText = 'text-blue-700'; tooltip = 'On Leave'; statusLabel = 'On Leave';
                     }
                     // A regularised day is shown as "R" (the underlying status stays in the tooltip).
                     if (record.isRegularised) {
@@ -186,18 +212,28 @@ export default function AttendanceCalendar() {
                     }
                   } else if (isWeekend && !isFuture) {
                     badge = 'WO'; badgeBg = 'bg-gray-100'; badgeText = 'text-gray-500'; tooltip = 'Weekly Off';
+                    statusLabel = 'Weekly Off';
                   }
 
-                  cells.push(
-                    <div
-                      key={d}
-                      title={tooltip}
-                      className={`h-14 sm:h-20 rounded-lg border p-1 sm:p-1.5 flex flex-col transition-colors ${
-                        isToday ? 'border-primary bg-primary/5' :
-                        isWeekend ? 'border-border/50 bg-muted/30' :
-                        'border-border hover:bg-muted/30'
-                      } ${isFuture ? 'opacity-40' : ''}`}
-                    >
+                  const isOnLeave = record?.status === 'on_leave' || !!leave;
+                  const cellClass = `h-14 sm:h-20 rounded-lg border p-1 sm:p-1.5 flex flex-col text-left w-full transition-colors ${
+                    isToday ? 'border-primary bg-primary/5' :
+                    isWeekend ? 'border-border/50 bg-muted/30' :
+                    'border-border hover:bg-muted/30'
+                  } ${isFuture ? 'opacity-40' : 'cursor-pointer hover:border-primary/40'}`;
+
+                  // Only past/today cells act — you can't regularise a day that hasn't happened.
+                  const openDay = () => setSelectedDay({
+                    dateStr,
+                    label: new Date(calYear, calMonth, d).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }),
+                    statusLabel: record?.isRegularised ? `Regularised — ${statusLabel}` : statusLabel,
+                    badgeBg: badgeBg || 'bg-muted', badgeText: badgeText || 'text-secondary',
+                    checkIn: record?.checkIn, checkOut: record?.checkOut, hours: record?.hours,
+                    isRegularised: record?.isRegularised, isOnLeave,
+                  });
+
+                  const inner = (
+                    <>
                       <span className={`text-xs font-medium ${isToday ? 'text-primary' : 'text-foreground'}`}>
                         {d}
                       </span>
@@ -213,7 +249,18 @@ export default function AttendanceCalendar() {
                           {record.checkIn.split(' ')[1]?.slice(0, 5)}
                         </p>
                       )}
-                    </div>
+                    </>
+                  );
+
+                  cells.push(
+                    isFuture ? (
+                      <div key={d} title={tooltip} className={cellClass}>{inner}</div>
+                    ) : (
+                      <button key={d} type="button" onClick={openDay} title={tooltip}
+                        aria-label={`${d} — ${statusLabel}. Open day details`} className={cellClass}>
+                        {inner}
+                      </button>
+                    )
                   );
                 }
 
@@ -227,6 +274,7 @@ export default function AttendanceCalendar() {
                 { badge: 'P', bg: 'bg-green-100', text: 'text-green-700', label: 'Present' },
                 { badge: 'A', bg: 'bg-red-100', text: 'text-red-700', label: 'Absent' },
                 { badge: 'HD', bg: 'bg-yellow-100', text: 'text-yellow-700', label: 'Half Day' },
+                { badge: 'HHD', bg: 'bg-teal-100', text: 'text-teal-700', label: 'Half-day Holiday' },
                 { badge: 'SP', bg: 'bg-amber-100', text: 'text-amber-700', label: 'Short Punch' },
                 { badge: 'MP', bg: 'bg-orange-100', text: 'text-orange-700', label: 'Miss Punch' },
                 { badge: 'L', bg: 'bg-blue-100', text: 'text-blue-700', label: 'On Leave' },
@@ -243,6 +291,68 @@ export default function AttendanceCalendar() {
           </div>
         )}
       </div>
+
+      {/* Day detail — opens on clicking any past/today cell, with a Regularise action. */}
+      {selectedDay && !regularising && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setSelectedDay(null)} />
+          <div className="relative bg-card rounded-xl border border-border shadow-xl w-full max-w-sm">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+              <h3 className="text-base font-semibold text-foreground">{selectedDay.label}</h3>
+              <button onClick={() => setSelectedDay(null)} className="p-1 rounded-lg text-secondary hover:text-foreground hover:bg-muted transition-colors">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-5 space-y-3">
+              <div className="flex items-center gap-2">
+                <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${selectedDay.badgeBg} ${selectedDay.badgeText}`}>
+                  {selectedDay.statusLabel}
+                </span>
+              </div>
+              {(selectedDay.checkIn || selectedDay.checkOut || selectedDay.hours != null) && (
+                <dl className="grid grid-cols-3 gap-2 text-sm">
+                  <div>
+                    <dt className="text-xs text-secondary">Punch in</dt>
+                    <dd className="font-medium text-foreground">{selectedDay.checkIn?.split(' ')[1]?.slice(0, 5) || '—'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-secondary">Punch out</dt>
+                    <dd className="font-medium text-foreground">{selectedDay.checkOut?.split(' ')[1]?.slice(0, 5) || '—'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-secondary">Hours</dt>
+                    <dd className="font-medium text-foreground">{selectedDay.hours != null ? `${selectedDay.hours}h` : '—'}</dd>
+                  </div>
+                </dl>
+              )}
+              {selectedDay.isOnLeave && (
+                <p className="text-xs text-secondary">This day is on approved leave — regularisation can&apos;t override it.</p>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 px-5 py-4 border-t border-border">
+              <button onClick={() => setSelectedDay(null)} className="px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted transition-colors">
+                Close
+              </button>
+              <button
+                onClick={() => setRegularising(true)}
+                disabled={selectedDay.isOnLeave}
+                title={selectedDay.isOnLeave ? 'Approved leave cannot be regularised' : undefined}
+                className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
+              >
+                <ClipboardCheck size={15} /> Regularise this day
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* The shared regularisation form, prefilled with the clicked date. */}
+      {selectedDay && regularising && (
+        <RaiseRegularisationDialog
+          initialDate={selectedDay.dateStr}
+          onClose={() => { setRegularising(false); setSelectedDay(null); }}
+        />
+      )}
     </div>
   );
 }

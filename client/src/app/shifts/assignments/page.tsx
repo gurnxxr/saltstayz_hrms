@@ -1,16 +1,26 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import Breadcrumb from '@/components/ui/Breadcrumb';
 import LoadError from '@/components/ui/LoadError';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import Pagination from '@/components/ui/Pagination';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
-import { Search, Clock, Loader2, X, History, UserCog, Moon, Trash2 } from 'lucide-react';
+import { Search, Clock, Loader2, X, History, UserCog, Moon, Trash2, Download, Upload, Copy } from 'lucide-react';
+
+const PAGE_SIZE = 15;
+
+function copyErrors(errors: string[]) {
+  navigator.clipboard.writeText((errors || []).join('\n')).then(
+    () => toast.success('Errors copied to clipboard'),
+    () => toast.error('Copy failed'),
+  );
+}
 
 const inputCls =
   'w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50';
@@ -222,30 +232,103 @@ export default function ShiftAssignmentsPage() {
   const [search, setSearch] = useState('');
   const debounced = useDebouncedValue(search, 300);
   const [unassignedOnly, setUnassignedOnly] = useState(false);
+  const [property, setProperty] = useState('');
+  const [page, setPage] = useState(1);
   const [editing, setEditing] = useState<any | null>(null);
+  const [showBulk, setShowBulk] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
-  const { data: rows = [], isLoading, isError, refetch } = useQuery({
-    queryKey: ['shift-assignments', debounced, unassignedOnly],
+  // Properties for the filter dropdown; the option value is the property NAME, since employees
+  // belong to a property by their plain-text branch_name (same as the Employees page).
+  const { data: properties = [] } = useQuery({
+    queryKey: ['properties-lookup'],
+    queryFn: () => api.get('/admin/properties').then((r) => r.data).catch(() => []),
+  });
+
+  const listParams = () => {
+    const p = new URLSearchParams();
+    if (debounced) p.set('search', debounced);
+    if (property) p.set('property', property);
+    if (unassignedOnly) p.set('unassigned', 'true');
+    return p;
+  };
+
+  const { data, isLoading, isError, refetch } = useQuery({
+    queryKey: ['shift-assignments', debounced, unassignedOnly, property, page],
     queryFn: () => {
-      const p = new URLSearchParams();
-      if (debounced) p.set('search', debounced);
-      if (unassignedOnly) p.set('unassigned', 'true');
+      const p = listParams();
+      p.set('page', String(page));
+      p.set('pageSize', String(PAGE_SIZE));
+      return api.get(`/shifts/assignments?${p}`).then((r) => r.data);
+    },
+    placeholderData: (prev) => prev,
+  });
+  const rows: any[] = data?.data ?? [];
+  const total: number = data?.total ?? 0;
+
+  // Accurate "N without a shift" across ALL pages (not just the current one).
+  const { data: unassignedData } = useQuery({
+    queryKey: ['shift-assignments-unassigned-count', debounced, property],
+    queryFn: () => {
+      const p = listParams();
+      p.set('unassigned', 'true');
+      p.set('page', '1');
+      p.set('pageSize', '1');
       return api.get(`/shifts/assignments?${p}`).then((r) => r.data);
     },
   });
+  const unassignedCount: number = unassignedData?.total ?? 0;
 
-  const unassignedCount = rows.filter((r: any) => !r.current).length;
+  // Any filter or search change resets to page 1, so you never land on an empty page.
+  useEffect(() => { setPage(1); }, [debounced, unassignedOnly, property]);
+
+  async function handleExport() {
+    setExporting(true);
+    try {
+      const res = await api.get(`/shifts/assignments/export?${listParams()}`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'text/csv' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Shift_Assignments_${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success('Export downloaded');
+    } catch {
+      toast.error('Failed to export shift assignments');
+    } finally {
+      setExporting(false);
+    }
+  }
 
   return (
     <AppShell>
       <div className="space-y-6">
         <Breadcrumb items={[{ label: 'Shift Management' }, { label: 'Shift Assignments' }]} />
 
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Shift Assignments</h1>
-          <p className="text-secondary mt-1">
-            Put each employee on a shift. Their timings, off days and hour thresholds all follow from it.
-          </p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold text-foreground">Shift Assignments</h1>
+            <p className="text-secondary mt-1">
+              Put each employee on a shift. Their timings, off days and hour thresholds all follow from it.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleExport}
+              disabled={exporting}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-card border border-border text-foreground rounded-lg text-sm font-medium hover:bg-muted disabled:opacity-60"
+            >
+              <Download size={16} /> {exporting ? 'Exporting…' : 'Export CSV'}
+            </button>
+            {canAssign && (
+              <button
+                onClick={() => setShowBulk(true)}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90"
+              >
+                <Upload size={16} /> Bulk Upload
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-3 items-center">
@@ -258,6 +341,16 @@ export default function ShiftAssignmentsPage() {
               className={`${inputCls} pl-9`}
             />
           </div>
+          <select
+            value={property}
+            onChange={(e) => setProperty(e.target.value)}
+            className="px-3 py-2 border border-border rounded-lg bg-background text-sm"
+          >
+            <option value="">All properties</option>
+            {properties.map((p: any) => (
+              <option key={p.id} value={p.name}>{p.name}</option>
+            ))}
+          </select>
           <label className="flex items-center gap-2 px-3 py-2 text-sm text-secondary cursor-pointer select-none">
             <input
               type="checkbox"
@@ -349,9 +442,109 @@ export default function ShiftAssignmentsPage() {
             </div>
           )}
         </div>
+
+        {!isLoading && !isError && total > 0 && (
+          <Pagination
+            total={total}
+            page={page}
+            pageSize={PAGE_SIZE}
+            shown={rows.length}
+            itemLabel="employees"
+            onPageChange={setPage}
+          />
+        )}
       </div>
 
       {editing && <AssignDialog employee={editing} onClose={() => setEditing(null)} />}
+      {showBulk && <BulkUploadDialog onClose={() => setShowBulk(false)} />}
     </AppShell>
+  );
+}
+
+/** Bulk-assign employees to shifts from a CSV. Mirrors the Employees bulk-upload dialog. */
+function BulkUploadDialog({ onClose }: { onClose: () => void }) {
+  const qc = useQueryClient();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [result, setResult] = useState<any | null>(null);
+
+  const upload = useMutation({
+    mutationFn: (file: File) => {
+      const fd = new FormData();
+      fd.append('file', file);
+      return api.post('/shifts/assignments/bulk-upload', fd).then((r) => r.data);
+    },
+    onSuccess: (data) => {
+      setResult(data);
+      qc.invalidateQueries({ queryKey: ['shift-assignments'] });
+      qc.invalidateQueries({ queryKey: ['shift-assignments-unassigned-count'] });
+      toast.success(`${data.created} assigned, ${data.updated} updated${data.skipped ? `, ${data.skipped} skipped` : ''}`);
+    },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Bulk upload failed'),
+  });
+
+  const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) { setResult(null); upload.mutate(file); }
+    if (fileRef.current) fileRef.current.value = '';
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div className="bg-card rounded-xl border border-border w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-border">
+          <h3 className="font-semibold text-foreground">Bulk assign shifts</h3>
+          <button onClick={onClose} className="p-1 rounded-lg hover:bg-muted"><X size={18} /></button>
+        </div>
+        <div className="p-5 space-y-4">
+          <p className="text-sm text-secondary">
+            Upload a CSV to put employees on shifts. Each row is matched by{' '}
+            <span className="font-medium text-foreground">Employee Code</span> and assigned from the effective date.
+            The <span className="font-medium text-foreground">Export CSV</span> download is the template — fill in
+            the blank shift and date columns and upload it back.
+          </p>
+          <div className="rounded-lg bg-muted/50 border border-border p-3">
+            <p className="text-xs font-medium text-foreground mb-1">Columns</p>
+            <p className="text-xs text-secondary leading-relaxed">
+              <span className="font-medium">Required:</span> Employee Code, Shift (name), Effective From (yyyy-mm-dd).
+              A row with a blank date, an unknown shift, or one that would change a locked payroll month is skipped and reported.
+            </p>
+          </div>
+
+          <input ref={fileRef} type="file" accept=".csv" onChange={onFile} className="hidden" />
+          <button
+            onClick={() => fileRef.current?.click()}
+            disabled={upload.isPending}
+            className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+          >
+            {upload.isPending ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+            {upload.isPending ? 'Processing…' : 'Choose CSV file'}
+          </button>
+
+          {result && (
+            <div className="rounded-lg border border-border p-3 text-sm space-y-2">
+              <p className="font-medium text-foreground">{result.total} rows processed</p>
+              <div className="flex flex-wrap gap-4 text-xs">
+                <span className="text-green-600">{result.created} assigned</span>
+                <span className="text-blue-600">{result.updated} updated</span>
+                {result.skipped > 0 && <span className="text-yellow-600">{result.skipped} skipped</span>}
+              </div>
+              {result.errors?.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-medium text-secondary">{result.errors.length} row error(s)</span>
+                    <button onClick={() => copyErrors(result.errors)} className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"><Copy size={12} /> Copy errors</button>
+                  </div>
+                  <div className="max-h-40 overflow-y-auto rounded bg-red-50 border border-red-200 p-2">
+                    {result.errors.map((err: string, i: number) => (
+                      <p key={i} className="text-xs text-red-700">{err}</p>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }

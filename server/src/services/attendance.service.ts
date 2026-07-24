@@ -148,6 +148,7 @@ export async function getMonthSummary(employeeId: number, month: string) {
       db.raw("SUM(CASE WHEN status = 'present' THEN 1 ELSE 0 END) as present"),
       db.raw("SUM(CASE WHEN status = 'absent' THEN 1 ELSE 0 END) as absent"),
       db.raw("SUM(CASE WHEN status = 'half_day' THEN 1 ELSE 0 END) as half_day"),
+      db.raw("SUM(CASE WHEN status = 'hhd' THEN 1 ELSE 0 END) as hhd"),
       db.raw("SUM(CASE WHEN status = 'miss_punch' THEN 1 ELSE 0 END) as miss_punch"),
       db.raw("SUM(CASE WHEN status = 'short_punch' THEN 1 ELSE 0 END) as short_punch"),
       db.raw("SUM(CASE WHEN status = 'on_leave' THEN 1 ELSE 0 END) as on_leave"),
@@ -167,6 +168,15 @@ interface AttendanceRow {
   checkIn: string;    // HH:mm
   checkOut: string;   // HH:mm
   location: string;   // property/location (optional in CSV)
+  explicitStatus?: 'hhd' | null; // an explicit day-type from the file, overriding the punch verdict
+}
+
+/** Recognised explicit day-type codes that can ride in on the CSV's status/remark column,
+ *  overriding the punch-derived verdict. Currently just HHD — a half-day holiday, paid ½. */
+function mapExplicitStatus(raw: string): 'hhd' | null {
+  const t = (raw || '').trim().toLowerCase().replace(/\s+/g, '_');
+  if (t === 'hhd' || t === 'half_day_holiday' || t === 'half-day_holiday') return 'hhd';
+  return null;
 }
 
 function parseDDMMYY(raw: string): string {
@@ -193,6 +203,9 @@ export async function uploadAttendanceCsv(csvContent: string) {
   const inIdx = header.findIndex(h => h === 'first_in_time' || h === 'first_in_time_(hh:mm)' || h === 'check_in' || h === 'in_time');
   const outIdx = header.findIndex(h => h === 'last_out_time' || h === 'last_out_time_(hh:mm)' || h === 'check_out' || h === 'out_time');
   const locIdx = header.findIndex(h => h === 'location' || h === 'property' || h === 'branch' || h === 'site');
+  // Optional explicit status/remark column — lets an admin day-type (e.g. HHD, a half-day
+  // holiday) ride in on the biometric file and override the punch-derived verdict.
+  const statusIdx = header.findIndex(h => h === 'status' || h === 'attendance_status' || h === 'day_status' || h === 'remark' || h === 'remarks');
 
   if (empIdx === -1) throw new ValidationError('CSV must have an "Emp Code" column');
   if (dateIdx === -1) throw new ValidationError('CSV must have an "Access Date" column');
@@ -208,10 +221,11 @@ export async function uploadAttendanceCsv(csvContent: string) {
     const rawDate = cols[dateIdx];
     const rawIn = cols[inIdx];
     const rawOut = cols[outIdx];
+    const explicitStatus = statusIdx !== -1 ? mapExplicitStatus(cols[statusIdx]) : null;
 
-    // A miss punch has only one time — require an employee, a date, and at
-    // least one punch (rows with neither punch carry no signal and are skipped).
-    if (!empCode || !rawDate || (!rawIn && !rawOut)) {
+    // A miss punch has only one time — require an employee, a date, and at least one
+    // punch OR a recognised explicit day-type (e.g. HHD, which needn't carry punches).
+    if (!empCode || !rawDate || (!rawIn && !rawOut && !explicitStatus)) {
       parseErrors.push(`Row ${i + 1}: missing employee, date, or any punch time`);
       continue;
     }
@@ -219,7 +233,7 @@ export async function uploadAttendanceCsv(csvContent: string) {
     try {
       const date = parseDDMMYY(rawDate);
       const location = locIdx !== -1 ? (cols[locIdx] || '').trim() : '';
-      rows.push({ empCode, date, checkIn: (rawIn || '').trim(), checkOut: (rawOut || '').trim(), location });
+      rows.push({ empCode, date, checkIn: (rawIn || '').trim(), checkOut: (rawOut || '').trim(), location, explicitStatus });
     } catch (e: any) {
       parseErrors.push(`Row ${i + 1}: ${e.message}`);
     }
@@ -302,8 +316,9 @@ export async function uploadAttendanceCsv(csvContent: string) {
 
     // One verdict, from the shift's own rules: the punch-based judgement first, then the
     // shift's hour thresholds. Previously a separate daily job applied those thresholds
-    // afterwards, using a different shift lookup.
-    const status = judgeDay({
+    // afterwards, using a different shift lookup. An explicit day-type from the file
+    // (e.g. HHD) overrides the punch-derived verdict entirely.
+    const status = row.explicitStatus || judgeDay({
       hasIn, hasOut, workedHours: worked,
       shiftHours: shiftHours || standardDayHours,
       graceMinutes,
@@ -455,6 +470,7 @@ export async function getPropertySummary(date: string) {
       db.raw("SUM(CASE WHEN ar.status = 'present' THEN 1 ELSE 0 END) as present"),
       db.raw("SUM(CASE WHEN ar.status = 'absent' THEN 1 ELSE 0 END) as absent"),
       db.raw("SUM(CASE WHEN ar.status = 'half_day' THEN 1 ELSE 0 END) as half_day"),
+      db.raw("SUM(CASE WHEN ar.status = 'hhd' THEN 1 ELSE 0 END) as hhd"),
       db.raw("SUM(CASE WHEN ar.status = 'miss_punch' THEN 1 ELSE 0 END) as miss_punch"),
       db.raw("SUM(CASE WHEN ar.status = 'short_punch' THEN 1 ELSE 0 END) as short_punch"),
       db.raw("SUM(CASE WHEN ar.status = 'on_leave' THEN 1 ELSE 0 END) as on_leave"),

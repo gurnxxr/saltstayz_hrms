@@ -11,6 +11,7 @@ import { getEmployeeState, getMinimumWageFor, getStatutoryRates } from './statut
 import { getPaySchedule } from './paySchedule.service';
 import { computePayableDays, getMonthlyHours, getOvertimeHours } from './payableDays.service';
 import { notifyEmployee } from './notification.service';
+import { csvCell } from '../utils/csv';
 
 function num(v: any): number {
   return v === null || v === undefined ? 0 : Number(v);
@@ -771,11 +772,6 @@ function computeCoverage(slips: any[], gatePct: number) {
       .sort((a, b) => b.unmarked_pct - a.unmarked_pct),
   };
 }
-
-const csvCell = (v: any) => {
-  const s = v === null || v === undefined ? '' : String(v);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-};
 
 /**
  * Salary register for the bank hand-off: one CSV row per generated slip with

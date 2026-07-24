@@ -140,12 +140,19 @@ export async function editorLines(structureId: number) {
     .orderBy('l.sort_order');
 }
 
-export async function listStructures() {
-  const structures = await db('salary_structures as s')
+export async function listStructures(scope: 'designation' | 'department' = 'designation') {
+  const q = db('salary_structures as s')
     .leftJoin('job_titles as jt', 'jt.id', 's.job_title_id')
+    .leftJoin('departments as d', 'd.id', 's.department_id')
     .whereNull('s.employee_id') // templates only; employee structures are edited per-employee
-    .select('s.*', 'jt.title as designation')
+    .select('s.*', 'jt.title as designation', 'd.name as department_name')
     .orderBy('s.name');
+  // Department templates are a separate, manually-managed library. The Designation
+  // tab shows designation + generic templates (department_id null); the Departments
+  // tab shows only the department-scoped ones. Split so neither shows the other's rows.
+  if (scope === 'department') q.whereNotNull('s.department_id');
+  else q.whereNull('s.department_id');
+  const structures = await q;
 
   const counts = await db('salary_structure_assignments')
     .select('structure_id').count('id as c').groupBy('structure_id');
@@ -181,6 +188,7 @@ interface StructureInput {
   name: string;
   description?: string;
   job_title_id?: number | null;
+  department_id?: number | null;
   payment_basis?: string;
   default_base: number;
   city?: string;
@@ -237,6 +245,22 @@ async function validateStructureInput(data: any, excludeId?: number): Promise<St
     if (await dupJt.first()) throw new ValidationError('That designation already has a structure');
   }
 
+  const department_id = data.department_id ? Number(data.department_id) : null;
+  if (department_id) {
+    const dept = await db('departments').where('id', department_id).first();
+    if (!dept) throw new NotFoundError('Department');
+    // One TEMPLATE per department (employee structures never carry department_id).
+    const dupDept = db('salary_structures').where('department_id', department_id).whereNull('employee_id');
+    if (excludeId) dupDept.whereNot('id', excludeId);
+    if (await dupDept.first()) throw new ValidationError('That department already has a structure');
+  }
+
+  // A template is tied to a designation OR a department, never both — that keeps the
+  // two tabs' rows cleanly separated and the resolution rules unambiguous.
+  if (job_title_id && department_id) {
+    throw new ValidationError('A template can be tied to a designation or a department, not both');
+  }
+
   const payment_basis = data.payment_basis === 'hourly' ? 'hourly' : 'monthly';
   const default_base = num(data.default_base);
   if (default_base <= 0) throw new ValidationError('Default base is required');
@@ -247,6 +271,7 @@ async function validateStructureInput(data: any, excludeId?: number): Promise<St
     name,
     description: data.description ? String(data.description) : undefined,
     job_title_id,
+    department_id,
     payment_basis,
     default_base,
     city: data.city ? String(data.city) : 'Haryana',
@@ -260,7 +285,7 @@ export async function createStructure(data: any, userId?: number | null) {
   const id = await db.transaction(async (trx) => {
     const [{ id: newId }] = await trx('salary_structures').insert({
       name: input.name, description: input.description ?? null, job_title_id: input.job_title_id,
-      payment_basis: input.payment_basis, default_base: input.default_base,
+      department_id: input.department_id, payment_basis: input.payment_basis, default_base: input.default_base,
       city: input.city, is_active: input.is_active ? true : false, updated_by: userId ?? null,
     }).returning('id');
     await trx('salary_structure_components').insert(
@@ -281,7 +306,7 @@ export async function updateStructure(id: number, data: any, userId?: number | n
   await db.transaction(async (trx) => {
     await trx('salary_structures').where('id', id).update({
       name: input.name, description: input.description ?? null, job_title_id: input.job_title_id,
-      payment_basis: input.payment_basis, default_base: input.default_base,
+      department_id: input.department_id, payment_basis: input.payment_basis, default_base: input.default_base,
       city: input.city, is_active: input.is_active ? true : false,
       updated_by: userId ?? null, updated_at: db.fn.now(),
     });
@@ -434,36 +459,6 @@ export async function listEmployeeSalary() {
       db.raw('CASE WHEN a.id IS NULL THEN 0 ELSE 1 END as configured'),
     )
     .orderBy('e.first_name');
-}
-
-/**
- * CTC register (Phase 6 — Visibility): every active employee with their monthly
- * Salary (gross), Net and CTC from a live full-month breakdown, plus company
- * totals. Answers "what is X's CTC?" and "what is our monthly salary bill?".
- */
-export async function getCtcRegister() {
-  const base = await listEmployeeSalary();
-  const rows: any[] = [];
-  const totals = { gross: 0, net: 0, ctc: 0, configured: 0 };
-  for (const r of base) {
-    let gross: number | null = null;
-    let net: number | null = null;
-    let ctc: number | null = null;
-    if (r.configured) {
-      try {
-        const asg = await db('salary_structure_assignments').where('employee_id', r.employee_id).first();
-        const structureRow = await getStructureRow(asg.structure_id);
-        const state = await getEmployeeState(r.employee_id);
-        const bd = await computeForStructure(structureRow, num(asg.base), null, undefined, { state });
-        // Net is take-home AFTER the assignment's manual TDS (computeForStructure doesn't
-        // receive it), otherwise Net overstates take-home for anyone with TDS configured.
-        gross = bd.gross_earnings; net = bd.net_pay - num(asg.tds_amount); ctc = bd.ctc;
-        totals.gross += gross; totals.net += net; totals.ctc += ctc; totals.configured += 1;
-      } catch { /* leave nulls for a structure that can't resolve */ }
-    }
-    rows.push({ ...r, gross, net, ctc });
-  }
-  return { rows, totals };
 }
 
 /**
@@ -710,7 +705,11 @@ export async function seedEmployeeStructureFromTemplate(
   if (!emp) throw new NotFoundError('Employee');
   let template = emp.job_title_id ? await getStructureByJobTitle(emp.job_title_id) : null;
   if (!template) {
-    template = await db('salary_structures').whereNull('employee_id').where('is_active', true).orderBy('id').first();
+    // Generic fallback. Department templates are a manual library and must NEVER
+    // auto-seed a hire's pay, so they are excluded here (department_id null).
+    template = await db('salary_structures')
+      .whereNull('employee_id').whereNull('department_id').where('is_active', true)
+      .orderBy('id').first();
   }
   if (!template) throw new ValidationError('No salary template available to seed from');
 

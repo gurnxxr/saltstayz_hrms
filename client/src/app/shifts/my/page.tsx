@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
-import Breadcrumb from '@/components/ui/Breadcrumb';
 import LoadError from '@/components/ui/LoadError';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -88,7 +87,6 @@ export default function MyShiftsPage() {
     return (
       <AppShell>
         <div className="space-y-6">
-          <Breadcrumb items={[{ label: 'My Shifts' }]} />
           <div className="bg-card rounded-xl border border-border p-10 text-center text-secondary">
             This account isn&apos;t linked to an employee record, so there is no shift to show.
           </div>
@@ -100,8 +98,6 @@ export default function MyShiftsPage() {
   return (
     <AppShell>
       <div className="space-y-6 max-w-3xl">
-        <Breadcrumb items={[{ label: 'My Shifts' }]} />
-
         <div>
           <h1 className="text-2xl font-bold text-foreground">My Shift</h1>
           <p className="text-secondary mt-1">Your working hours and off days, and how to ask for a change.</p>

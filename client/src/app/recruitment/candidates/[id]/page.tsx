@@ -13,8 +13,8 @@ import Breadcrumb from '@/components/ui/Breadcrumb';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { LinesEditor, LineDraft, toLineDrafts, linesPayload } from '@/components/salary/LinesEditor';
 import {
-  User, Clock, ChevronRight, Check, Circle, Plus, Trash2, Upload, Paperclip, Download,
-  Loader2, FileText, Percent, IndianRupee, AlertTriangle, Eye, ArrowRight, ArrowLeft, RotateCcw,
+  User, Clock, ChevronRight, Check, CheckCheck, Circle, Plus, Trash2, Upload, Paperclip, Download,
+  Loader2, FileText, Percent, IndianRupee, AlertTriangle, Eye, ArrowRight, ArrowLeft, RotateCcw, ShieldCheck,
 } from 'lucide-react';
 
 // ─── Stage vocabulary ───
@@ -154,6 +154,11 @@ export default function CandidateDetailPage({ params }: { params: Promise<{ id: 
     mutationFn: (itemId: number) => api.put(`/checklists/items/${itemId}/toggle`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['candidate-checklists', id] }),
     onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to update item'),
+  });
+  const completeAllMutation = useMutation({
+    mutationFn: (instanceId: number) => api.put(`/checklists/instances/${instanceId}/complete-all`),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['candidate-checklists', id] }); toast.success('All documents marked as collected'); },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to update the checklist'),
   });
   const addItemMutation = useMutation({
     mutationFn: ({ instanceId, label }: { instanceId: number; label: string }) =>
@@ -534,9 +539,22 @@ export default function CandidateDetailPage({ params }: { params: Promise<{ id: 
               <>
                 <div className="p-4 border-b border-border flex items-center justify-between gap-3 flex-wrap">
                   <h2 className="text-lg font-semibold text-foreground">{currentChecklist.template_name}</h2>
-                  <span className={`text-sm font-medium ${checklistComplete ? 'text-green-600' : 'text-foreground'}`}>
-                    {currentChecklist.completed_items}/{currentChecklist.total_items} complete
-                  </span>
+                  <div className="flex items-center gap-3">
+                    {currentChecklist.total_items > 0 && !checklistComplete && (
+                      <button
+                        onClick={() => completeAllMutation.mutate(currentChecklist.id)}
+                        disabled={completeAllMutation.isPending}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-border rounded-lg text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50 transition-colors"
+                        title="Tick every item on this checklist as collected"
+                      >
+                        {completeAllMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <CheckCheck size={13} />}
+                        Mark all as collected
+                      </button>
+                    )}
+                    <span className={`text-sm font-medium ${checklistComplete ? 'text-green-600' : 'text-foreground'}`}>
+                      {currentChecklist.completed_items}/{currentChecklist.total_items} complete
+                    </span>
+                  </div>
                 </div>
 
                 <div className="divide-y divide-border">
@@ -824,6 +842,7 @@ function OfferRow({ label, value, strong }: { label: string; value: number; stro
 }
 
 function OfferEditor({ candidateId, onCancel, onReleased }: { candidateId: string; onCancel: () => void; onReleased: () => void }) {
+  const qc = useQueryClient();
   const [designation, setDesignation] = useState('');
   const [joiningDate, setJoiningDate] = useState('');
   const [pct, setPct] = useState('0');
@@ -889,9 +908,26 @@ function OfferEditor({ candidateId, onCancel, onReleased }: { candidateId: strin
     placeholderData: (prev) => prev,
   });
   const bd = offerCalc?.breakdown ?? null;
-  // Manpower & Budget Control: offered monthly CTC cannot exceed the sanctioned band.
+  // Manpower & Budget Control: the offered monthly CTC must clear every sanctioned cap the release
+  // gate enforces — the role maximum, the property's free budget, and an open headcount slot — unless
+  // an Admin has already approved an over-limit exception for this candidate that covers this pay.
   const bandMax = def?.band_max ?? null;
-  const overBand = bandMax != null && bd != null && bd.ctc > bandMax;
+  const remainingBudget = def?.remaining_budget ?? null;
+  const remainingSlots = def?.remaining_slots ?? null;
+  const propertyConfigured = def?.property_configured !== false;
+  const bandConfigured = def?.band_configured !== false;
+  const approvedCtc = def?.approved_ctc ?? null;               // ceiling an approved exception covers
+  const exceptionStatus = def?.exception_status ?? null;       // 'pending' | 'approved' | null
+  const ctc = bd?.ctc ?? null;
+  const approvalCovers = approvedCtc != null && ctc != null && ctc <= approvedCtc;
+  const overBand = bandMax != null && ctc != null && ctc > bandMax;
+  const overBudget = remainingBudget != null && ctc != null && ctc > remainingBudget;
+  const headcountFull = remainingSlots != null && remainingSlots <= 0;
+  const unconfigured = !propertyConfigured || !bandConfigured;
+  // The raw over-limit verdict (before any approval), used to decide when to offer "request approval".
+  const capBreached = !!bd && (overBand || overBudget || headcountFull || unconfigured);
+  // What actually blocks Release: a breach that an approval does NOT cover.
+  const capBlocked = capBreached && !approvalCovers;
 
   const onPctChange = (v: string) => {
     setPct(v);
@@ -903,7 +939,18 @@ function OfferEditor({ candidateId, onCancel, onReleased }: { candidateId: strin
     setPct(baseGross > 0 ? String(Math.round((f / baseGross - 1) * 10000) / 100) : '0');
   };
 
-  const canRelease = !!finalNum && !!joiningDate && !overBand && !linesError;
+  // Require the server breakdown (bd) before enabling Release — until it lands the caps aren't
+  // evaluated, so `capBlocked` is falsely false and the button would look releasable for an
+  // over-limit offer (the server would still reject it, but the UI should not invite it).
+  const canRelease = !!finalNum && !!joiningDate && !!bd && !capBlocked && !linesError;
+
+  const [reason, setReason] = useState('');
+  const requestApproval = useMutation({
+    mutationFn: () => api.post(`/recruitment/candidates/${candidateId}/offer/request-approval`,
+      { base_gross: finalNum, designation, joining_date: joiningDate, lines: draftLines, reason }),
+    onSuccess: () => { toast.success('Approval request sent to Admin'); setReason(''); qc.invalidateQueries({ queryKey: ['candidate-offer-defaults', candidateId] }); },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to request approval'),
+  });
 
   async function handlePreview() {
     setPreviewing(true);
@@ -1020,20 +1067,66 @@ function OfferEditor({ candidateId, onCancel, onReleased }: { candidateId: strin
                   <span className="font-semibold text-primary">Annual CTC (offer)</span>
                   <span className="font-bold text-primary">{formatINR(offerCalc?.annual_ctc ?? 0)}</span>
                 </div>
-                {bandMax != null && (
-                  <div className={`flex items-center justify-between pt-1.5 text-xs ${overBand ? 'text-red-600 font-medium' : 'text-secondary'}`}>
-                    <span>Sanctioned cap (monthly CTC)</span>
-                    <span>{formatINR(bandMax)}/mo</span>
-                  </div>
-                )}
+                {/* The three sanctioned caps the release gate enforces, red where this offer breaches one. */}
+                <div className="pt-2 mt-1 border-t border-border space-y-1 text-xs">
+                  {bandMax != null && (
+                    <div className={`flex items-center justify-between ${overBand ? 'text-red-600 font-medium' : 'text-secondary'}`}>
+                      <span>Role maximum (monthly CTC)</span><span>{formatINR(bandMax)}/mo</span>
+                    </div>
+                  )}
+                  {remainingBudget != null && (
+                    <div className={`flex items-center justify-between ${overBudget ? 'text-red-600 font-medium' : 'text-secondary'}`}>
+                      <span>Free budget at this property</span><span>{formatINR(remainingBudget)}/mo</span>
+                    </div>
+                  )}
+                  {remainingSlots != null && (
+                    <div className={`flex items-center justify-between ${headcountFull ? 'text-red-600 font-medium' : 'text-secondary'}`}>
+                      <span>Open headcount slots</span><span>{remainingSlots}</span>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
-            {overBand && (
-              <div className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 p-3 text-xs text-red-700">
-                <AlertTriangle size={15} className="shrink-0 mt-0.5" />
-                <span>Offered monthly CTC <b>{formatINR(bd!.ctc)}</b> exceeds the sanctioned band maximum <b>{formatINR(bandMax!)}</b> for this role/property. Lower the base salary, or raise the band in Admin → Budget Control.</span>
-              </div>
+            {capBreached && (
+              approvalCovers ? (
+                <div className="flex items-start gap-2 rounded-lg bg-green-50 border border-green-200 p-3 text-xs text-green-800">
+                  <ShieldCheck size={15} className="shrink-0 mt-0.5" />
+                  <span>An Admin approved this over-limit offer (up to <b>{formatINR(approvedCtc!)}</b>/mo). You can release it.</span>
+                </div>
+              ) : exceptionStatus === 'pending' ? (
+                <div className="flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
+                  <Clock size={15} className="shrink-0 mt-0.5" />
+                  <span>Approval requested — waiting for a different Admin to review it. Release stays disabled until it&apos;s approved.</span>
+                </div>
+              ) : (
+                <div className="rounded-lg bg-red-50 border border-red-200 p-3 text-xs text-red-700 space-y-2.5">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle size={15} className="shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-medium">This offer is over the sanctioned limit — release is blocked.</span>
+                      <ul className="list-disc ml-4 mt-1 space-y-0.5">
+                        {overBand && <li>CTC {formatINR(ctc!)} exceeds the role maximum {formatINR(bandMax!)}.</li>}
+                        {overBudget && <li>CTC {formatINR(ctc!)} exceeds this property&apos;s free budget {formatINR(remainingBudget!)}.</li>}
+                        {headcountFull && <li>No open headcount slots remain at this property.</li>}
+                        {!propertyConfigured && <li>No sanctioned budget is set for this property.</li>}
+                        {propertyConfigured && !bandConfigured && <li>No approved salary maximum is set for this role.</li>}
+                      </ul>
+                      <span className="block mt-1">Lower the offer to fit, ask an Admin to raise the sanction in Budget Control, or request approval below.</span>
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={2}
+                      placeholder="Why should this over-limit offer be approved? (required)"
+                      className="w-full px-3 py-2 border border-red-200 rounded-lg bg-background text-foreground text-xs focus:outline-none focus:ring-2 focus:ring-red-300" />
+                    <button disabled={!reason.trim() || requestApproval.isPending || !finalNum || !joiningDate}
+                      onClick={() => requestApproval.mutate()}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-medium hover:bg-amber-700 disabled:opacity-50">
+                      <ShieldCheck size={13} /> {requestApproval.isPending ? 'Sending…' : 'Request admin approval'}
+                    </button>
+                  </div>
+                </div>
+              )
             )}
 
             <div className="flex gap-3 pt-1">
@@ -1042,7 +1135,7 @@ function OfferEditor({ candidateId, onCancel, onReleased }: { candidateId: strin
                 {previewing ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} Preview PDF
               </button>
               <button onClick={() => releaseMutation.mutate()} disabled={releaseMutation.isPending || !canRelease}
-                title={linesError ?? (overBand ? 'Offered CTC exceeds the sanctioned band' : undefined)}
+                title={linesError ?? (capBlocked ? 'This offer is over the sanctioned limit — lower it or get admin approval' : undefined)}
                 className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors">
                 {releaseMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />} Release Offer
               </button>

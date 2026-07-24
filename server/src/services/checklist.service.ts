@@ -338,6 +338,19 @@ export async function toggleItem(itemId: number, userId: number) {
   return db('checklist_instance_items').where('id', itemId).first();
 }
 
+// "Mark all as collected": tick every still-open item on the checklist in one go, instead of one at a
+// time. Only SETS complete (never un-completes), so it can't trip the toggle guard that blocks
+// un-ticking an item with an uploaded document. A no-op on an already-complete list.
+export async function completeAllItems(instanceId: number, userId: number) {
+  const instance = await db('checklist_instances').where('id', instanceId).first();
+  if (!instance) throw new NotFoundError('Checklist');
+  await db('checklist_instance_items')
+    .where({ instance_id: instanceId, is_completed: false })
+    .update({ is_completed: true, completed_at: db.fn.now(), completed_by: userId, updated_at: db.fn.now() });
+  await recomputeStatus(instanceId);
+  return getInstance(instanceId);
+}
+
 export async function addItem(instanceId: number, data: { label: string; category?: string }) {
   const instance = await db('checklist_instances').where('id', instanceId).first();
   if (!instance) throw new NotFoundError('Checklist');

@@ -1,6 +1,7 @@
 import db from '../config/database';
 import { getPaySchedule } from './paySchedule.service';
 import { getEmployeeRegion } from './leave.service';
+import { getEmployeeLeaveRules } from './leaveTemplate.service';
 import { isOffDay, parseOffDayRules, pickAssignmentFor, shiftLengthHours } from './shiftPattern';
 import type { AttendanceContext } from './payslip.calc';
 
@@ -23,7 +24,7 @@ import type { AttendanceContext } from './payslip.calc';
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type DayStatus =
-  | 'present' | 'half_day' | 'absent'
+  | 'present' | 'half_day' | 'hhd' | 'absent'
   | 'miss_punch' | 'short_punch'
   | 'paid_leave' | 'unpaid_leave'
   | 'unmarked' | 'future' | 'not_employed';
@@ -39,7 +40,7 @@ export interface DayTrace {
 
 export interface PayableDays extends AttendanceContext {
   counts: {
-    present: number; half_day: number; absent: number;
+    present: number; half_day: number; hhd: number; absent: number;
     miss_punch: number; short_punch: number;
     paid_leave: number; unpaid_leave: number; unmarked: number; future: number;
     not_employed: number;
@@ -249,25 +250,30 @@ export async function computePayableDays(employeeId: number, month: number, year
     .select('date', 'status');
   const statusByDate = new Map<string, string>(records.map((r: any) => [String(r.date).slice(0, 10), r.status]));
 
+  // Paid vs unpaid (Loss of Pay) now comes from the employee's assigned leave template,
+  // not the global leave type — so two employees on different plans can classify the
+  // same leave type differently. Falls back to the type's own flag if the template omits it.
+  const leaveRules = await getEmployeeLeaveRules(employeeId);
   const leaves = await db('leave_requests as lr')
     .join('leave_types as lt', 'lt.id', 'lr.leave_type_id')
     .where('lr.employee_id', employeeId)
     .where('lr.status', 'approved')
     .where('lr.start_date', '<=', end)
     .where('lr.end_date', '>=', start)
-    .select('lr.start_date', 'lr.end_date', 'lt.is_paid', 'lt.name as leave_type');
+    .select('lr.start_date', 'lr.end_date', 'lr.leave_type_id', 'lt.is_paid', 'lt.name as leave_type');
 
   const leaveOn = (date: string): { paid: boolean; name: string } | null => {
     for (const l of leaves) {
       if (String(l.start_date).slice(0, 10) <= date && String(l.end_date).slice(0, 10) >= date) {
-        return { paid: !!l.is_paid, name: l.leave_type };
+        const rule = leaveRules.get(l.leave_type_id);
+        return { paid: rule ? rule.is_paid : !!l.is_paid, name: l.leave_type };
       }
     }
     return null;
   };
 
   // ── Day-by-day classification ──
-  const counts = { present: 0, half_day: 0, absent: 0, miss_punch: 0, short_punch: 0, paid_leave: 0, unpaid_leave: 0, unmarked: 0, future: 0, not_employed: 0 };
+  const counts = { present: 0, half_day: 0, hhd: 0, absent: 0, miss_punch: 0, short_punch: 0, paid_leave: 0, unpaid_leave: 0, unmarked: 0, future: 0, not_employed: 0 };
   const trace: DayTrace[] = [];
   let workingDays = 0;      // scheduled working days (denominator for actual_days)
   let weeklyOffs = 0;
@@ -318,6 +324,9 @@ export async function computePayableDays(employeeId: number, month: number, year
       dayStatus = 'present';
     } else if (status === 'half_day') {
       dayStatus = 'half_day'; dayLop = 0.5;
+    } else if (status === 'hhd') {
+      // Half-day holiday — a paid half day, same LOP treatment as a half day.
+      dayStatus = 'hhd'; dayLop = 0.5;
     } else if (status === 'miss_punch') {
       // An approved leave governs the day even if a stray punch marked it a miss
       // punch (mirrors the absent branch). Otherwise: the first N miss punches a

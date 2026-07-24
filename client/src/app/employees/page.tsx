@@ -11,8 +11,9 @@ import LoadError from '@/components/ui/LoadError';
 import Breadcrumb from '@/components/ui/Breadcrumb';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import Pagination from '@/components/ui/Pagination';
+import { formatDate } from '@/lib/utils';
 import {
-  Search, Users, Filter, Eye, Pencil, ChevronDown, ChevronRight, Upload, X, History, Copy, Building2,
+  Search, Users, Filter, Eye, Pencil, ChevronDown, ChevronRight, Upload, Download, X, History, Copy, Building2,
 } from 'lucide-react';
 
 const PAGE_SIZE = 10;
@@ -62,6 +63,33 @@ export default function EmployeeDetailsPage() {
     if (bulkFileRef.current) bulkFileRef.current.value = '';
   }
 
+  const [exporting, setExporting] = useState(false);
+
+  // Exports what the filters currently select, not blindly everyone — the file should match
+  // the list on screen. The server builds it, so it covers every stored field and every page,
+  // not just the ten rows and nine columns rendered here.
+  async function handleExport() {
+    setExporting(true);
+    try {
+      const params = new URLSearchParams();
+      if (debouncedSearch) params.set('search', debouncedSearch);
+      if (statusFilter) params.set('status', statusFilter);
+      if (branch) params.set('branch', branch);
+      const res = await api.get(`/employees/export?${params}`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'text/csv' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Employees_${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success('Export downloaded — it contains personal data, so store it carefully');
+    } catch {
+      toast.error('Failed to export employees');
+    } finally {
+      setExporting(false);
+    }
+  }
+
   const { data, isLoading, isFetching, isError, refetch } = useQuery({
     queryKey: ['employees-list', debouncedSearch, statusFilter, branch, page],
     queryFn: () => {
@@ -95,12 +123,21 @@ export default function EmployeeDetailsPage() {
             <p className="text-secondary mt-1">View and manage all employees</p>
           </div>
           {canEditStatus && (
-            <button
-              onClick={() => { setBulkResult(null); setShowBulk(true); }}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90"
-            >
-              <Upload size={16} /> Bulk Upload
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleExport}
+                disabled={exporting}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-card border border-border text-foreground rounded-lg text-sm font-medium hover:bg-muted disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                <Download size={16} /> {exporting ? 'Exporting…' : 'Export CSV'}
+              </button>
+              <button
+                onClick={() => { setBulkResult(null); setShowBulk(true); }}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90"
+              >
+                <Upload size={16} /> Bulk Upload
+              </button>
+            </div>
           )}
         </div>
 
@@ -168,6 +205,8 @@ export default function EmployeeDetailsPage() {
                     <th className="text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Emp Name</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Dept Name</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Designation</th>
+                    <th className="hidden sm:table-cell text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Date of Joining</th>
+                    <th className="hidden lg:table-cell text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">PAN Card No</th>
                     <th className="hidden sm:table-cell text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Branch Name</th>
                     <th className="hidden lg:table-cell text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">State</th>
                     <th className="hidden sm:table-cell text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Reporting Manager</th>
@@ -192,6 +231,8 @@ export default function EmployeeDetailsPage() {
                         </td>
                         <td className="px-4 py-3 text-sm text-foreground">{emp.dept_name || '—'}</td>
                         <td className="px-4 py-3 text-sm text-foreground">{emp.designation_name || '—'}</td>
+                        <td className="hidden sm:table-cell px-4 py-3 text-sm text-foreground whitespace-nowrap">{formatDate(emp.date_of_joining)}</td>
+                        <td className="hidden lg:table-cell px-4 py-3 text-sm text-foreground whitespace-nowrap">{emp.pan_number || '—'}</td>
                         <td className="hidden sm:table-cell px-4 py-3 text-sm text-foreground">{emp.branch_name || '—'}</td>
                         {/* Derived from the property. Blank means the branch isn't a known
                             property, and payroll silently falls back to Haryana rates. */}
@@ -205,25 +246,29 @@ export default function EmployeeDetailsPage() {
                         <td className="hidden sm:table-cell px-4 py-3 text-sm text-foreground">{manager || '—'}</td>
                         <td className="hidden sm:table-cell px-4 py-3 text-sm text-foreground">{emp.phone || '—'}</td>
                         <td className="px-4 py-3 text-sm text-foreground">{emp.email || '—'}</td>
+                        {/* One button, not two. Both went to the same detail page — Edit just
+                            opened its editor on arrival — so the pair was redundant for anyone
+                            who could edit. It is NOT redundant for anyone who can't: Edit is
+                            gated on the write roles and the row isn't clickable, so without a
+                            View a property manager or finance user has no way in at all. */}
                         <td className="px-4 py-3 text-right">
-                          <div className="inline-flex items-center gap-1">
+                          {canEditStatus ? (
+                            <button
+                              onClick={() => router.push(`/employees/${emp.id}?edit=1`)}
+                              title={`Edit ${emp.first_name} ${emp.last_name}`}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/5 rounded-lg transition-colors"
+                            >
+                              <Pencil size={14} /> Edit
+                            </button>
+                          ) : (
                             <button
                               onClick={() => router.push(`/employees/${emp.id}`)}
+                              title={`View ${emp.first_name} ${emp.last_name}`}
                               className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/5 rounded-lg transition-colors"
                             >
                               <Eye size={14} /> View
                             </button>
-                            {/* Opens the detail page's existing editor rather than a second form. */}
-                            {canEditStatus && (
-                              <button
-                                onClick={() => router.push(`/employees/${emp.id}?edit=1`)}
-                                title={`Edit ${emp.first_name} ${emp.last_name}`}
-                                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-secondary hover:text-foreground hover:bg-muted rounded-lg transition-colors"
-                              >
-                                <Pencil size={14} /> Edit
-                              </button>
-                            )}
-                          </div>
+                          )}
                         </td>
                       </tr>
                     );

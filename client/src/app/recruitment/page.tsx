@@ -9,7 +9,7 @@ import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import LoadError from '@/components/ui/LoadError';
-import { Briefcase, Users, TrendingUp, CheckCircle2, Plus, User, ListChecks, ChevronDown, ChevronRight, Upload, X } from 'lucide-react';
+import { Briefcase, Users, TrendingUp, CheckCircle2, Plus, User, UserPlus, ListChecks, ChevronDown, ChevronRight, Upload, X } from 'lucide-react';
 
 // The server (recruitment.service.ts) is authoritative for the funnel — GET
 // /recruitment/stages mirrors it. These locals are the fallback vocabulary so the
@@ -38,6 +38,11 @@ const STAGE_DOT: Record<string, string> = {
   joining: 'bg-teal-500', transferred: 'bg-slate-500',
   rejected: 'bg-red-500', offer_declined: 'bg-orange-500', no_show: 'bg-rose-500',
 };
+
+// Every query that reads candidates for a vacancy — invalidated after any candidate
+// write (single add or bulk upload) so the board/stats/tables refresh without a reload.
+const CANDIDATE_INVALIDATE_KEYS = ['pipeline-candidates', 'vacancy-stats', 'all-candidates', 'vacancy-candidates',
+  'vacancy-candidates-archived', 'vacancy', 'candidates-by-stage', 'vacancies'];
 
 export default function RecruitmentPage() {
   const router = useRouter();
@@ -68,6 +73,11 @@ export default function RecruitmentPage() {
   const [uploadResult, setUploadResult] = useState<any>(null);
   const uploadFileRef = useRef<HTMLInputElement>(null);
 
+  // ── Add a single candidate (manual entry, one applicant against a vacancy) ──
+  const [showAdd, setShowAdd] = useState(false);
+  const [addForm, setAddForm] = useState({ vacancy_id: '', name: '', email: '', phone: '', notes: '' });
+  function closeAdd() { setShowAdd(false); setAddForm({ vacancy_id: '', name: '', email: '', phone: '', notes: '' }); }
+
   const { data: vacancies = [] } = useQuery({
     queryKey: ['vacancies'],
     queryFn: () => api.get('/recruitment/vacancies').then(r => r.data),
@@ -86,12 +96,21 @@ export default function RecruitmentPage() {
       // Refresh every view that reads candidates for this vacancy — the board, the stat
       // cards, All Candidates, the per-vacancy applicants tables, the vacancy header, and
       // the by-stage counts — so uploaded rows show up without a hard reload.
-      ['pipeline-candidates', 'vacancy-stats', 'all-candidates', 'vacancy-candidates',
-        'vacancy-candidates-archived', 'vacancy', 'candidates-by-stage', 'vacancies']
-        .forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
+      CANDIDATE_INVALIDATE_KEYS.forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
       toast.success(`${data.created} candidate(s) added to Shortlisting${data.skipped ? `, ${data.skipped} skipped` : ''}`);
     },
     onError: (e: any) => toast.error(e.response?.data?.error || 'Upload failed'),
+  });
+
+  const addCandidateMutation = useMutation({
+    mutationFn: (data: typeof addForm) =>
+      api.post('/recruitment/candidates', { ...data, vacancy_id: Number(data.vacancy_id) }).then(r => r.data),
+    onSuccess: () => {
+      CANDIDATE_INVALIDATE_KEYS.forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
+      toast.success('Candidate added to Shortlisting');
+      closeAdd();
+    },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to add candidate'),
   });
 
   function handleUploadFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -173,7 +192,7 @@ export default function RecruitmentPage() {
       <div className="space-y-4">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
-            <h1 className="text-2xl font-bold text-foreground">Recruitment Pipeline</h1>
+            <h1 className="text-2xl font-bold text-foreground">Candidates</h1>
             <p className="text-secondary mt-1">Every applicant, by stage — click a card to open the candidate.</p>
           </div>
           <div className="flex gap-3">
@@ -189,6 +208,14 @@ export default function RecruitmentPage() {
             >
               All Candidates
             </Link>
+            {can('recruitment', 'create') && (
+              <button
+                onClick={() => setShowAdd(true)}
+                className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted transition-colors"
+              >
+                <UserPlus size={16} /> Add Candidate
+              </button>
+            )}
             {can('recruitment', 'create') && (
               <button
                 onClick={() => { setUploadResult(null); setShowUpload(true); }}
@@ -305,6 +332,70 @@ export default function RecruitmentPage() {
                 )}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {showAdd && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={closeAdd}>
+          <div className="bg-card rounded-xl border border-border w-full max-w-lg p-5 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-foreground">Add Candidate</h3>
+              <button onClick={closeAdd}><X size={16} className="text-secondary" /></button>
+            </div>
+            <p className="text-sm text-secondary">
+              Add one applicant to a vacancy — they start under{' '}
+              <strong className="text-foreground">Shortlisting</strong>.
+            </p>
+            <form onSubmit={(e) => { e.preventDefault(); addCandidateMutation.mutate(addForm); }} className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium mb-1">Vacancy *</label>
+                <select
+                  required
+                  value={addForm.vacancy_id}
+                  onChange={(e) => setAddForm(p => ({ ...p, vacancy_id: e.target.value }))}
+                  disabled={addCandidateMutation.isPending}
+                  className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm disabled:opacity-50"
+                >
+                  <option value="">Select vacancy…</option>
+                  {openVacancies.map((v: any) => (
+                    <option key={v.id} value={v.id}>{v.job_title} — {v.property_name}</option>
+                  ))}
+                </select>
+                {openVacancies.length === 0 && (
+                  <p className="mt-1 text-xs text-amber-600">No open vacancies — create or reopen one first.</p>
+                )}
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1">Name *</label>
+                <input required value={addForm.name} onChange={(e) => setAddForm(p => ({ ...p, name: e.target.value }))}
+                  className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium mb-1">Email</label>
+                  <input type="email" value={addForm.email} onChange={(e) => setAddForm(p => ({ ...p, email: e.target.value }))}
+                    className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1">Phone</label>
+                  <input value={addForm.phone} onChange={(e) => setAddForm(p => ({ ...p, phone: e.target.value }))}
+                    className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1">Notes</label>
+                <input value={addForm.notes} onChange={(e) => setAddForm(p => ({ ...p, notes: e.target.value }))}
+                  className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+              </div>
+              <div className="flex gap-3 pt-1">
+                <button type="submit" disabled={addCandidateMutation.isPending || !addForm.vacancy_id || !addForm.name.trim()}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50">
+                  <UserPlus size={16} /> {addCandidateMutation.isPending ? 'Adding…' : 'Add Candidate'}
+                </button>
+                <button type="button" onClick={closeAdd} className="px-4 py-2 border border-border rounded-lg text-sm">Cancel</button>
+              </div>
+            </form>
           </div>
         </div>
       )}

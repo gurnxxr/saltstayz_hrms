@@ -47,6 +47,17 @@ router.delete('/types/:id', authorize('leave', 'delete'), LEAVE_ADMIN, ctrl.dele
 router.post('/periods', authorize('leave', 'create'), LEAVE_ADMIN, ctrl.createLeavePeriod);
 router.put('/periods/:id/current', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.setCurrentPeriod);
 
+// Control Panel: leave templates (a reusable bundle of per-type rules) + assignment.
+// Static sub-paths before the :id routes, or Express reads "assignments"/"assign" as an :id.
+router.get('/templates', authorize('leave', 'read'), LEAVE_ADMIN, ctrl.listLeaveTemplates);
+router.get('/templates/assignments', authorize('leave', 'read'), LEAVE_ADMIN, ctrl.listLeaveTemplateAssignments);
+router.post('/templates/assign', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.bulkAssignLeaveTemplate);
+router.get('/templates/:id', authorize('leave', 'read'), LEAVE_ADMIN, ctrl.getLeaveTemplate);
+router.post('/templates', authorize('leave', 'create'), LEAVE_ADMIN, ctrl.createLeaveTemplate);
+router.put('/templates/:id', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.updateLeaveTemplate);
+router.delete('/templates/:id', authorize('leave', 'delete'), LEAVE_ADMIN, ctrl.deleteLeaveTemplate);
+router.put('/employees/:employeeId/template', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.setEmployeeLeaveTemplate);
+
 // Balances: every employee x every leave type for a period (read-only grid).
 // Distinct from GET /balances above, which is the caller's own self-service balances.
 router.get('/balances/overview', authorize('leave', 'read'), LEAVE_ADMIN, ctrl.getBalancesOverview);

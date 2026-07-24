@@ -1,4 +1,5 @@
 import type { Knex } from 'knex';
+import { ensureDefaultTemplate } from '../../services/leaveTemplate.service';
 
 export async function seed(knex: Knex): Promise<void> {
   await knex('holidays').del();
@@ -53,4 +54,11 @@ export async function seed(knex: Knex): Promise<void> {
     }
     await knex('leave_entitlements').insert(entitlements);
   }
+
+  // Migrations run before seeds, so migration 012 built the Default leave template from a
+  // still-empty leave_types table (zero rows). And deleting leave_types above cascades away
+  // any rows it did have. Reconcile now that the real types exist: give Default a row for
+  // every active type and put every employee on it — otherwise all leave reads resolve to an
+  // empty plan and the whole module is dead on a freshly seeded database.
+  await ensureDefaultTemplate(knex);
 }

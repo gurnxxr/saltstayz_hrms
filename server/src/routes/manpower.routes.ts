@@ -11,6 +11,9 @@ router.get('/properties', authorize('manpower', 'read'), ctrl.listScopedProperti
 router.get('/availability', authorize('manpower', 'read'), ctrl.getAvailability);
 router.get('/sanctions', authorize('manpower', 'read'), ctrl.listSanctions);
 router.get('/property-budgets', authorize('manpower', 'read'), ctrl.listPropertyBudgets);
+// Static path before the :id route, or Express reads "unassigned" as an :id.
+router.get('/property-budgets/unassigned', authorize('manpower', 'read'), ctrl.unassignedCommitment);
+router.get('/property-budgets/:id/committed', authorize('manpower', 'read'), ctrl.propertyCommittedBreakdown);
 router.get('/employees', authorize('manpower', 'read'), ctrl.listEmployees);
 router.get('/replacements', authorize('manpower', 'read'), ctrl.listReplacements);
 router.get('/employees/:id/history', authorize('manpower', 'read'), ctrl.getStatusHistory);

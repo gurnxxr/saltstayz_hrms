@@ -5,6 +5,9 @@ import { notifyEmployee } from './notification.service';
 import { countWorkingDaysInRange } from './payableDays.service';
 import { LOCK, advisoryXactLock } from '../utils/locks';
 import { INDIAN_STATES } from './statutory.service';
+import {
+  getTemplateRulesForEmployees, getEmployeeLeaveRule, ensureDefaultTemplate, type LeaveRule,
+} from './leaveTemplate.service';
 
 /** Inclusive list of 'YYYY-MM-DD' dates between start and end (capped for safety). */
 function enumerateDates(start: string, end: string): string[] {
@@ -204,6 +207,10 @@ export async function createLeaveType(data: {
     if ('departments' in data) await setDepartments(trx, newId, (data as any).departments);
     return newId;
   });
+  // A new active type is unusable until it's in a template — add it to the Default plan so
+  // it works immediately for everyone on Default (the migration-time invariant), instead of
+  // being silently orphaned (un-appliable, un-encashable, dropped from F&F).
+  await ensureDefaultTemplate();
   return (await getAllLeaveTypes()).find((t: any) => t.id === id);
 }
 
@@ -233,6 +240,9 @@ export async function updateLeaveType(id: number, data: any) {
     if ('cannot_club_with' in data) await setConflicts(trx, id, data.cannot_club_with);
     if ('departments' in data) await setDepartments(trx, id, data.departments);
   });
+  // Reactivating a type that predates its template (e.g. it was inactive when 012 ran) leaves
+  // it with no Default row; reconcile so a type that just became active is usable on Default.
+  if (patch.is_active === true) await ensureDefaultTemplate();
   return (await getAllLeaveTypes()).find((t: any) => t.id === id);
 }
 
@@ -465,7 +475,7 @@ export async function getEffectiveBalances(
   if (opts.leaveTypeIds) typesQuery.whereIn('id', opts.leaveTypeIds);
   else typesQuery.where('is_active', true);
 
-  const [employees, departments, leaveTypes, restrictions, entitlements, booked] = await Promise.all([
+  const [employees, departments, leaveTypes, restrictions, entitlements, booked, templateRules] = await Promise.all([
     db('employees').whereIn('id', employeeIds).select('id', 'dept_name', 'gender'),
     db('departments').select('id', 'name'),
     typesQuery,
@@ -479,6 +489,8 @@ export async function getEffectiveBalances(
       .groupBy('employee_id', 'leave_type_id', 'status')
       .select('employee_id', 'leave_type_id', 'status')
       .sum({ total: 'days' }),
+    // Each employee's effective per-type rules from their assigned template (NULL → Default).
+    getTemplateRulesForEmployees(employeeIds),
   ]);
 
   // Mirror departmentIdByName: trim the employee's text, compare case-insensitively.
@@ -510,23 +522,30 @@ export async function getEffectiveBalances(
   const out: EffectiveBalance[] = [];
   for (const emp of employees) {
     const deptId = deptIdOf(emp.dept_name);
+    const empRules = templateRules.get(emp.id);
     for (const lt of leaveTypes) {
+      // The employee's own rule for this type from their template. Its absence means the
+      // template doesn't grant this leave — it shows as not-applicable. (Days, paid/unpaid
+      // and eligibility all come from the template now; for anyone on Default these are
+      // byte-for-byte the leave_types values.)
+      const rule = empRules?.get(lt.id);
       const allowed = allowedByType.get(lt.id);
       const k = key(emp.id, lt.id);
       const ent = entByKey.get(k);
       const taken = takenByKey.get(k) ?? 0;
       const pending = pendingByKey.get(k) ?? 0;
-      const allocated = ent ? Number(ent.total_days) : Number(lt.default_days || 0);
+      const defaultDays = rule ? rule.default_days : Number(lt.default_days || 0);
+      const allocated = ent ? Number(ent.total_days) : defaultDays;
       out.push({
         employee_id: emp.id,
         leave_type_id: lt.id,
         leave_type: lt.name,
-        is_paid: !!lt.is_paid,
-        // No rows for a type = every department (migration 070). A restricted type stays
-        // unavailable when the employee's department is missing or unrecognised, and a
-        // gender-restricted type (Maternity/Paternity) needs a matching recorded gender.
-        applicable: (!allowed || (deptId !== null && allowed.has(deptId)))
-          && genderAllows(lt.eligibility, emp.gender),
+        is_paid: rule ? rule.is_paid : !!lt.is_paid,
+        // Applicable only if the template includes this type AND (dept rule, unchanged) AND
+        // a gender-restricted type (Maternity/Paternity) matches the recorded gender.
+        applicable: !!rule
+          && (!allowed || (deptId !== null && allowed.has(deptId)))
+          && genderAllows(rule ? rule.eligibility : lt.eligibility, emp.gender),
         source: ent ? 'entitlement' : 'default',
         allocated,
         taken,
@@ -637,33 +656,37 @@ function shiftDate(date: string, n: number): string {
  * non-blocking warnings. Runs for both employee-apply and HR apply-on-behalf.
  */
 async function checkLeavePolicy(
-  employeeId: number, employee: any, leaveType: any, start: string, end: string, days: number,
+  employeeId: number, employee: any, leaveType: any, rule: LeaveRule, start: string, end: string, days: number,
 ): Promise<string[]> {
   const warnings: string[] = [];
   const name = leaveType.name;
 
-  if (leaveType.min_days_per_request && days < leaveType.min_days_per_request) {
-    throw new ValidationError(`${name} must be a continuous block of at least ${leaveType.min_days_per_request} day(s).`);
+  // Every scalar rule now comes from the employee's TEMPLATE row (`rule`), not the
+  // company-wide leave_types row — so two employees on different plans are gated
+  // differently. The leave_types row still supplies the display name + the department
+  // rule (kept a catalog property, since templates don't carry departments).
+  if (rule.min_days_per_request && days < rule.min_days_per_request) {
+    throw new ValidationError(`${name} must be a continuous block of at least ${rule.min_days_per_request} day(s).`);
   }
-  if (leaveType.max_days_per_request && days > leaveType.max_days_per_request) {
-    throw new ValidationError(`${name} can be at most ${leaveType.max_days_per_request} day(s) per request.`);
+  if (rule.max_days_per_request && days > rule.max_days_per_request) {
+    throw new ValidationError(`${name} can be at most ${rule.max_days_per_request} day(s) per request.`);
   }
-  if (leaveType.advance_notice_days && daysUntilStart(start) < leaveType.advance_notice_days) {
-    throw new ValidationError(`${name} must be applied at least ${leaveType.advance_notice_days} day(s) before it starts.`);
+  if (rule.advance_notice_days && daysUntilStart(start) < rule.advance_notice_days) {
+    throw new ValidationError(`${name} must be applied at least ${rule.advance_notice_days} day(s) before it starts.`);
   }
-  if (!truthy(leaveType.half_day_allowed) && !Number.isInteger(days)) {
+  if (!rule.half_day_allowed && !Number.isInteger(days)) {
     throw new ValidationError(`Half-day ${name} is not allowed.`);
   }
   // Gender eligibility — strict, like the department rule below: a gender-restricted
   // type needs the gender ON RECORD to match, so an employee with no gender recorded
   // is blocked rather than waved through. Probation, just below, stays lenient (it
   // can't be enforced against an unknown probation date without denying everyone).
-  if (!genderAllows(leaveType.eligibility, employee?.gender)) {
+  if (!genderAllows(rule.eligibility, employee?.gender)) {
     throw new ValidationError(employee?.gender
-      ? `${name} can only be taken by ${leaveType.eligibility} employees.`
-      : `${name} can only be taken by ${leaveType.eligibility} employees, and no gender is recorded for you. Ask HR to update your profile.`);
+      ? `${name} can only be taken by ${rule.eligibility} employees.`
+      : `${name} can only be taken by ${rule.eligibility} employees, and no gender is recorded for you. Ask HR to update your profile.`);
   }
-  if (truthy(leaveType.after_probation_only) && employee?.probation_end_date
+  if (rule.after_probation_only && employee?.probation_end_date
     && new Date().toISOString().slice(0, 10) < String(employee.probation_end_date).slice(0, 10)) {
     throw new ValidationError(`${name} is available only after your probation period ends.`);
   }
@@ -682,7 +705,8 @@ async function checkLeavePolicy(
     }
   }
   // Cannot be clubbed with — adjacent (±1 day) or overlapping request of a conflicting type.
-  const conflicts: number[] = await db('leave_type_conflicts').where('leave_type_id', leaveType.id).pluck('conflict_leave_type_id');
+  // The conflict set now comes from the employee's template row, not leave_type_conflicts.
+  const conflicts: number[] = rule.conflicts ?? [];
   if (conflicts.length) {
     const clash = await db('leave_requests as lr')
       .join('leave_types as lt', 'lt.id', 'lr.leave_type_id')
@@ -696,8 +720,8 @@ async function checkLeavePolicy(
       throw new ValidationError(`${name} can't be combined with ${clash.name} (you have ${clash.name} on an adjacent or overlapping day).`);
     }
   }
-  if (leaveType.document_required_after_days && days > leaveType.document_required_after_days) {
-    warnings.push(`${name} beyond ${leaveType.document_required_after_days} day(s) needs a supporting document — please keep it ready.`);
+  if (rule.document_required_after_days && days > rule.document_required_after_days) {
+    warnings.push(`${name} beyond ${rule.document_required_after_days} day(s) needs a supporting document — please keep it ready.`);
   }
   return warnings;
 }
@@ -717,10 +741,15 @@ export async function applyLeave(employeeId: number, data: {
   const leaveType = await db('leave_types').where('id', leave_type_id).first();
   if (!leaveType) throw new NotFoundError('Leave type');
 
+  // The employee's rule for this leave type comes from their assigned template. If the
+  // template doesn't include this type, their plan doesn't grant it.
+  const rule = await getEmployeeLeaveRule(employeeId, leave_type_id);
+  if (!rule) throw new ValidationError(`${leaveType.name} is not part of your leave plan.`);
+
   // Sandwich policy: when ON, holidays/weekly-offs between leave days count too
   // (all calendar days); default OFF counts only the employee's working days (one
   // calendar everywhere — so leave balance and payroll LOP agree).
-  const days = truthy(leaveType.count_sandwich_days)
+  const days = rule.count_sandwich_days
     ? enumerateDates(start_date, end_date).length
     : await countWorkingDaysInRange(employeeId, start_date, end_date);
   if (days <= 0) throw new ValidationError('Leave must be at least 1 day for this employee');
@@ -757,7 +786,7 @@ export async function applyLeave(employeeId: number, data: {
     if (overlap) throw new ValidationError('You already have a leave request overlapping these dates');
 
     // Configurable policy rules (min/max/notice/half-day/eligibility/probation/clubbing).
-    const warnings = await checkLeavePolicy(employeeId, employee, leaveType, start_date, end_date, days);
+    const warnings = await checkLeavePolicy(employeeId, employee, leaveType, rule, start_date, end_date, days);
 
     const [{ id: newId }] = await trx('leave_requests').insert({
       employee_id: employeeId,

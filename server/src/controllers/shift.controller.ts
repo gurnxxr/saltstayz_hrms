@@ -51,7 +51,31 @@ export async function listShiftAssignments(req: AuthRequest, res: Response, next
       search: req.query.search ? String(req.query.search) : undefined,
       property: req.query.property ? String(req.query.property) : undefined,
       unassigned: req.query.unassigned === 'true',
+      page: req.query.page ? Number(req.query.page) : undefined,
+      pageSize: req.query.pageSize ? Number(req.query.pageSize) : undefined,
     }));
+  } catch (err) { next(err); }
+}
+
+export async function exportShiftAssignments(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const csv = await shiftService.exportShiftAssignmentsCsv({
+      search: req.query.search ? String(req.query.search) : undefined,
+      property: req.query.property ? String(req.query.property) : undefined,
+      unassigned: req.query.unassigned === 'true',
+    });
+    const stamp = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="Shift_Assignments_${stamp}.csv"`);
+    res.send(csv);
+  } catch (err) { next(err); }
+}
+
+export async function bulkUploadShiftAssignments(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const csv = req.file.buffer.toString('utf-8');
+    res.json(await shiftService.bulkUploadShiftAssignments(csv, req.user!.userId));
   } catch (err) { next(err); }
 }
 

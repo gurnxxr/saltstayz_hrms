@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
-import Breadcrumb from '@/components/ui/Breadcrumb';
 import api from '@/lib/api';
 import { KeyRound, Loader2 } from 'lucide-react';
 
@@ -37,7 +36,6 @@ export default function SettingsPage() {
     <AppShell>
       <div className="space-y-6 max-w-3xl">
         <div>
-          <Breadcrumb className="mb-2" items={[{ label: 'Settings' }]} />
           <h1 className="text-2xl font-bold text-foreground">Settings</h1>
           <p className="text-secondary mt-1">Manage your account</p>
         </div>

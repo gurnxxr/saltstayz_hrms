@@ -8,9 +8,10 @@ import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { allowedNextStages } from '@/lib/constants';
+import { formatDate } from '@/lib/utils';
 import Breadcrumb from '@/components/ui/Breadcrumb';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
-import { Plus, User, Eye, Archive, Users, FileText, Download, Loader2, Pencil, ArrowRight } from 'lucide-react';
+import { Plus, User, Eye, Archive, Users, FileText, Download, Loader2, Pencil, ArrowRight, PauseCircle, PlayCircle } from 'lucide-react';
 
 const EMPLOYMENT_TYPES = ['Full-time', 'Part-time', 'Contract', 'Internship'];
 
@@ -109,13 +110,24 @@ export default function VacancyDetailPage({ params }: { params: Promise<{ id: st
       invalidateAll();
       setStageConfirm(null);
       if (stage === 'offered') {
-        toast.success('Candidate offered — moved to Joining Queue', {
-          action: { label: 'Go to Joining Queue', onClick: () => router.push('/recruitment/joining') },
+        toast.success('Candidate offered — moved to Onboarding', {
+          action: { label: 'Go to Onboarding', onClick: () => router.push('/recruitment/joining') },
         });
       } else if (stage === 'rejected') toast.success('Candidate rejected and archived');
       else toast.success('Stage updated');
     },
     onError: (err: any) => toast.error(err.response?.data?.error || 'Failed to update stage'),
+  });
+
+  // On Hold — park a candidate at their current stage (a reason is required to hold). A held
+  // candidate can't change stage until resumed.
+  const [holdTarget, setHoldTarget] = useState<any | null>(null);
+  const [holdReason, setHoldReason] = useState('');
+  const holdMutation = useMutation({
+    mutationFn: ({ candidateId, on_hold, reason }: { candidateId: number; on_hold: boolean; reason?: string }) =>
+      api.put(`/recruitment/candidates/${candidateId}/hold`, { on_hold, reason }),
+    onSuccess: (_d, v) => { invalidateAll(); setHoldTarget(null); setHoldReason(''); toast.success(v.on_hold ? 'Candidate put on hold' : 'Candidate resumed'); },
+    onError: (err: any) => toast.error(err.response?.data?.error || 'Failed to update'),
   });
 
   // Load the saved JD into the form only when the editor is opened — never on
@@ -198,6 +210,9 @@ export default function VacancyDetailPage({ params }: { params: Promise<{ id: st
               <p className="text-secondary mt-1">{vacancy.department_name} &middot; {vacancy.property_name}</p>
               {vacancy.reporting_manager_name && (
                 <p className="text-sm text-secondary mt-1">Reporting Manager: <span className="text-foreground font-medium">{vacancy.reporting_manager_name}</span></p>
+              )}
+              {vacancy.created_at && (
+                <p className="text-xs text-secondary mt-1">Created {formatDate(vacancy.created_at)}</p>
               )}
               <p className="text-sm text-secondary mt-2">{vacancy.description || 'No description'}</p>
             </div>
@@ -437,31 +452,58 @@ export default function VacancyDetailPage({ params }: { params: Promise<{ id: st
                       <td className="px-4 py-3 text-sm text-secondary">{c.email || '—'}</td>
                       <td className="px-4 py-3 text-sm text-secondary">{c.phone || '—'}</td>
                       <td className="px-4 py-3">
-                        <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium ${STAGE_COLORS[c.stage] || 'bg-gray-100 text-gray-700'}`}>
-                          {STAGE_LABELS[c.stage] || c.stage}
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium ${STAGE_COLORS[c.stage] || 'bg-gray-100 text-gray-700'}`}>
+                            {STAGE_LABELS[c.stage] || c.stage}
+                          </span>
+                          {c.on_hold && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700" title={c.hold_reason || 'On hold'}>
+                              <PauseCircle size={11} /> On hold
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-3 text-sm text-secondary">{new Date(c.created_at).toLocaleDateString()}</td>
                       <td className="px-4 py-3">
                         <div className="flex items-center justify-end gap-2">
-                          {canEdit && !c.archived && c.stage !== 'offered' && (
-                            <select
-                              value={c.stage}
-                              onChange={(e) => handleStageChange(c, e.target.value)}
-                              disabled={stageMoveMutation.isPending}
-                              className="px-2 py-1.5 border border-border rounded-lg bg-background text-xs focus:outline-none focus:ring-2 focus:ring-primary/50"
-                              title="Change stage"
+                          {/* A held candidate can't change stage — offer Resume instead of the stage picker. */}
+                          {canEdit && !c.archived && c.on_hold && (
+                            <button
+                              onClick={() => holdMutation.mutate({ candidateId: c.id, on_hold: false })}
+                              disabled={holdMutation.isPending}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-50 rounded-lg transition-colors disabled:opacity-50"
+                              title={c.hold_reason ? `On hold: ${c.hold_reason}` : 'Resume this candidate'}
                             >
-                              {[c.stage, ...allowedNextStages(c.stage)].map(s => (
-                                <option key={s} value={s}>{STAGE_LABELS[s] || s}</option>
-                              ))}
-                            </select>
+                              <PlayCircle size={13} /> Resume
+                            </button>
+                          )}
+                          {canEdit && !c.archived && !c.on_hold && c.stage !== 'offered' && (
+                            <>
+                              <select
+                                value={c.stage}
+                                onChange={(e) => handleStageChange(c, e.target.value)}
+                                disabled={stageMoveMutation.isPending}
+                                className="px-2 py-1.5 border border-border rounded-lg bg-background text-xs focus:outline-none focus:ring-2 focus:ring-primary/50"
+                                title="Change stage"
+                              >
+                                {[c.stage, ...allowedNextStages(c.stage)].map(s => (
+                                  <option key={s} value={s}>{STAGE_LABELS[s] || s}</option>
+                                ))}
+                              </select>
+                              <button
+                                onClick={() => { setHoldTarget(c); setHoldReason(''); }}
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-secondary hover:text-foreground hover:bg-muted rounded-lg transition-colors"
+                                title="Put this candidate on hold"
+                              >
+                                <PauseCircle size={13} /> Hold
+                              </button>
+                            </>
                           )}
                           {c.stage === 'offered' && !c.archived && (
                             <button
                               onClick={() => router.push('/recruitment/joining')}
                               className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-green-700 hover:bg-green-50 rounded-lg transition-colors"
-                              title="Open the Joining Queue to generate the offer letter"
+                              title="Open Onboarding to generate the offer letter"
                             >
                               In joining queue <ArrowRight size={12} />
                             </button>
@@ -495,6 +537,35 @@ export default function VacancyDetailPage({ params }: { params: Promise<{ id: st
         onConfirm={() => stageConfirm && stageMoveMutation.mutate({ candidateId: stageConfirm.candidate.id, stage: stageConfirm.stage })}
         onCancel={() => setStageConfirm(null)}
       />
+
+      {/* On-hold reason capture (a reason is required to hold) */}
+      {holdTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setHoldTarget(null)} />
+          <div className="relative bg-card rounded-xl border border-border shadow-xl w-full max-w-md">
+            <div className="px-5 py-4 border-b border-border">
+              <h3 className="text-base font-semibold text-foreground">Put {holdTarget.name} on hold</h3>
+              <p className="text-xs text-secondary mt-1">They stay at <span className="font-medium text-foreground">{STAGE_LABELS[holdTarget.stage] || holdTarget.stage}</span> and can&apos;t advance until resumed.</p>
+            </div>
+            <div className="p-5">
+              <label className="block text-sm font-medium text-foreground mb-1">Reason<span className="text-red-600"> *</span></label>
+              <textarea value={holdReason} onChange={(e) => setHoldReason(e.target.value)} rows={3} autoFocus
+                placeholder="e.g. awaiting budget approval, candidate asked to pause, position frozen…"
+                className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+            </div>
+            <div className="flex justify-end gap-2 px-5 py-4 border-t border-border">
+              <button onClick={() => setHoldTarget(null)} className="px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted transition-colors">Cancel</button>
+              <button
+                onClick={() => holdMutation.mutate({ candidateId: holdTarget.id, on_hold: true, reason: holdReason.trim() })}
+                disabled={!holdReason.trim() || holdMutation.isPending}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
+              >
+                {holdMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <PauseCircle size={14} />} Put on hold
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </AppShell>
   );
 }

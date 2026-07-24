@@ -13,6 +13,8 @@ router.get('/', gate, ctrl.getStatutory);
 // Resolved rates (read-only, no org identifiers) — also needed by the
 // salary-structure preview, which CHRO/HR can open.
 router.get('/rates', authorizeRoles('admin', 'chro', 'hr', 'finance'), ctrl.getRates);
+// Operating states for the salary-structure preview picker (same audience as /rates).
+router.get('/states', authorizeRoles('admin', 'chro', 'hr', 'finance'), ctrl.listStates);
 router.put('/epf', gate, ctrl.saveEpf);
 router.put('/esi', gate, ctrl.saveEsi);
 router.put('/bonus', gate, ctrl.saveBonus);

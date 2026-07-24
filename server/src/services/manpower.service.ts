@@ -2,6 +2,7 @@ import type { Knex } from 'knex';
 import db from '../config/database';
 import { JwtPayload } from '../types';
 import { NotFoundError, ValidationError, ForbiddenError, GuardrailError } from '../utils/errors';
+import { getDefaultTemplateId } from './leaveTemplate.service';
 import { nextJobId } from '../utils/jobId';
 import { LOCK, advisoryXactLock } from '../utils/locks';
 import { notifyRole } from './notification.service';
@@ -98,11 +99,10 @@ export interface Availability {
   pip_backfill?: number; // # of PIP positions that free a backup slot/budget here
 }
 
-/** Suggested salary per the spec: min(band_max, remaining_budget − (slots−1)·band_min), clamped to [band_min, band_max]. */
-export function suggestedSalary(remaining_budget: number, remaining_slots: number, band_min: number, band_max: number): number {
-  if (remaining_slots <= 0) return 0;
-  const raw = Math.min(band_max, remaining_budget - (remaining_slots - 1) * band_min);
-  return round2(Math.max(band_min, Math.min(raw, band_max)));
+/** Suggested salary: the role's approved maximum, capped by the remaining budget when that binds. */
+export function suggestedSalary(remaining_budget: number, band_max: number): number {
+  if (remaining_budget <= 0) return 0;
+  return round2(Math.max(0, Math.min(band_max, remaining_budget)));
 }
 
 export interface PropertyBudget {
@@ -115,36 +115,88 @@ export interface PropertyBudget {
   sanctioned_headcount: number;
   committed_amount: number;
   filled_headcount: number;
-  remaining_budget: number;
-  remaining_slots: number;
+  missing_salary_count: number;
+  reserved_budget: number;   // Σ pending offers (issued, not yet hired) monthly cost
+  reserved_slots: number;    // count of those pending offers
+  remaining_budget: number;  // sanctioned − committed − reserved (the genuinely free budget)
+  remaining_slots: number;   // sanctioned_headcount − filled − reserved
   utilization_pct: number;
   over_budget: boolean;
   over_headcount: boolean;
 }
 
-// Cumulative committed (Σ monthly_ctc) + filled headcount across ALL manpower-tracked
-// (monthly_ctc set), non-Left employees at a property.
+// Committed money + filled headcount across all non-departed employees at a property.
+// Headcount counts EVERY non-departed body — a hired person occupies a sanctioned slot whether
+// or not their salary has been keyed yet (so the cap can't be walked past by onboarding staff
+// without a salary). Committed money sums only the salaries that HAVE been keyed (SUM ignores
+// NULLs); missing_salary flags the bodies whose cost isn't in committed yet, so remaining_budget
+// isn't silently read as fully free.
 async function propertyCommitment(cx: Knex | Knex.Transaction, propertyName: string) {
   const agg = await cx('employees')
     .where('branch_name', propertyName)
     .whereNotIn('employment_status', DEPARTED_STATUSES)
-    .whereNotNull('monthly_ctc')
-    .select(cx.raw('COALESCE(SUM(monthly_ctc), 0) as committed'), cx.raw('COUNT(*) as cnt'))
+    .select(
+      cx.raw('COALESCE(SUM(monthly_ctc), 0) as committed'),
+      cx.raw('COUNT(*) as cnt'),
+      cx.raw('COUNT(*) FILTER (WHERE monthly_ctc IS NULL) as missing_salary'),
+    )
     .first();
-  return { committed: round2(Number(agg?.committed || 0)), filled: Number(agg?.cnt || 0) };
+  return {
+    committed: round2(Number(agg?.committed || 0)),
+    filled: Number(agg?.cnt || 0),
+    missing_salary: Number(agg?.missing_salary || 0),
+  };
 }
 
 // Employees on PIP are still on payroll (they count in committed/filled), but their
 // position is backfillable — HR may hire a backup ahead of a likely exit. This
 // returns the slot + budget allowance to grant for that backup hire.
 async function propertyPipBackfill(cx: Knex | Knex.Transaction, propertyName: string) {
+  // Count EVERY PIP body for the slot credit — a PIP employee consumes a slot (propertyCommitment
+  // counts all bodies) whether or not their salary is keyed, so its backfill seat must be freed
+  // regardless. SUM(monthly_ctc) still ignores NULLs, so the budget credit is only the keyed pay.
   const agg = await cx('employees')
     .where('branch_name', propertyName)
     .where('employment_status', 'pip')
-    .whereNotNull('monthly_ctc')
     .select(cx.raw('COALESCE(SUM(monthly_ctc), 0) as budget'), cx.raw('COUNT(*) as cnt'))
     .first();
   return { count: Number(agg?.cnt || 0), budget: round2(Number(agg?.budget || 0)) };
+}
+
+// Pending offers reserve a slot + their monthly cost against the cap the moment they're released,
+// so a second HR can't offer into the same last slot/rupee before the first offer is accepted.
+// A pending offer = an ISSUED offer_letter for a candidate not yet turned into an employee.
+// `excludeCandidateId` drops one candidate's own offer (used when re-checking that candidate's
+// accept — their reservation is about to be consumed, so it must not count against itself).
+async function propertyReservations(
+  cx: Knex | Knex.Transaction, propertyId: number, opts?: { excludeCandidateId?: number },
+) {
+  // SLOTS: reserved only while the body doesn't exist yet — an issued offer whose candidate isn't
+  // an employee. Once accepted, the pre_joining body itself is counted in `filled`, so the offer
+  // must stop reserving a slot (or it would double-count the headcount).
+  const slotQ = cx('offer_letters as ol')
+    .join('candidates as c', 'c.id', 'ol.candidate_id')
+    .join('vacancies as v', 'v.id', 'c.vacancy_id')
+    .where('v.property_id', propertyId).where('ol.status', 'issued').whereNull('c.employee_id');
+  if (opts?.excludeCandidateId) slotQ.whereNot('c.id', opts.excludeCandidateId);
+  const slotAgg = await slotQ.count({ cnt: '*' }).first();
+
+  // BUDGET: reserved until the cost actually lands in `committed` (employees.monthly_ctc set).
+  // Covers issued offers AND accepted-but-not-yet-activated hires (pre_joining, monthly_ctc null),
+  // so the promised pay is never briefly invisible between accept and activation.
+  const budQ = cx('offer_letters as ol')
+    .join('candidates as c', 'c.id', 'ol.candidate_id')
+    .join('vacancies as v', 'v.id', 'c.vacancy_id')
+    .leftJoin('employees as e', 'e.id', 'c.employee_id')
+    .where('v.property_id', propertyId).whereIn('ol.status', ['issued', 'accepted'])
+    .where(function (this: Knex.QueryBuilder) { this.whereNull('c.employee_id').orWhereNull('e.monthly_ctc'); });
+  if (opts?.excludeCandidateId) budQ.whereNot('c.id', opts.excludeCandidateId);
+  const budAgg = await budQ.sum({ annual: 'ol.offered_ctc' }).first();
+
+  return {
+    reserved_slots: Number(slotAgg?.cnt || 0),
+    reserved_budget: round2(Number(budAgg?.annual || 0) / 12),
+  };
 }
 
 /**
@@ -152,7 +204,7 @@ async function propertyPipBackfill(cx: Knex | Knex.Transaction, propertyName: st
  * Budget-Control row if set, else rolls up the per-role sanctions. Committed/filled
  * are cumulative across all roles at the property.
  */
-export async function computePropertyBudget(propertyId: number, trx?: Knex.Transaction): Promise<PropertyBudget> {
+export async function computePropertyBudget(propertyId: number, trx?: Knex.Transaction, opts?: { excludeCandidateId?: number }): Promise<PropertyBudget> {
   const cx = trx || db;
   const property = await cx('properties as p').leftJoin('clusters as c', 'c.id', 'p.cluster_id')
     .where('p.id', propertyId).select('p.id', 'p.name', 'c.name as cluster_name').first();
@@ -168,16 +220,19 @@ export async function computePropertyBudget(propertyId: number, trx?: Knex.Trans
   const sanctioned_budget_monthly = hasExplicit ? Number(explicit.sanctioned_budget_monthly) : rolledBudget;
   const sanctioned_headcount = hasExplicit ? Number(explicit.sanctioned_headcount) : rolledHead;
 
-  const { committed, filled } = await propertyCommitment(cx, property.name);
-  const remaining_budget = round2(sanctioned_budget_monthly - committed);
-  const remaining_slots = sanctioned_headcount - filled;
+  const { committed, filled, missing_salary } = await propertyCommitment(cx, property.name);
+  const { reserved_budget, reserved_slots } = await propertyReservations(cx, propertyId, opts);
+  // Free = sanctioned minus what's already spent (committed) AND already promised (pending offers).
+  const remaining_budget = round2(sanctioned_budget_monthly - committed - reserved_budget);
+  const remaining_slots = sanctioned_headcount - filled - reserved_slots;
 
   return {
     property_id: propertyId, property_name: property.name, cluster_name: property.cluster_name,
     source: hasExplicit ? 'explicit' : 'rolled_up',
     configured: hasExplicit || rolledBudget > 0 || rolledHead > 0,
     sanctioned_budget_monthly, sanctioned_headcount,
-    committed_amount: committed, filled_headcount: filled,
+    committed_amount: committed, filled_headcount: filled, missing_salary_count: missing_salary,
+    reserved_budget, reserved_slots,
     remaining_budget, remaining_slots,
     utilization_pct: sanctioned_budget_monthly > 0 ? round2((committed / sanctioned_budget_monthly) * 100) : 0,
     over_budget: committed > sanctioned_budget_monthly,
@@ -190,12 +245,12 @@ export async function computePropertyBudget(propertyId: number, trx?: Knex.Trans
  * total; the salary band comes from the per-role sanction. The suggestion reserves
  * band_min for the other open property slots.
  */
-export async function computeAvailability(propertyId: number, jobTitleId: number, trx?: Knex.Transaction): Promise<Availability> {
+export async function computeAvailability(propertyId: number, jobTitleId: number, trx?: Knex.Transaction, opts?: { excludeCandidateId?: number }): Promise<Availability> {
   const cx = trx || db;
   const jt = await cx('job_titles').where('id', jobTitleId).first();
   if (!jt) throw new NotFoundError('Role');
 
-  const pb = await computePropertyBudget(propertyId, trx);
+  const pb = await computePropertyBudget(propertyId, trx, opts);
   const roleSanction = await cx('manpower_sanctions').where({ property_id: propertyId, job_title_id: jobTitleId }).first();
   const band_min = roleSanction ? Number(roleSanction.band_min) : 0;
   const band_max = roleSanction ? Number(roleSanction.band_max) : 0;
@@ -223,7 +278,7 @@ export async function computeAvailability(propertyId: number, jobTitleId: number
     non_left_headcount: pb.filled_headcount,
     remaining_budget,
     remaining_slots,
-    suggested_ctc: suggestedSalary(remaining_budget, remaining_slots, band_min, band_max),
+    suggested_ctc: suggestedSalary(remaining_budget, band_max),
     utilization_pct: pb.utilization_pct,
     pip_backfill: pip.count,
   };
@@ -231,29 +286,88 @@ export async function computeAvailability(propertyId: number, jobTitleId: number
 
 export interface GuardrailBlock { exception_type: 'over_headcount' | 'over_band' | 'over_budget'; variance_amount: number; message: string; }
 
-/** Returns null if the CTC is allowed, else the reason it's blocked. */
-export function evaluateGuardrail(a: Availability, ctc: number): GuardrailBlock | null {
-  if (a.remaining_slots <= 0) {
+/**
+ * Returns null if the CTC is allowed, else the reason it's blocked. Enforces (per the agreed model):
+ * the sanctioned headcount (with reservations), the role's approved MAXIMUM salary, and that the pay
+ * fits the remaining budget. No band-minimum (the statutory minimum wage is the only floor, enforced
+ * on the offer/structure paths). `skipHeadcount` is used when the body already occupies a slot
+ * (e.g. re-checking a salary at activation) so only the money is re-validated.
+ */
+export function evaluateGuardrail(a: Availability, ctc: number, opts?: { skipHeadcount?: boolean }): GuardrailBlock | null {
+  if (!opts?.skipHeadcount && a.remaining_slots <= 0) {
     return { exception_type: 'over_headcount', variance_amount: 0,
-      message: `No open slots — ${a.non_left_headcount}/${a.sanctioned_headcount} already filled for ${a.job_title} at ${a.property_name}.` };
-  }
-  if (ctc < a.band_min) {
-    return { exception_type: 'over_band', variance_amount: round2(a.band_min - ctc),
-      message: `₹${ctc.toLocaleString('en-IN')} is below the band minimum of ₹${a.band_min.toLocaleString('en-IN')}.` };
+      message: `No open slots — ${a.non_left_headcount}/${a.sanctioned_headcount} filled for ${a.job_title} at ${a.property_name} (pending offers included).` };
   }
   if (ctc > a.band_max) {
     return { exception_type: 'over_band', variance_amount: round2(ctc - a.band_max),
-      message: `₹${ctc.toLocaleString('en-IN')} is ₹${round2(ctc - a.band_max).toLocaleString('en-IN')}/month above the band maximum of ₹${a.band_max.toLocaleString('en-IN')}.` };
+      message: `₹${ctc.toLocaleString('en-IN')} is ₹${round2(ctc - a.band_max).toLocaleString('en-IN')}/month above the approved maximum of ₹${a.band_max.toLocaleString('en-IN')} for ${a.job_title}.` };
   }
   if (ctc > a.remaining_budget) {
     return { exception_type: 'over_budget', variance_amount: round2(ctc - a.remaining_budget),
-      message: `₹${ctc.toLocaleString('en-IN')} is ₹${round2(ctc - a.remaining_budget).toLocaleString('en-IN')}/month above the remaining budget of ₹${a.remaining_budget.toLocaleString('en-IN')}.` };
-  }
-  if (ctc > a.suggested_ctc) {
-    return { exception_type: 'over_budget', variance_amount: round2(ctc - a.suggested_ctc),
-      message: `₹${ctc.toLocaleString('en-IN')} is ₹${round2(ctc - a.suggested_ctc).toLocaleString('en-IN')}/month above the suggested ₹${a.suggested_ctc.toLocaleString('en-IN')} (would leave too little for the other ${a.remaining_slots - 1} open slot(s)).` };
+      message: `₹${ctc.toLocaleString('en-IN')} is ₹${round2(ctc - a.remaining_budget).toLocaleString('en-IN')}/month above the free budget of ₹${a.remaining_budget.toLocaleString('en-IN')} for ${a.property_name}.` };
   }
   return null;
+}
+
+/**
+ * The single hiring chokepoint. Every path that creates an employee or commits a salary calls this.
+ * Recomputes availability (with reservations) and throws GuardrailError unless the hire fits — no
+ * budget/role-cap configured means no hire. `override` (a verified admin approval) bypasses the
+ * numeric checks; `excludeCandidateId` drops that candidate's own pending-offer reservation (accept
+ * re-check); `skipHeadcount` re-validates only the money for a body that already holds a slot.
+ * Returns the Availability it evaluated (handy for snapshots / variance).
+ */
+export async function assertHireAllowed(
+  propertyId: number, jobTitleId: number, ctc: number, trx?: Knex.Transaction,
+  opts?: { excludeCandidateId?: number; skipHeadcount?: boolean; override?: boolean; candidateId?: number },
+): Promise<Availability> {
+  const cx = trx || db;
+  const a = await computeAvailability(propertyId, jobTitleId, trx, { excludeCandidateId: opts?.excludeCandidateId });
+  if (opts?.override) return a; // an admin-approved exception was verified by the caller
+
+  // Work out what (if anything) blocks this hire.
+  let failure: GuardrailError | null = null;
+  if (!a.property_configured) {
+    failure = new GuardrailError('No sanctioned budget/headcount is set for this property — an Admin must set it in Admin → Budget Control before hiring.',
+      { exception_type: 'over_budget', variance_amount: 0, availability: a, requested_ctc: ctc });
+  } else if (!a.band_configured) {
+    failure = new GuardrailError('No approved salary cap is set for this role at this property — an Admin must set it before an offer/hire.',
+      { exception_type: 'over_band', variance_amount: 0, availability: a, requested_ctc: ctc });
+  } else {
+    const block = evaluateGuardrail(a, ctc, { skipHeadcount: opts?.skipHeadcount });
+    if (block) failure = new GuardrailError(block.message, { ...block, availability: a, requested_ctc: ctc });
+  }
+  if (!failure) return a;
+
+  // Blocked — the one escape is a still-valid admin-approved exception raised for THIS candidate
+  // that covers the pay (maker≠checker was enforced when it was approved). The gate stays the single
+  // source of truth: callers pass the candidate id and never decide the override themselves.
+  if (opts?.candidateId != null && await hasApprovedException(cx, opts.candidateId, ctc)) return a;
+  throw failure;
+}
+
+/**
+ * A live admin-approved exception for this candidate whose approved ceiling (requested_ctc) covers
+ * `ctc`. Three gates measure the SAME offer's monthly CTC from three slightly different bases —
+ * release uses breakdown.ctc, accept uses round(annual_ctc/12), transfer uses the recomputed salary
+ * structure (getMonthlyCtcMap) — so a ₹1 rounding slack is allowed. Without it the final transfer
+ * gate would spuriously re-block an already-approved hire; a genuine over-approval (≥₹2) still blocks.
+ */
+async function hasApprovedException(cx: Knex | Knex.Transaction, candidateId: number, ctc: number): Promise<boolean> {
+  const ex = await cx('manpower_exceptions')
+    .where({ candidate_id: candidateId, status: 'approved' })
+    .whereNull('consumed_at')
+    .andWhere('requested_ctc', '>=', Math.round(ctc) - 1)
+    .first();
+  return !!ex;
+}
+
+/** Spend this candidate's approved exception once the hire actually lands — audit trail + no reuse. */
+export async function consumeCandidateApproval(trx: Knex.Transaction, candidateId: number, employeeId: number): Promise<void> {
+  await trx('manpower_exceptions')
+    .where({ candidate_id: candidateId, status: 'approved' })
+    .whereNull('consumed_at')
+    .update({ status: 'consumed', consumed_at: trx.fn.now(), created_employee_id: employeeId, updated_at: trx.fn.now() });
 }
 
 // ─── Hires ───
@@ -295,6 +409,8 @@ async function insertHire(trx: Knex.Transaction, input: HireInput, ctc: number, 
   const [{ id: employeeId }] = await trx('employees').insert({
     employee_code: code,
     job_id: await nextJobId(trx),
+    leave_template_id: await getDefaultTemplateId(), // new hires land on the Default leave template
+
     first_name: firstName,
     last_name: lastName,
     email: input.email || null,
@@ -339,18 +455,8 @@ export async function createHire(input: HireInput, user: JwtPayload) {
     // (Under SQLite the single-writer rule made this safe implicitly.)
     await advisoryXactLock(trx, LOCK.HIRE_BUDGET, input.property_id);
 
-    // Recompute availability INSIDE the transaction, now that we hold the lock.
-    const a = await computeAvailability(input.property_id, input.job_title_id, trx);
-    if (!a.property_configured) {
-      throw new ValidationError('No budget is configured for this property. Ask Admin to set it in Admin → Budget Control first.');
-    }
-    if (!a.band_configured) {
-      throw new ValidationError('No salary band is configured for this role at this property. Ask Admin to set the band first.');
-    }
-    const block = evaluateGuardrail(a, ctc);
-    if (block) {
-      throw new GuardrailError(block.message, { ...block, availability: a, requested_ctc: ctc });
-    }
+    // Recompute + enforce INSIDE the transaction, now that we hold the lock (the single gate).
+    const a = await assertHireAllowed(input.property_id, input.job_title_id, ctc, trx);
     const employeeId = await insertHire(trx, input, ctc, a, user, false);
     return getHire(employeeId, trx);
   });
@@ -558,7 +664,7 @@ export async function listSanctions(filters: { property_id?: number; cluster_id?
       ...s,
       sanctioned_budget_monthly, sanctioned_headcount, band_min, band_max,
       committed_amount, filled, remaining_budget, remaining_slots,
-      suggested_ctc: suggestedSalary(remaining_budget, remaining_slots, band_min, band_max),
+      suggested_ctc: suggestedSalary(remaining_budget, band_max),
       utilization_pct: sanctioned_budget_monthly > 0 ? round2((committed_amount / sanctioned_budget_monthly) * 100) : 0,
       over_budget: committed_amount > sanctioned_budget_monthly,
       over_headcount: filled > sanctioned_headcount,
@@ -660,12 +766,33 @@ export async function createException(input: HireInput & { request_reason?: stri
 }
 
 export async function approveException(id: number, admin: JwtPayload, adminNote?: string) {
-  const ex = await db('manpower_exceptions').where('id', id).first();
-  if (!ex) throw new NotFoundError('Exception');
-  if (ex.status !== 'pending') throw new ValidationError(`This exception is already ${ex.status}.`);
-
   return db.transaction(async (trx) => {
-    // Approval overrides the guardrail; create the employee at the requested CTC.
+    // Lock the request row for the whole review so two concurrent approvals can't both pass the
+    // status check — for a standalone Add-Hire exception that would mint two employees from one
+    // approval (last-writer-wins on the row). Re-reads the live status inside the lock.
+    const ex = await trx('manpower_exceptions').where('id', id).forUpdate().first();
+    if (!ex) throw new NotFoundError('Exception');
+    if (ex.status !== 'pending') throw new ValidationError(`This exception is already ${ex.status}.`);
+    // maker ≠ checker: the reviewer must be someone other than the person who raised the request.
+    // This is the whole point of the approval — a junior HR can't wave through their own over-limit hire.
+    if (ex.requested_by != null && admin?.userId === ex.requested_by) {
+      throw new ValidationError('You can’t approve your own request — a different admin must review it.');
+    }
+
+    // A recruitment-linked request is a TOKEN, not a hire: approving it lets HR release/accept the
+    // offer for that candidate (the offer gate consumes it). It must NOT mint a second employee here.
+    if (ex.candidate_id != null) {
+      await trx('manpower_exceptions').where('id', id).update({
+        status: 'approved', reviewed_by: admin?.userId || null, reviewed_at: trx.fn.now(),
+        admin_note: adminNote || null, updated_at: trx.fn.now(),
+      });
+      return getException(id, trx);
+    }
+
+    // Standalone "Add Hire" exception: approval overrides the guardrail and creates the employee now,
+    // so the request is spent in the same step (consumed_at set). Take the property budget lock so
+    // this out-of-band commit serialises with every other hiring path on the same property.
+    await advisoryXactLock(trx, LOCK.HIRE_BUDGET, ex.property_id);
     const a = await computeAvailability(ex.property_id, ex.job_title_id, trx);
     const employeeId = await insertHire(trx, {
       name: ex.candidate_name,
@@ -676,10 +803,59 @@ export async function approveException(id: number, admin: JwtPayload, adminNote?
 
     await trx('manpower_exceptions').where('id', id).update({
       status: 'approved', reviewed_by: admin?.userId || null, reviewed_at: trx.fn.now(),
-      admin_note: adminNote || null, created_employee_id: employeeId, updated_at: trx.fn.now(),
+      admin_note: adminNote || null, created_employee_id: employeeId, consumed_at: trx.fn.now(), updated_at: trx.fn.now(),
     });
     return getException(id, trx);
   });
+}
+
+/**
+ * A blocked recruitment offer raises an approval request that stays tied to its candidate. Unlike the
+ * standalone Add-Hire exception, approving THIS does not mint an employee — it becomes the token the
+ * offer/accept/transfer gate accepts for that candidate (see assertHireAllowed + consumeCandidateApproval).
+ */
+export async function createCandidateException(params: {
+  candidateId: number; propertyId: number; jobTitleId: number;
+  candidateName: string; monthlyCtc: number; joinDate?: string | null; reason?: string;
+}, requestedBy: number): Promise<any> {
+  if (!params.reason?.trim()) throw new ValidationError('A reason is required to request approval.');
+  // Store the ceiling at whole-rupee resolution — the release/accept gates compare against it and
+  // derive the monthly CTC by two slightly different roundings (see hasApprovedException).
+  const ctc = Math.round(Number(params.monthlyCtc));
+  if (!ctc || ctc <= 0) throw new ValidationError('A valid monthly CTC is required.');
+
+  const open = await db('manpower_exceptions')
+    .where('candidate_id', params.candidateId).whereIn('status', ['pending', 'approved']).whereNull('consumed_at').first();
+  if (open) throw new ValidationError(`There is already a ${open.status} approval request for this candidate.`);
+
+  const a = await computeAvailability(params.propertyId, params.jobTitleId, undefined, { excludeCandidateId: params.candidateId });
+  let block: { exception_type: string; variance_amount: number } | null;
+  if (!a.property_configured) block = { exception_type: 'over_budget', variance_amount: 0 };
+  else if (!a.band_configured) block = { exception_type: 'over_band', variance_amount: 0 };
+  else block = evaluateGuardrail(a, ctc);
+  if (!block) throw new ValidationError('This hire is within sanction — no approval is needed.');
+
+  const [{ id }] = await db('manpower_exceptions').insert({
+    property_id: params.propertyId, job_title_id: params.jobTitleId,
+    candidate_id: params.candidateId, requested_by: requestedBy || null,
+    candidate_name: params.candidateName.trim(), requested_ctc: ctc,
+    exception_type: block.exception_type,
+    band_min: a.band_min, band_max: a.band_max,
+    sanctioned_budget_monthly: a.sanctioned_budget_monthly,
+    committed_amount: a.committed_amount, remaining_budget: a.remaining_budget,
+    sanctioned_headcount: a.sanctioned_headcount, non_left_headcount: a.non_left_headcount,
+    suggested_ctc: a.suggested_ctc, variance_amount: block.variance_amount,
+    join_date: params.joinDate || null, request_reason: params.reason.trim(),
+    status: 'pending',
+  }).returning('id');
+  // Surface the request to admins right away — the approval inbox is where it gets actioned.
+  await notifyRole('admin', {
+    type: 'hiring_approval_requested',
+    title: 'Over-limit hire needs approval',
+    message: `${params.candidateName.trim()} at ₹${ctc.toLocaleString('en-IN')}/mo is over the sanctioned limit and is waiting for review.`,
+    link: '/admin/approvals',
+  });
+  return getException(id);
 }
 
 export async function rejectException(id: number, admin: JwtPayload, adminNote?: string) {
@@ -767,14 +943,43 @@ export async function listPropertyBudgets(filters: { cluster_id?: number }, user
   const expMap = new Map<number, any>(explicits.map((e: any) => [e.property_id, e]));
   const rolls = await db('manpower_sanctions').select('property_id').sum({ budget: 'sanctioned_budget_monthly' }).sum({ head: 'sanctioned_headcount' }).count({ roles: '*' }).groupBy('property_id');
   const rollMap = new Map<number, any>(rolls.map((r: any) => [r.property_id, r]));
-  const commits = await db('employees').whereNotIn('employment_status', DEPARTED_STATUSES).whereNotNull('monthly_ctc')
-    .select('branch_name').sum({ committed: 'monthly_ctc' }).count({ cnt: '*' }).groupBy('branch_name');
+
+  // Committed money = Σ of KEYED salaries (SUM ignores NULLs); headcount = ALL non-departed
+  // staff (a hired body holds a sanctioned slot even before its salary is entered); missing =
+  // of those, how many have no salary yet — the cost not yet in committed. Matches
+  // propertyCommitment so the tab and the hiring guardrail agree.
+  const commits = await db('employees').whereNotIn('employment_status', DEPARTED_STATUSES)
+    .select('branch_name')
+    .sum({ committed: 'monthly_ctc' })
+    .count({ cnt: '*' })
+    .select(db.raw('COUNT(*) FILTER (WHERE monthly_ctc IS NULL) as missing'))
+    .groupBy('branch_name');
   const commitMap = new Map<string, any>(commits.map((c: any) => [c.branch_name, c]));
-  // Live headcount = all non-departed staff (with or without a salary set) — mirrors
-  // the Property Configuration console's worker_count for the hired-vs-sanctioned alert.
-  const heads = await db('employees').whereNotIn('employment_status', DEPARTED_STATUSES)
-    .select('branch_name').count({ cnt: '*' }).groupBy('branch_name');
-  const headMap = new Map<string, number>(heads.map((h: any) => [h.branch_name, Number(h.cnt || 0)]));
+
+  // PIP positions are backfillable — the hiring guardrail credits back a slot + that person's
+  // salary so HR can line up a backup (computeAvailability). Surface the same allowance here so
+  // this tab agrees with what Add-Hire actually permits instead of reading "0 open / over budget".
+  // Slot credit counts every PIP body (matches propertyPipBackfill); SUM ignores NULL salaries.
+  const pips = await db('employees').where('employment_status', 'pip')
+    .select('branch_name').sum({ budget: 'monthly_ctc' }).count({ cnt: '*' }).groupBy('branch_name');
+  const pipMap = new Map<string, any>(pips.map((p: any) => [p.branch_name, p]));
+
+  // Reservations (mirror propertyReservations so the tab agrees with the hiring guardrail):
+  // reserved SLOTS = issued offers whose body doesn't exist yet; reserved BUDGET = any offer whose
+  // cost hasn't landed in committed (issued, or accepted-but-not-yet-activated with null monthly_ctc).
+  const resSlots = await db('offer_letters as ol')
+    .join('candidates as c', 'c.id', 'ol.candidate_id').join('vacancies as v', 'v.id', 'c.vacancy_id')
+    .where('ol.status', 'issued').whereNull('c.employee_id')
+    .select('v.property_id').count({ cnt: '*' }).groupBy('v.property_id');
+  const resSlotMap = new Map<number, number>(resSlots.map((r: any) => [r.property_id, Number(r.cnt || 0)]));
+  const resBudget = await db('offer_letters as ol')
+    .join('candidates as c', 'c.id', 'ol.candidate_id').join('vacancies as v', 'v.id', 'c.vacancy_id')
+    .leftJoin('employees as e', 'e.id', 'c.employee_id')
+    .whereIn('ol.status', ['issued', 'accepted'])
+    .where(function (this: Knex.QueryBuilder) { this.whereNull('c.employee_id').orWhereNull('e.monthly_ctc'); })
+    .select('v.property_id').sum({ annual: 'ol.offered_ctc' }).groupBy('v.property_id');
+  const resBudgetMap = new Map<number, number>(resBudget.map((r: any) => [r.property_id, round2(Number(r.annual || 0) / 12)]));
+
   // Admin-set per-department sanctioned worker limits, summed per property.
   const deptSanctions = await db('property_department_workers').select('property_id').sum({ workers: 'worker_count' }).groupBy('property_id');
   const deptSanctionMap = new Map<number, number>(deptSanctions.map((r: any) => [r.property_id, Number(r.workers || 0)]));
@@ -787,12 +992,22 @@ export async function listPropertyBudgets(filters: { cluster_id?: number }, user
     const rolledHead = Number(roll?.head || 0);
     const sanctioned_budget_monthly = hasExplicit ? Number(exp.sanctioned_budget_monthly) : rolledBudget;
     const sanctioned_headcount = hasExplicit ? Number(exp.sanctioned_headcount) : rolledHead;
+
     const cm = commitMap.get(p.name);
     const committed_amount = round2(Number(cm?.committed || 0));
-    const filled_headcount = Number(cm?.cnt || 0);
-    const remaining_budget = round2(sanctioned_budget_monthly - committed_amount);
-    const remaining_slots = sanctioned_headcount - filled_headcount;
-    const worker_count = headMap.get(p.name) || 0;
+    const filled_headcount = Number(cm?.cnt || 0);            // ALL non-departed staff
+    const missing_salary_count = Number(cm?.missing || 0);    // of which, salary not yet keyed
+
+    const reserved_slots = resSlotMap.get(p.id) || 0;
+    const reserved_budget = resBudgetMap.get(p.id) || 0;
+    // Free = sanctioned minus what's spent (committed) AND promised (pending offers).
+    const remaining_budget = round2(sanctioned_budget_monthly - committed_amount - reserved_budget);
+    const remaining_slots = sanctioned_headcount - filled_headcount - reserved_slots;
+
+    const pip = pipMap.get(p.name);
+    const pip_backfill_slots = Number(pip?.cnt || 0);
+    const pip_backfill_budget = round2(Number(pip?.budget || 0));
+
     const total_sanctioned_workers = deptSanctionMap.get(p.id) || 0;
     return {
       property_id: p.id, property_name: p.name, cluster_id: p.cluster_id, cluster_name: p.cluster_name,
@@ -800,15 +1015,25 @@ export async function listPropertyBudgets(filters: { cluster_id?: number }, user
       configured: hasExplicit || rolledBudget > 0 || rolledHead > 0,
       role_lines: Number(roll?.roles || 0),
       sanctioned_budget_monthly, sanctioned_headcount,
-      committed_amount, filled_headcount,
+      committed_amount, filled_headcount, missing_salary_count,
+      reserved_budget, reserved_slots,
       remaining_budget, remaining_slots,
+      // What Add-Hire actually allows once PIP backfill is credited (matches the guardrail).
+      pip_backfill_slots, pip_backfill_budget,
+      hireable_remaining_slots: remaining_slots + pip_backfill_slots,
+      hireable_remaining_budget: round2(remaining_budget + pip_backfill_budget),
       utilization_pct: sanctioned_budget_monthly > 0 ? round2((committed_amount / sanctioned_budget_monthly) * 100) : 0,
       over_budget: committed_amount > sanctioned_budget_monthly,
       over_headcount: filled_headcount > sanctioned_headcount,
-      // Hired vs sanctioned WORKERS (Σ per-department limits) — same comparison the
-      // Property Configuration console surfaces as a red alert once you drill in.
-      worker_count, total_sanctioned_workers,
-      over_worker_limit: total_sanctioned_workers > 0 && worker_count > total_sanctioned_workers,
+      // worker_count == filled_headcount now (both are all non-departed staff). The dept limit
+      // (Σ per-department sanctioned workers) is a SEPARATE, softer cap the console surfaces.
+      worker_count: filled_headcount, total_sanctioned_workers,
+      over_worker_limit: total_sanctioned_workers > 0 && filled_headcount > total_sanctioned_workers,
+      // Soft reconciliation flags (display-only): the three "sanctioned" sources disagreeing.
+      rolled_budget: rolledBudget, rolled_headcount: rolledHead,
+      explicit_overrides_roles: hasExplicit && (rolledBudget > 0 || rolledHead > 0)
+        && (rolledBudget !== sanctioned_budget_monthly || rolledHead !== sanctioned_headcount),
+      workers_vs_headcount_mismatch: total_sanctioned_workers > 0 && total_sanctioned_workers !== sanctioned_headcount,
     };
   });
 }
@@ -833,6 +1058,44 @@ export async function upsertPropertyBudget(propertyId: number, data: { sanctione
     });
   }
   return computePropertyBudget(propertyId);
+}
+
+/**
+ * Committed spend + headcount for staff whose branch_name matches NO property (renamed,
+ * typo'd, or blank) — money and bodies that would otherwise silently vanish from every
+ * property row. Admin-scope only (a cluster user has no global orphan view); zeros otherwise.
+ */
+export async function unassignedCommitment(user: JwtPayload | undefined) {
+  const scope = await getScope(user);
+  if (!scope.all) return { count: 0, committed: 0, missing_salary: 0, employees: [] as any[] };
+  const propNames: string[] = await db('properties').pluck('name');
+  const employees = await db('employees as e')
+    .leftJoin('job_titles as jt', 'jt.id', 'e.job_title_id')
+    .whereNotIn('e.employment_status', DEPARTED_STATUSES)
+    .where(function (this: Knex.QueryBuilder) {
+      this.whereNull('e.branch_name').orWhere('e.branch_name', '')
+        .orWhereNotIn('e.branch_name', propNames.length ? propNames : ['__none__']);
+    })
+    .select('e.id', 'e.employee_code', 'e.first_name', 'e.last_name', 'e.branch_name',
+      'e.monthly_ctc', 'e.employment_status', 'jt.title as designation')
+    .orderBy('e.first_name');
+  const committed = round2(employees.reduce((s: number, r: any) => s + (Number(r.monthly_ctc) || 0), 0));
+  const missing_salary = employees.filter((r: any) => r.monthly_ctc == null).length;
+  return { count: employees.length, committed, missing_salary, employees };
+}
+
+/** The employees that make up a property's Committed figure (the drill-in). */
+export async function propertyCommittedBreakdown(propertyId: number, user: JwtPayload | undefined) {
+  const property = await db('properties').where('id', propertyId).first();
+  if (!property) throw new NotFoundError('Property');
+  await assertPropertyInScope(user, propertyId);
+  return db('employees as e')
+    .leftJoin('job_titles as jt', 'jt.id', 'e.job_title_id')
+    .where('e.branch_name', property.name)
+    .whereNotIn('e.employment_status', DEPARTED_STATUSES)
+    .select('e.id', 'e.employee_code', 'e.first_name', 'e.last_name', 'e.monthly_ctc',
+      'e.employment_status', 'jt.title as designation')
+    .orderByRaw('e.monthly_ctc DESC NULLS LAST');
 }
 
 // Set just the salary band for a property × role (used by the band drill-down).
