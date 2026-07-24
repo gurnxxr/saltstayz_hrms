@@ -388,6 +388,15 @@ export default function RecruitmentPage() {
                 <input value={addForm.notes} onChange={(e) => setAddForm(p => ({ ...p, notes: e.target.value }))}
                   className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
               </div>
+              {(!addForm.vacancy_id || !addForm.name.trim()) && (
+                <p className="text-xs text-amber-600">
+                  {!addForm.vacancy_id && !addForm.name.trim()
+                    ? 'Select a vacancy and enter a name to add the candidate.'
+                    : !addForm.vacancy_id
+                      ? 'Select a vacancy to add the candidate.'
+                      : 'Enter a name to add the candidate.'}
+                </p>
+              )}
               <div className="flex gap-3 pt-1">
                 <button type="submit" disabled={addCandidateMutation.isPending || !addForm.vacancy_id || !addForm.name.trim()}
                   className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50">

@@ -7,14 +7,24 @@ import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { Search, ArrowLeft, User, Archive } from 'lucide-react';
+import { STAGE_LABELS, CANDIDATE_STAGES } from '@/lib/constants';
 
-const STAGES = ['screening', 'interview', 'shortlisted', 'offered', 'rejected'] as const;
+// Colours keyed by the REAL candidate stage keys (see constants.ts). The old local
+// vocabulary (screening/shortlisted/offered) predated the funnel rework, so every
+// badge fell through to grey and the stage filter offered dead values.
 const STAGE_COLORS: Record<string, string> = {
-  screening: 'bg-gray-100 text-gray-700',
+  applied: 'bg-slate-100 text-slate-700',
   interview: 'bg-blue-100 text-blue-700',
-  shortlisted: 'bg-purple-100 text-purple-700',
-  offered: 'bg-green-100 text-green-700',
+  selected: 'bg-indigo-100 text-indigo-700',
+  document_collection: 'bg-amber-100 text-amber-700',
+  offer_released: 'bg-cyan-100 text-cyan-700',
+  offer_accepted: 'bg-teal-100 text-teal-700',
+  pre_joining: 'bg-violet-100 text-violet-700',
+  joining: 'bg-green-100 text-green-700',
+  transferred: 'bg-emerald-100 text-emerald-700',
   rejected: 'bg-red-100 text-red-700',
+  offer_declined: 'bg-orange-100 text-orange-700',
+  no_show: 'bg-rose-100 text-rose-700',
 };
 
 export default function CandidatesPage() {
@@ -76,8 +86,8 @@ export default function CandidatesPage() {
             className="px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
           >
             <option value="">All Stages</option>
-            {STAGES.map(s => (
-              <option key={s} value={s} className="capitalize">{s}</option>
+            {CANDIDATE_STAGES.map(s => (
+              <option key={s} value={s}>{STAGE_LABELS[s] || s}</option>
             ))}
           </select>
           <select
@@ -152,8 +162,8 @@ export default function CandidatesPage() {
                     </td>
                     <td className="px-4 py-3 text-sm text-foreground">{c.job_title}</td>
                     <td className="px-4 py-3">
-                      <span className={`px-2.5 py-1 rounded-full text-xs font-medium capitalize ${STAGE_COLORS[c.stage] || 'bg-gray-100 text-gray-700'}`}>
-                        {c.stage}
+                      <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${STAGE_COLORS[c.stage] || 'bg-gray-100 text-gray-700'}`}>
+                        {STAGE_LABELS[c.stage] || c.stage}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-sm text-secondary">
