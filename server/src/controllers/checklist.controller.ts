@@ -86,7 +86,10 @@ export async function uploadItemDocument(req: AuthRequest, res: Response, next: 
 
 export async function downloadItemDocument(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    const { absPath, name } = await checklistService.getItemDocument(Number(req.params.itemId));
+    const { absPath, name } = await checklistService.getItemDocument(
+      Number(req.params.itemId),
+      { roleName: req.user!.roleName, employeeId: req.user!.employeeId },
+    );
     res.download(absPath, name);
   } catch (err) { next(err); }
 }

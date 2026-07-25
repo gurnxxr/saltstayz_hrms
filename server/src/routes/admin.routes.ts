@@ -43,7 +43,10 @@ router.get('/departments', orgCtrl.listDepartments);
 router.get('/property-categories', orgCtrl.listPropertyCategories);
 router.get('/job-titles', orgCtrl.listJobTitles);
 router.get('/employee-categories', orgCtrl.listCategories);
-router.get('/pay-grades', orgCtrl.listPayGrades);
+// NOT a general lookup: pay grades carry the company's salary bands, so this is the whole pay
+// ladder. It sat in the block above and was readable by every signed-in employee. Only the
+// Admin -> Organization screens consume it, so gating it costs nothing.
+router.get('/pay-grades', authorize('admin', 'read'), orgCtrl.listPayGrades);
 router.get('/employment-statuses', orgCtrl.listStatuses);
 
 // ─── Organization CRUD (admin only) ───

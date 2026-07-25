@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import type { Knex } from 'knex';
 import db from '../config/database';
-import { NotFoundError, ValidationError } from '../utils/errors';
+import { NotFoundError, ValidationError, ForbiddenError } from '../utils/errors';
 
 /**
  * The one checklist. Templates (admin-editable) -> instances (per candidate OR per
@@ -425,9 +425,39 @@ export async function uploadItemDocument(itemId: number, file: { originalname: s
   return db('checklist_instance_items').where('id', itemId).first();
 }
 
-export async function getItemDocument(itemId: number) {
-  const item = await db('checklist_instance_items').where('id', itemId).first();
+/**
+ * HR functions that legitimately handle onboarding paperwork org-wide. Everyone else may only
+ * fetch a document attached to their OWN checklist.
+ *
+ * Deliberately a role list rather than the route's `authorize('recruitment','read')` alone: a
+ * per-employee module override grants a whole module without regard to action (see
+ * middleware/rbac.ts), so anyone handed the `recruitment` module would otherwise inherit the
+ * ability to read every ID document in the company.
+ */
+const DOCUMENT_STAFF_ROLES = ['admin', 'chro', 'hr', 'hr_manager'];
+
+/**
+ * A checklist item's uploaded file, once the caller is entitled to it.
+ *
+ * Item ids are sequential, and this used to look the item up by id and hand back the file with
+ * no check on who was asking — so anyone who could reach the endpoint could walk the ids and pull
+ * every Aadhaar, PAN and bank document in the system, including for people and properties well
+ * outside their remit. The lookup now resolves the checklist's subject and requires either an
+ * org-wide HR role or that the document belongs to the caller.
+ */
+export async function getItemDocument(itemId: number, user: { roleName: string; employeeId?: number | null }) {
+  const item = await db('checklist_instance_items as cii')
+    .join('checklist_instances as ci', 'ci.id', 'cii.instance_id')
+    .where('cii.id', itemId)
+    .select('cii.document_url', 'cii.document_name', 'ci.employee_id')
+    .first();
   if (!item || !item.document_url) throw new NotFoundError('Document');
+
+  const isOwnDocument = item.employee_id != null && item.employee_id === user.employeeId;
+  if (!isOwnDocument && !DOCUMENT_STAFF_ROLES.includes(user.roleName)) {
+    throw new ForbiddenError('You do not have access to this document');
+  }
+
   return {
     absPath: path.join(UPLOAD_DIR, path.basename(item.document_url)),
     name: item.document_name || path.basename(item.document_url),
