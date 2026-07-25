@@ -1,0 +1,10 @@
+Employee Code,First Name,Last Name,Email,Phone,Gender,Date of Birth,Date of Joining,Father Name,Aadhaar Number,PAN Number,Department,Branch Name,Job Title,Reporting Manager Code,State,Status,Monthly CTC
+PD-9001,Rohan,Kapoor,rohan.kapoor@saltstayz.com,9810000001,Male,1996-04-12,2026-07-01,Suresh Kapoor,111122223333,ABCPK1234A,Housekeeping,SaltStayz Hauz Khas,Housekeeping Attendant,PD-0004,Delhi,Active,18000
+PD-9002,Neha,Sharma,neha.sharma@saltstayz.com,9810000002,Female,1994-09-05,2026-07-01,Mahesh Sharma,222233334444,ABCPS2345B,Front Desk,SaltStayz Connaught Place,Front Desk Executive,PD-0012,Delhi,Active,24000
+PD-9003,Imran,Khan,imran.khan@saltstayz.com,9810000003,Male,1992-01-20,2026-07-01,Yusuf Khan,333344445555,ABCPK3456C,Food & Beverage,SaltStayz Gurgaon,F&B Server,PD-0021,Haryana,Active,20000
+PD-9004,Meera,Pillai,,9810000004,Female,1990-11-30,2026-07-01,,,,Front Desk,SaltStayz Connaught Place,Front Desk Executive,,Delhi,Active,22000
+PD-9005,Sameer,Joshi,sameer.joshi@saltstayz.com,9810000005,Other,1998-06-15,2026-07-01,Anil Joshi,555566667777,ABCPJ5678E,Housekeeping,SaltStayz Hauz Khas,Housekeeping Attendant,PD-0004,Delhi,Active,
+PD-9006,Bhavna,Rao,bhavna.rao@saltstayz.com,9810000006,Female,1993-02-10,2026-07-01,Gopal Rao,666677778888,ABCPR6789F,Housekeeping,SaltStayz Hauz Khas,Housekeeping Attendant,PD-0004,Delhi,Active,50000
+PD-9007,Tarun,Das,tarun.das@saltstayz.com,9810000007,Male,1991-07-22,2026-07-01,Nirmal Das,777788889999,ABCPD7890G,Food & Beverage,SaltStayz Pune,F&B Server,,Maharashtra,Active,21000
+PD-9008,Kavya,Iyer,kavya.iyer@saltstayz.com,9810000008,Female,1997-12-01,2025-01-15,Suresh Iyer,888899990000,ABCPI8901H,Security,SaltStayz Gurgaon,Housekeeping Supervisor,PD-0021,Haryana,Inactive,26000
+,Noname,Row,noname@saltstayz.com,9810000009,Male,1990-01-01,2026-07-01,Test Father,,,Housekeeping,SaltStayz Hauz Khas,Housekeeping Attendant,,Delhi,Active,18000

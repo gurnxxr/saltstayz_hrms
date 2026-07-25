@@ -1,0 +1,11 @@
+Emp Code,Access Date (DD-MM-YY),First_In_time (HH:MM),Last_Out_time (HH:MM),Location,Status
+PD-0001,20-07-2026,09:00,18:00,SaltStayz Hauz Khas,
+PD-0001,21-07-2026,09:02,18:10,SaltStayz Hauz Khas,
+PD-0001,22-07-2026,10:45,18:00,SaltStayz Hauz Khas,
+PD-0002,21-07-2026,09:30,13:30,SaltStayz Hauz Khas,
+PD-0002,22-07-2026,09:30,,SaltStayz Hauz Khas,
+PD-0008,21-07-2026,,18:00,SaltStayz Hauz Khas,
+PD-0009,22-07-2026,10:05,19:00,SaltStayz Connaught Place,
+PD-0010,22-07-2026,,,SaltStayz Connaught Place,HHD
+PD-0009,22-07-2026,09:00,18:00,SaltStayz Connaught Place,
+PD-0011,99-99-2026,09:00,18:00,SaltStayz Connaught Place,

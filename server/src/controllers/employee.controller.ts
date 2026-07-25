@@ -43,6 +43,14 @@ export async function getMyProfile(req: AuthRequest, res: Response, next: NextFu
   } catch (err) { next(err); }
 }
 
+/** The signed-in user's direct reports. An account with no employee record simply has none. */
+export async function getMyReportees(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    if (!req.user?.employeeId) return res.json([]);
+    res.json(await employeeService.getMyReportees(req.user.employeeId));
+  } catch (err) { next(err); }
+}
+
 export async function createEmployee(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     res.status(201).json(await employeeService.createEmployee(req.body));

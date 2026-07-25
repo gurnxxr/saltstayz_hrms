@@ -21,6 +21,13 @@ export default function EmployeeDashboard() {
     queryFn: () => api.get('/shifts/me').then(r => r.data).catch(() => null),
   });
 
+  // Direct reports. Self-scoped on the server, so this is safe for every role — it simply
+  // comes back empty for anyone who isn't a reporting manager, and the card stays hidden.
+  const { data: reportees = [] } = useQuery({
+    queryKey: ['my-reportees'],
+    queryFn: () => api.get('/employees/me/reportees').then(r => r.data).catch(() => []),
+  });
+
   const att = data?.attendance ?? { present: 0, total: 0, present_pct: 0, avg_working_hours: 0, on_leave: 0, absent: 0, half_day: 0 };
   const leave = data?.leave ?? { balances: [], remaining: 0, used_days: 0, total_days: 0, pending_count: 0 };
 
@@ -104,6 +111,34 @@ export default function EmployeeDashboard() {
           </div>
         </div>
       </div>
+
+      {/* My Team — only for people who actually have direct reports. */}
+      {reportees.length > 0 && (
+        <div className="bg-card rounded-xl border border-border p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold text-foreground">My Team</h2>
+            <span className="text-xs text-secondary">{reportees.length} direct {reportees.length === 1 ? 'report' : 'reports'}</span>
+          </div>
+          <div className="divide-y divide-border">
+            {reportees.map((r: any) => (
+              <div key={r.id} className="py-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-bold shrink-0">
+                    {(r.first_name || '?')[0]}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-foreground truncate">{r.first_name} {r.last_name}</p>
+                    <p className="text-xs text-secondary truncate">
+                      {r.employee_code}{r.designation_name ? ` · ${r.designation_name}` : ''}
+                    </p>
+                  </div>
+                </div>
+                <p className="text-xs text-secondary text-right shrink-0">{r.dept_name || '—'}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Quick actions */}
       <div className="bg-card rounded-xl border border-border p-6">

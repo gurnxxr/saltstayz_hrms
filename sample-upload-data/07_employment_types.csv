@@ -1,0 +1,8 @@
+Employment Type,Is Confirmed,Prefix,Restriction for Employment Type,Probation Period (In Months),Notice Period (In Days)
+Consultant,N,CNS,,0,15
+Apprentice,N,APP,"Contract, Trainee",3,7
+Seasonal,N,SEA,,0,7
+Probation,N,P,"Contract, Trainee",6,30
+Retainer,N,RET,"UnknownType",0,30
+Confirmed,Y,C,,,30
+,N,ZZ,,0,7

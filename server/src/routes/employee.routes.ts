@@ -20,6 +20,9 @@ const EMPLOYEE_CREATE_ROLES = authorizeRoles('admin');
 // My profile (any authenticated user)
 router.get('/me', ctrl.getMyProfile);
 router.put('/me', ctrl.updateMyProfile);
+// A manager's own direct reports. Ungated beyond authentication because it is self-scoped —
+// being the reporting manager IS the entitlement — and it returns far less than the directory.
+router.get('/me/reportees', ctrl.getMyReportees);
 
 // Managers list (for dropdowns) — staff only (name enumeration otherwise)
 router.get('/managers', DIRECTORY_ROLES, ctrl.getManagers);

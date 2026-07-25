@@ -12,6 +12,19 @@ export const NAVIGATION: NavItem[] = [
     moduleForEmployee: 'dashboard_employee',
   },
   {
+    // Grant-only entry: `roles: []` means it never shows by role, so it appears purely because
+    // an admin granted `dashboard_employee` in Admin → Module Access. That grant used to be a
+    // no-op for staff — the single Dashboard item above gates on `dashboard_admin` for every
+    // non-employee role, so nothing changed when it was switched on. This gives it something to
+    // do: staff keep the org dashboard AND get the self-service view. Employees are unaffected —
+    // the Dashboard item above already renders the employee view for them.
+    label: 'My Dashboard',
+    href: '/dashboard/me',
+    icon: 'UserCircle',
+    roles: [],
+    module: 'dashboard_employee',
+  },
+  {
     label: 'Analytics',
     href: '/analytics',
     icon: 'BarChart3',
@@ -116,6 +129,7 @@ export const NAVIGATION: NavItem[] = [
     children: [
       { label: 'Salary Structures', href: '/setup/salary-structure', icon: 'IndianRupee', roles: ['admin'], module: 'payroll' },
       { label: 'Pay Schedule', href: '/setup/pay-schedule', icon: 'CalendarClock', roles: ['admin', 'finance'], module: 'payroll' },
+      { label: 'Attendance Pay Rules', href: '/setup/attendance-pay-rules', icon: 'SlidersHorizontal', roles: ['admin', 'finance'], module: 'payroll' },
       { label: 'Statutory Components', href: '/setup/statutory-components', icon: 'Landmark', roles: ['admin', 'finance'], module: 'payroll' },
       { label: 'Salary Components', href: '/setup/salary-components', icon: 'Coins', roles: ['admin', 'finance'], module: 'payroll' },
     ],

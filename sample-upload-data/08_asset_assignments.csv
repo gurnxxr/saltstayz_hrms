@@ -1,0 +1,8 @@
+EmpCode,Employee Name,Property,Item,Serial No,Assigned Date,Status
+PD-0001,Aarav Sharma,SaltStayz Hauz Khas,Laptop,LT-1001,2026-07-20,assigned
+PD-0002,Vivaan Verma,SaltStayz Hauz Khas,ID Card,IDC-2002,2026-07-20,assigned
+PD-0009,Krishna Verma,SaltStayz Connaught Place,Uniform Set,,2026-07-20,assigned
+PD-0010,Ishaan Gupta,SaltStayz Connaught Place,Access Keycard,KEY-4004,20/07/2026,assigned
+PD-0005,Arjun Nair,SaltStayz Hauz Khas,Mobile Phone,MOB-5005,2026-07-18,returned
+PD-9999,Ghost Employee,SaltStayz Gurgaon,Laptop,LT-9999,2026-07-20,assigned
+PD-0006,Sai Reddy,SaltStayz Hauz Khas,,SER-0006,2026-07-20,assigned

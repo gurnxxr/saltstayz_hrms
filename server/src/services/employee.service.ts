@@ -187,6 +187,33 @@ export async function getEmployee(id: number) {
 }
 
 /**
+ * The signed-in user's own direct reports, for the "My Team" card on their dashboard.
+ *
+ * Self-scoped on purpose, and NOT behind DIRECTORY_ROLES: being someone's reporting manager is
+ * the entitlement here, so a property manager or a plain employee who happens to have reports
+ * can see their own team without opening the employee directory to them. It stays strictly
+ * narrower than that directory — only presentational fields are selected, never phone, email,
+ * Aadhaar, or anything about pay. Inactive reports are excluded so an exited team member doesn't
+ * linger on the card.
+ */
+export async function getMyReportees(managerId: number) {
+  return db('employees as e')
+    .leftJoin('job_titles as j', 'j.id', 'e.job_title_id')
+    .where('e.reporting_manager_id', managerId)
+    .where('e.is_active', true)
+    .select(
+      'e.id',
+      'e.employee_code',
+      'e.first_name',
+      'e.last_name',
+      'e.dept_name',
+      'e.branch_name',
+      'j.title as designation_name',
+    )
+    .orderBy([{ column: 'e.first_name' }, { column: 'e.last_name' }]);
+}
+
+/**
  * Directly creating an employee (single or bulk CSV) skips the recruitment funnel where the
  * sanctioned cap is normally enforced, so it must re-check the cap itself — otherwise it is the
  * widest way to over-hire or over-pay. This mirrors `assertHireAllowed` on the offer path but is
