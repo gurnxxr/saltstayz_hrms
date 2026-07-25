@@ -60,6 +60,21 @@ export default function NewVacancyPage() {
   const selectedTitle = jobTitles.find((j: any) => String(j.id) === form.job_title_id);
   const hasUnconfigured = jobTitles.some((j: any) => !j.configured);
 
+  // Job titles are scoped to their department. Show titles in the selected department, plus any
+  // that are unassigned (they stay postable anywhere until an admin scopes them).
+  const visibleTitles = jobTitles.filter((j: any) =>
+    !form.department_id || j.department_id == null || String(j.department_id) === form.department_id);
+
+  // Changing department drops a now-mismatched job title, so an illogical pair is never submitted.
+  const handleDepartmentChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const department_id = e.target.value;
+    setForm(prev => {
+      const stillValid = !prev.job_title_id || jobTitles.some((j: any) =>
+        String(j.id) === prev.job_title_id && (j.department_id == null || String(j.department_id) === department_id));
+      return { ...prev, department_id, job_title_id: stillValid ? prev.job_title_id : '' };
+    });
+  };
+
   // Warn before leaving with an unsaved, non-empty vacancy/JD draft (backfill prefill doesn't count).
   const dirty = !!form.job_title_id || !!form.department_id || !!form.property_id ||
     !!form.reporting_manager_id || form.description.trim() !== '' || form.positions !== '1';
@@ -141,7 +156,7 @@ export default function NewVacancyPage() {
             <select
               name="department_id"
               value={form.department_id}
-              onChange={handleChange}
+              onChange={handleDepartmentChange}
               className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
             >
               <option value="">Select department</option>
@@ -161,13 +176,19 @@ export default function NewVacancyPage() {
               className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
             >
               <option value="">Select job title</option>
-              {jobTitles.map((j: any) => (
+              {visibleTitles.map((j: any) => (
                 <option key={j.id} value={j.id} disabled={!j.configured}>
                   {j.title}{j.configured ? '' : ' — no salary structure'}
                 </option>
               ))}
             </select>
             {jErr && <FieldError onRetry={rJ} />}
+            {form.department_id && (
+              <p className="mt-1.5 text-xs text-secondary">
+                Showing titles in the selected department (plus any unassigned). Manage the mapping in{' '}
+                <a href="/admin/organization" className="text-primary hover:underline">Admin &rarr; Organization &rarr; Job Titles</a>.
+              </p>
+            )}
 
             {selectedTitle?.configured && (
               <div className="mt-2 flex items-center gap-2 rounded-lg bg-primary/5 border border-primary/20 px-3 py-2">

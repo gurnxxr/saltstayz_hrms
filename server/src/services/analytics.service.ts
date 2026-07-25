@@ -784,7 +784,9 @@ export async function getDashboardOverview() {
     .count('* as count')
     .first();
 
-  const totalCandidates = await db('candidates').count('* as count').first();
+  // Active pipeline only — a candidate archived on rejection has left recruitment, so
+  // counting them would make "Total Candidates" drift up and never come back down.
+  const totalCandidates = await db('candidates').where('archived', false).count('* as count').first();
 
   const recentHires = await db('employees')
     .where('is_active', true)

@@ -5,7 +5,7 @@ import AppShell from '@/components/layout/AppShell';
 import Breadcrumb from '@/components/ui/Breadcrumb';
 import { Building2, Layers, Briefcase, Tag, DollarSign, BadgeCheck, Hotel } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { PropertiesTab, SimpleListTab, PayGradesTab, DepartmentsTab } from '@/components/admin/OrgTabs';
+import { PropertiesTab, SimpleListTab, PayGradesTab, DepartmentsTab, JobTitlesTab } from '@/components/admin/OrgTabs';
 
 type Tab = 'properties' | 'property-categories' | 'departments' | 'job-titles' | 'categories' | 'pay-grades' | 'statuses';
 
@@ -50,7 +50,7 @@ export default function OrganizationPage() {
         {tab === 'properties' && <PropertiesTab />}
         {tab === 'property-categories' && <SimpleListTab endpoint="property-categories" label="Property Category" fieldName="name" queryKey="org-property-categories" />}
         {tab === 'departments' && <DepartmentsTab />}
-        {tab === 'job-titles' && <SimpleListTab endpoint="job-titles" label="Job Title" fieldName="title" queryKey="org-job-titles" />}
+        {tab === 'job-titles' && <JobTitlesTab />}
         {tab === 'categories' && <SimpleListTab endpoint="employee-categories" label="Category" fieldName="name" queryKey="org-categories" />}
         {tab === 'pay-grades' && <PayGradesTab />}
         {tab === 'statuses' && <SimpleListTab endpoint="employment-statuses" label="Status" fieldName="name" queryKey="org-statuses" />}

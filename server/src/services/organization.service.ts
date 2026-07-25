@@ -188,19 +188,61 @@ export async function deletePropertyCategory(id: number) {
 // ─── Job Titles ───
 
 export async function listJobTitles() {
-  return db('job_titles').orderBy('title');
+  return db('job_titles as jt')
+    .leftJoin('departments as d', 'd.id', 'jt.department_id')
+    .leftJoin('pay_grades as pg', 'pg.id', 'jt.pay_grade_id')
+    .select(
+      'jt.*',
+      'd.name as department_name',
+      // The role's salary band. Carried alongside the name so the Job Titles table can show
+      // the actual range without a second round-trip, and so an unassigned role is obvious.
+      'pg.name as pay_grade_name',
+      'pg.min_salary as pay_grade_min',
+      'pg.max_salary as pay_grade_max',
+    )
+    .orderBy('jt.title');
 }
 
-export async function createJobTitle(data: { title: string; description?: string }) {
+// A blank/absent department means "unassigned" (NULL). A provided id must exist.
+async function resolveDeptId(v: number | string | null | undefined): Promise<number | null> {
+  if (v == null || v === '') return null;
+  const id = Number(v);
+  if (!Number.isInteger(id) || id <= 0) throw new ValidationError('Invalid department');
+  const dept = await db('departments').where('id', id).first();
+  if (!dept) throw new ValidationError('Selected department does not exist');
+  return id;
+}
+
+// A blank/absent pay grade means "unassigned" (NULL) — and an unassigned role has no approved
+// salary ceiling, so offers for it need admin approval. A provided id must exist.
+async function resolvePayGradeId(v: number | string | null | undefined): Promise<number | null> {
+  if (v == null || v === '') return null;
+  const id = Number(v);
+  if (!Number.isInteger(id) || id <= 0) throw new ValidationError('Invalid pay grade');
+  const grade = await db('pay_grades').where('id', id).first();
+  if (!grade) throw new ValidationError('Selected pay grade does not exist');
+  return id;
+}
+
+export async function createJobTitle(data: { title: string; description?: string; department_id?: number | string | null; pay_grade_id?: number | string | null }) {
   if (!data.title?.trim()) throw new ValidationError('Job title is required');
-  const [{ id }] = await db('job_titles').insert(data).returning('id');
+  const department_id = await resolveDeptId(data.department_id);
+  const pay_grade_id = await resolvePayGradeId(data.pay_grade_id);
+  const [{ id }] = await db('job_titles')
+    .insert({ title: data.title.trim(), description: data.description ?? null, department_id, pay_grade_id })
+    .returning('id');
   return db('job_titles').where('id', id).first();
 }
 
-export async function updateJobTitle(id: number, data: Partial<{ title: string; description: string }>) {
+export async function updateJobTitle(id: number, data: Partial<{ title: string; description: string; department_id: number | string | null; pay_grade_id: number | string | null }>) {
   const row = await db('job_titles').where('id', id).first();
   if (!row) throw new NotFoundError('Job title');
-  await db('job_titles').where('id', id).update({ ...data, updated_at: db.fn.now() });
+  const patch: Record<string, unknown> = { updated_at: db.fn.now() };
+  if (data.title !== undefined) patch.title = String(data.title).trim();
+  if (data.description !== undefined) patch.description = data.description;
+  if ('department_id' in data) patch.department_id = await resolveDeptId(data.department_id);
+  if ('pay_grade_id' in data) patch.pay_grade_id = await resolvePayGradeId(data.pay_grade_id);
+  await db('job_titles').where('id', id).update(patch);
   return db('job_titles').where('id', id).first();
 }
 
@@ -242,7 +284,15 @@ export async function deleteCategory(id: number) {
 // ─── Pay Grades ───
 
 export async function listPayGrades() {
-  return db('pay_grades').orderBy('name');
+  // Carries how many roles sit in each grade, so the Pay Grades screen shows the band ladder
+  // AND its usage — a grade nothing is assigned to is visible as such rather than looking live.
+  // Ordered by the band itself: reading grades in salary order is how the ladder makes sense.
+  return db('pay_grades as pg')
+    .leftJoin('job_titles as jt', 'jt.pay_grade_id', 'pg.id')
+    .groupBy('pg.id')
+    .select('pg.*')
+    .count({ role_count: 'jt.id' })
+    .orderBy([{ column: 'pg.min_salary' }, { column: 'pg.name' }]);
 }
 
 export async function createPayGrade(data: { name: string; min_salary?: number; max_salary?: number }) {

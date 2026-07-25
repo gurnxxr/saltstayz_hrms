@@ -145,13 +145,14 @@ export async function getVacancy(id: number) {
  * can't be posted until Admin sets up their salary structure.
  */
 export async function listPostableJobTitles() {
-  const titles = await db('job_titles').select('id', 'title').orderBy('title');
+  const titles = await db('job_titles').select('id', 'title', 'department_id').orderBy('title');
   return Promise.all(
     titles.map(async (t: any) => {
       const range = await getCtcRange(t.id);
       return {
         id: t.id,
         title: t.title,
+        department_id: t.department_id ?? null,
         configured: range.configured,
         ctc_label: range.label,
         monthly_ctc: range.monthly_ctc,
@@ -188,6 +189,13 @@ export async function createVacancy(data: {
     throw new ValidationError('Reporting manager is required.');
   }
 
+  // The chosen job title must belong to the chosen department (or be unassigned). Stops illogical
+  // postings like Security + Housekeeping Attendant; the form filters titles to match.
+  const jt = await db('job_titles').where('id', data.job_title_id).select('title', 'department_id').first();
+  if (jt?.department_id != null && Number(jt.department_id) !== Number(data.department_id)) {
+    throw new ValidationError(`"${jt.title}" isn't in the selected department. Choose a job title from that department, or reassign it in Admin → Organization → Job Titles.`);
+  }
+
   // Manpower & Budget Control checks: can't post beyond sanctioned headcount, and
   // the role's CTC can't exceed the sanctioned salary band for this property.
   const ctx = await getVacancySanctionContext(data.property_id, data.job_title_id);
@@ -207,7 +215,9 @@ export async function createVacancy(data: {
     );
   }
 
-  const [{ id }] = await db('vacancies').insert(data).returning('id');
+  // A new vacancy starts at step 1 of the funnel ('new_role'). The DB column default is the
+  // legacy 'open', which matches no status filter tab (new_role/listed/closed), so set it here.
+  const [{ id }] = await db('vacancies').insert({ ...data, status: 'new_role' }).returning('id');
   return getVacancy(id);
 }
 
