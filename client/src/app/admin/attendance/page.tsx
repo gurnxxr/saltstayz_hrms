@@ -17,11 +17,12 @@ const fmtDateTime = (s?: string) => {
   return isNaN(d.getTime()) ? s : d.toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 };
 
-type StatusFilter = '' | 'present' | 'absent' | 'half_day' | 'short_punch' | 'miss_punch' | 'on_leave' | 'unmarked';
+type StatusFilter = '' | 'present' | 'absent' | 'half_day' | 'hhd' | 'short_punch' | 'miss_punch' | 'no_punch' | 'on_leave' | 'unmarked';
 
 export default function AdminAttendancePage() {
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
+  const gridRef = useRef<HTMLInputElement>(null);
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10));
   const [expandedProperty, setExpandedProperty] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('');
@@ -78,6 +79,32 @@ export default function AdminAttendancePage() {
     if (fileRef.current) fileRef.current.value = '';
   }
 
+  // Marked-grid dashboard upload (wide sheet of day-codes). The month for bare
+  // day-number headers comes from the selected date, so HR uploads the sheet as-is.
+  const gridMutation = useMutation({
+    mutationFn: (file: File) => {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('month', selectedDate.slice(0, 7));
+      return api.post('/attendance/upload-grid', fd).then(r => r.data);
+    },
+    onSuccess: (data) => {
+      setUploadResult(data);
+      qc.invalidateQueries({ queryKey: ['attendance-property-summary'] });
+      qc.invalidateQueries({ queryKey: ['attendance-property-employees'] });
+      qc.invalidateQueries({ queryKey: ['attendance-dates'] });
+      qc.invalidateQueries({ queryKey: ['attendance-upload-logs'] });
+      toast.success(`${data.created + data.updated} day-marks processed`);
+    },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Grid upload failed'),
+  });
+
+  function handleGridUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (file) { setUploadResult(null); gridMutation.mutate(file); }
+    if (gridRef.current) gridRef.current.value = '';
+  }
+
   // Apply Shift Type auto-attendance thresholds (half-day/absent hours) to the
   // selected date's records. Also runs automatically every day for yesterday.
   const autoMarkMutation = useMutation({
@@ -97,10 +124,12 @@ export default function AdminAttendancePage() {
     present: a.present + p.present,
     absent: a.absent + p.absent,
     half_day: a.half_day + p.half_day,
+    hhd: a.hhd + (p.hhd || 0),
     short_punch: a.short_punch + (p.short_punch || 0),
     miss_punch: a.miss_punch + (p.miss_punch || 0),
+    no_punch: a.no_punch + (p.no_punch || 0),
     on_leave: a.on_leave + p.on_leave,
-  }), { total: 0, present: 0, absent: 0, half_day: 0, short_punch: 0, miss_punch: 0, on_leave: 0 });
+  }), { total: 0, present: 0, absent: 0, half_day: 0, hhd: 0, short_punch: 0, miss_punch: 0, no_punch: 0, on_leave: 0 });
 
   return (
     <AppShell>
@@ -119,7 +148,10 @@ export default function AdminAttendancePage() {
               <div>
                 <h3 className="text-sm font-semibold text-foreground">Upload Attendance File</h3>
                 <p className="text-xs text-secondary mt-0.5">
-                  CSV: Emp Code, Access Date (dd-mm-yy), First_In_time (hh:mm), Last_Out_time (hh:mm), Location (optional — property/site)
+                  <span className="font-medium">Punch CSV:</span> Emp Code, Access Date (dd-mm-yy), First_In_time, Last_Out_time, Location (optional)
+                </p>
+                <p className="text-xs text-secondary mt-0.5">
+                  <span className="font-medium">Marked grid (.xlsx/.csv):</span> one row per employee, one column per date, cells coded P / NP / A / HD / SP / MP / HHD — imported for <span className="font-medium">{selectedDate.slice(0, 7)}</span>
                 </p>
               </div>
             </div>
@@ -137,10 +169,20 @@ export default function AdminAttendancePage() {
               <button
                 onClick={() => fileRef.current?.click()}
                 disabled={uploadMutation.isPending}
-                className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+                className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted disabled:opacity-50"
               >
                 <Upload size={16} />
-                {uploadMutation.isPending ? 'Processing...' : 'Upload CSV'}
+                {uploadMutation.isPending ? 'Processing...' : 'Upload Punch CSV'}
+              </button>
+              <input ref={gridRef} type="file" accept=".xlsx,.xlsm,.csv" onChange={handleGridUpload} className="hidden" />
+              <button
+                onClick={() => gridRef.current?.click()}
+                disabled={gridMutation.isPending}
+                title="Import HR's marked attendance dashboard for the selected month"
+                className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+              >
+                <FileSpreadsheet size={16} />
+                {gridMutation.isPending ? 'Importing…' : 'Upload Marked Grid'}
               </button>
             </div>
           </div>
@@ -156,7 +198,13 @@ export default function AdminAttendancePage() {
                 {uploadResult.skipped > 0 && <span className="text-yellow-600">{uploadResult.skipped} skipped</span>}
               </div>
               {uploadResult.unmatched?.length > 0 && (
-                <p className="text-xs text-red-600">Unmatched codes: {uploadResult.unmatched.join(', ')}</p>
+                <p className="text-xs text-red-600">Unmatched employee codes: {uploadResult.unmatched.join(', ')}</p>
+              )}
+              {uploadResult.unrecognized?.length > 0 && (
+                <p className="text-xs text-amber-600">Unrecognised marks (ignored): {uploadResult.unrecognized.join(', ')}</p>
+              )}
+              {uploadResult.locked_months?.length > 0 && (
+                <p className="text-xs text-yellow-600">Skipped locked month(s): {uploadResult.locked_months.join(', ')}</p>
               )}
             </div>
           )}
@@ -353,8 +401,10 @@ export default function AdminAttendancePage() {
                           { value: 'present' as StatusFilter, label: 'Present' },
                           { value: 'absent' as StatusFilter, label: 'Absent' },
                           { value: 'half_day' as StatusFilter, label: 'Half Day' },
+                          { value: 'hhd' as StatusFilter, label: 'HHD' },
                           { value: 'short_punch' as StatusFilter, label: 'Short Punch' },
                           { value: 'miss_punch' as StatusFilter, label: 'Miss Punch' },
+                          { value: 'no_punch' as StatusFilter, label: 'No Punch' },
                           { value: 'on_leave' as StatusFilter, label: 'On Leave' },
                           { value: 'unmarked' as StatusFilter, label: 'Unmarked' },
                         ]).map(opt => (
@@ -448,16 +498,20 @@ function StatusBadge({ status }: { status: string | null }) {
     present: 'bg-green-100 text-green-700',
     absent: 'bg-red-100 text-red-700',
     half_day: 'bg-yellow-100 text-yellow-700',
+    hhd: 'bg-lime-100 text-lime-700',
     short_punch: 'bg-amber-100 text-amber-700',
     miss_punch: 'bg-orange-100 text-orange-700',
+    no_punch: 'bg-purple-100 text-purple-700',
     on_leave: 'bg-blue-100 text-blue-700',
   };
   const labels: Record<string, string> = {
     present: 'Present',
     absent: 'Absent',
     half_day: 'Half Day',
+    hhd: 'HHD',
     short_punch: 'Short Punch',
     miss_punch: 'Miss Punch',
+    no_punch: 'No Punch',
     on_leave: 'On Leave',
   };
   return (

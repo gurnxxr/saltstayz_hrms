@@ -202,6 +202,9 @@ export default function AttendanceCalendar() {
                     } else if (record.status === 'miss_punch') {
                       badge = 'MP'; badgeBg = 'bg-orange-100'; badgeText = 'text-orange-700';
                       tooltip = 'Miss Punch — marked only once'; statusLabel = 'Miss Punch — marked only once';
+                    } else if (record.status === 'no_punch') {
+                      badge = 'NP'; badgeBg = 'bg-purple-100'; badgeText = 'text-purple-700';
+                      tooltip = 'No Punch — no biometric record'; statusLabel = 'No Punch — no biometric record';
                     } else if (record.status === 'on_leave') {
                       badge = 'L'; badgeBg = 'bg-blue-100'; badgeText = 'text-blue-700'; tooltip = 'On Leave'; statusLabel = 'On Leave';
                     }

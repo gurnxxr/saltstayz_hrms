@@ -262,7 +262,10 @@ export async function computeForEmployee(
  * calculated by rules that no longer exist in this codebase, so it can never be reproduced
  * by recomputing — it is always served from its stored snapshot instead. See migration 002.
  */
-export const CALC_VERSION = 2;
+// v3: attendance-code pay is now driven by the configurable Attendance Pay Rules table
+// (payableDays.service) rather than hardcoded fractions, and an approved regularisation pays the
+// day in full. Months paid under v2 keep their stored snapshots and are never recomputed.
+export const CALC_VERSION = 3;
 
 /** The stored snapshot for a locked month, or null when the month isn't locked. */
 async function lockedSnapshot(employeeId: number, month: number, year: number): Promise<ComputedPayslip | null> {

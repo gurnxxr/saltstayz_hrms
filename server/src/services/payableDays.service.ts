@@ -1,5 +1,6 @@
 import db from '../config/database';
 import { getPaySchedule } from './paySchedule.service';
+import { getAttendancePayRules } from './attendancePayRules.service';
 import { getEmployeeRegion } from './leave.service';
 import { getEmployeeLeaveRules } from './leaveTemplate.service';
 import { isOffDay, parseOffDayRules, pickAssignmentFor, shiftLengthHours } from './shiftPattern';
@@ -24,7 +25,7 @@ import type { AttendanceContext } from './payslip.calc';
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type DayStatus =
-  | 'present' | 'half_day' | 'hhd' | 'absent'
+  | 'present' | 'half_day' | 'hhd' | 'absent' | 'no_punch'
   | 'miss_punch' | 'short_punch'
   | 'paid_leave' | 'unpaid_leave'
   | 'unmarked' | 'future' | 'not_employed';
@@ -34,13 +35,14 @@ export interface DayTrace {
   kind: 'working' | 'weekly_off' | 'holiday' | 'not_employed';
   status: DayStatus | null;                       // null on non-working days
   lop: number;                                    // 0 | 0.5 | 1
+  leave_debit?: number;                           // paid-leave fraction the code consumes (e.g. Half Day → 0.5)
   holiday_name?: string;
   leave_type?: string;                            // leave category on a leave day
 }
 
 export interface PayableDays extends AttendanceContext {
   counts: {
-    present: number; half_day: number; hhd: number; absent: number;
+    present: number; half_day: number; hhd: number; absent: number; no_punch: number;
     miss_punch: number; short_punch: number;
     paid_leave: number; unpaid_leave: number; unmarked: number; future: number;
     not_employed: number;
@@ -49,6 +51,10 @@ export interface PayableDays extends AttendanceContext {
   holidays: number;
   scheduled_working_days: number; // actual scheduled working days (denominator basis)
   not_employed_days: number; // scheduled working days outside the employment span
+  // Paid-leave days a code's rule consumed (e.g. a Half Day = worked ½ + ½ leave). This is
+  // the leave a run should debit from the employee's balance; the engine only measures it,
+  // it does not mutate leave_entitlements (there is no leave-type on an attendance-marked day).
+  leave_debit_days: number;
   method: string;            // actual_days | fixed_days
   unmarked_policy: string;   // present | absent
   shift_driven: boolean;     // true when the calendar came from a shift's own off days
@@ -230,11 +236,13 @@ export async function computePayableDays(employeeId: number, month: number, year
   const schedule = await getPaySchedule();
   const holidaysPaid = (schedule as any).holidays_paid !== false;
   const unmarkedPolicy = (schedule as any).unmarked_day_policy === 'absent' ? 'absent' : 'present';
-  // Attendance policy (Phase 2)
-  const missAllowance = schedule.miss_punch_allowance;
-  const missLop = schedule.miss_punch_lop;
-  const shortLop = schedule.short_punch_lop;
-  let missPunchSeen = 0; // counted in date order — first N are free
+  // Per-code pay rules (Admin → Payroll → Attendance Pay Rules). lopFor(code) = 1 − pay_fraction.
+  const payRules = await getAttendancePayRules();
+  const lopFor = (code: string): number => {
+    const r = payRules.get(code);
+    return Math.round((1 - (r ? r.pay_fraction : 1)) * 100) / 100;
+  };
+  let missPunchSeen = 0; // miss punches counted in date order — first N are within allowance
 
   const periodDays = new Date(year, month, 0).getDate();
   const start = `${year}-${pad(month)}-01`;
@@ -247,8 +255,10 @@ export async function computePayableDays(employeeId: number, month: number, year
   const records = await db('attendance_records')
     .where('employee_id', employeeId)
     .whereBetween('date', [start, end])
-    .select('date', 'status');
+    .select('date', 'status', 'is_regularised');
   const statusByDate = new Map<string, string>(records.map((r: any) => [String(r.date).slice(0, 10), r.status]));
+  // An APPROVED regularisation pays the day in full, ahead of the code's rule and any leave.
+  const regularisedByDate = new Map<string, boolean>(records.map((r: any) => [String(r.date).slice(0, 10), !!r.is_regularised]));
 
   // Paid vs unpaid (Loss of Pay) now comes from the employee's assigned leave template,
   // not the global leave type — so two employees on different plans can classify the
@@ -273,13 +283,14 @@ export async function computePayableDays(employeeId: number, month: number, year
   };
 
   // ── Day-by-day classification ──
-  const counts = { present: 0, half_day: 0, hhd: 0, absent: 0, miss_punch: 0, short_punch: 0, paid_leave: 0, unpaid_leave: 0, unmarked: 0, future: 0, not_employed: 0 };
+  const counts = { present: 0, half_day: 0, hhd: 0, absent: 0, no_punch: 0, miss_punch: 0, short_punch: 0, paid_leave: 0, unpaid_leave: 0, unmarked: 0, future: 0, not_employed: 0 };
   const trace: DayTrace[] = [];
   let workingDays = 0;      // scheduled working days (denominator for actual_days)
   let weeklyOffs = 0;
   let holidayCount = 0;
   let notEmployedDays = 0;  // scheduled working days outside the employment span
   let lop = 0;
+  let leaveDebit = 0;       // paid-leave fraction codes consume (Half Day → ½), measured not mutated
   let shiftDriven = false; // true once any day in the month was decided by a shift's own off days
 
   for (let d = 1; d <= periodDays; d++) {
@@ -317,16 +328,26 @@ export async function computePayableDays(employeeId: number, month: number, year
 
     const leave = leaveOn(date);
     const status = statusByDate.get(date);
+    const regularised = regularisedByDate.get(date) === true;
     let dayStatus: DayStatus;
     let dayLop = 0;
 
-    if (status === 'present') {
+    if (regularised) {
+      // Approved regularisation → full pay, overriding the code's rule and any overlapping leave.
       dayStatus = 'present';
+    } else if (status === 'present') {
+      dayStatus = 'present'; dayLop = lopFor('present');
     } else if (status === 'half_day') {
-      dayStatus = 'half_day'; dayLop = 0.5;
+      dayStatus = 'half_day'; dayLop = lopFor('half_day');
     } else if (status === 'hhd') {
-      // Half-day holiday — a paid half day, same LOP treatment as a half day.
-      dayStatus = 'hhd'; dayLop = 0.5;
+      // Half-day holiday — pay per its configured rule (default half).
+      dayStatus = 'hhd'; dayLop = lopFor('hhd');
+    } else if (status === 'no_punch') {
+      // No biometric record — its own configurable code, distinct from Absent. Leave still wins.
+      if (leave) {
+        if (leave.paid) dayStatus = 'paid_leave';
+        else { dayStatus = 'unpaid_leave'; dayLop = 1; }
+      } else { dayStatus = 'no_punch'; dayLop = lopFor('no_punch'); }
     } else if (status === 'miss_punch') {
       // An approved leave governs the day even if a stray punch marked it a miss
       // punch (mirrors the absent branch). Otherwise: the first N miss punches a
@@ -336,7 +357,11 @@ export async function computePayableDays(employeeId: number, month: number, year
         else { dayStatus = 'unpaid_leave'; dayLop = 1; }
       } else {
         dayStatus = 'miss_punch';
-        dayLop = missPunchSeen < missAllowance ? 0 : missLop;
+        // First N a month are within allowance (pay per rule); beyond earns beyond_pay_fraction.
+        const mp = payRules.get('miss_punch');
+        const allowance = Number(mp?.config?.allowance ?? 0);
+        const beyondPay = Number(mp?.config?.beyond_pay_fraction ?? 0.5);
+        dayLop = missPunchSeen < allowance ? lopFor('miss_punch') : Math.round((1 - beyondPay) * 100) / 100;
         missPunchSeen += 1; // only genuine miss punches consume the allowance
       }
     } else if (status === 'short_punch') {
@@ -345,7 +370,7 @@ export async function computePayableDays(employeeId: number, month: number, year
         if (leave.paid) dayStatus = 'paid_leave';
         else { dayStatus = 'unpaid_leave'; dayLop = 1; }
       } else {
-        dayStatus = 'short_punch'; dayLop = shortLop;
+        dayStatus = 'short_punch'; dayLop = lopFor('short_punch');
       }
     } else if (status === 'on_leave') {
       if (leave && !leave.paid) { dayStatus = 'unpaid_leave'; dayLop = 1; }
@@ -355,7 +380,7 @@ export async function computePayableDays(employeeId: number, month: number, year
       if (leave) {
         if (leave.paid) dayStatus = 'paid_leave';
         else { dayStatus = 'unpaid_leave'; dayLop = 1; }
-      } else { dayStatus = 'absent'; dayLop = 1; }
+      } else { dayStatus = 'absent'; dayLop = lopFor('absent'); }
     } else {
       // No attendance record.
       if (leave) {
@@ -364,7 +389,7 @@ export async function computePayableDays(employeeId: number, month: number, year
       } else if (date > todayStr) {
         dayStatus = 'future'; // month still in progress — not yet payable info
       } else if (unmarkedPolicy === 'absent') {
-        dayStatus = 'unmarked'; dayLop = 1;
+        dayStatus = 'unmarked'; dayLop = lopFor('absent');
       } else {
         dayStatus = 'unmarked';
       }
@@ -372,9 +397,21 @@ export async function computePayableDays(employeeId: number, month: number, year
 
     counts[dayStatus] += 1;
     lop += dayLop;
+    // A code that "uses up" part of a paid leave (default: Half Day → ½). Only when the code's
+    // own rule governed the day — an approved regularisation or an overlapping leave takes over
+    // the day and no code-driven leave is consumed.
+    let dayLeaveDebit = 0;
+    if (!regularised && !leave) {
+      const rule = payRules.get(dayStatus);
+      if (rule && rule.deducts_leave_fraction > 0) { dayLeaveDebit = rule.deducts_leave_fraction; leaveDebit += dayLeaveDebit; }
+    }
     // Name the leave category on leave days so the four categories surface in the trace.
     const leaveName = (dayStatus === 'paid_leave' || dayStatus === 'unpaid_leave') ? leave?.name : undefined;
-    trace.push({ date, kind: 'working', status: dayStatus, lop: dayLop, ...(leaveName ? { leave_type: leaveName } : {}) });
+    trace.push({
+      date, kind: 'working', status: dayStatus, lop: dayLop,
+      ...(dayLeaveDebit > 0 ? { leave_debit: dayLeaveDebit } : {}),
+      ...(leaveName ? { leave_type: leaveName } : {}),
+    });
   }
 
   // fixed_days: salary divides over a fixed number of days (e.g. 30) regardless
@@ -395,6 +432,7 @@ export async function computePayableDays(employeeId: number, month: number, year
     scheduled_working_days: workingDays,
     lop_days: lop,
     not_employed_days: notEmployedDays,
+    leave_debit_days: round2(leaveDebit),
     payment_days: paymentDays,
     counts,
     weekly_offs: weeklyOffs,

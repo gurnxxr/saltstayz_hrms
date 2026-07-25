@@ -6,17 +6,23 @@ import { toast } from 'sonner';
 import api from '@/lib/api';
 import { X, Loader2 } from 'lucide-react';
 
-// Regularisation types the employee may pick (order shown in the form). "No Punch"
-// is paid as a full-day LOP, like Absent — the server maps these to attendance status.
-// Exported so the Regularisation page's list views label requests from the same source.
+// What the employee says the day actually WAS (order shown in the form). The server maps these
+// onto an attendance status and pays an approved request in full — so every option here has to
+// describe a day the person worked. "Absent" is deliberately absent from this list: asking to be
+// marked absent is not a correction, and it would have been a route to being paid for a day you
+// declared you did not work. Keep this in step with REG_TYPES in regularisation.service.ts.
 export const REG_TYPE_OPTIONS: [string, string][] = [
   ['np', 'No Punch'],
   ['mp', 'Miss Punch'],
   ['sp', 'Short Punch'],
-  ['absent', 'Absent'],
   ['present', 'Present'],
 ];
-export const TYPE_LABELS: Record<string, string> = Object.fromEntries(REG_TYPE_OPTIONS);
+// Labels for the list views. Includes retired types so historical requests still read correctly
+// rather than showing a raw code.
+export const TYPE_LABELS: Record<string, string> = {
+  ...Object.fromEntries(REG_TYPE_OPTIONS),
+  absent: 'Absent (no longer requestable)',
+};
 
 const inputCls = 'w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50';
 

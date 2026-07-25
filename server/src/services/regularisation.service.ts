@@ -25,15 +25,23 @@ const MONTHLY_LIMIT = 3;
 const MAX_RANGE_DAYS = 31;
 
 // Regularisation types the employee may pick, and how each maps onto the attendance
-// status vocabulary the payable-days engine understands. "No Punch" (np) is paid as
-// a full-day LOP, exactly like Absent — so no new payroll status is needed.
-const REG_TYPES = ['np', 'mp', 'sp', 'absent', 'present'] as const;
+// status vocabulary the payable-days engine understands. "No Punch" (np) is its own
+// status (no_punch) — a biometric record was simply missing, which is distinct from a
+// genuine Absent and is priced by its own configurable rule. Note that an *approved*
+// regularisation is paid in full regardless of the stored status (payableDays reads
+// is_regularised first); the status below is what the calendar and reports record.
+//
+// "Absent" is deliberately NOT requestable. Asking to be marked absent is not a correction, and
+// since an approved regularisation pays the day in full (see payableDays.service), it was a route
+// to being paid for a day you yourself declared you did not work. Every remaining type describes a
+// day the employee says they DID work, which is what makes the full-pay-on-approval rule sound.
+const REG_TYPES = ['np', 'mp', 'sp', 'present'] as const;
 type RegType = typeof REG_TYPES[number];
 const TYPE_TO_STATUS: Record<RegType, string> = {
-  present: 'present', absent: 'absent', np: 'absent', mp: 'miss_punch', sp: 'short_punch',
+  present: 'present', np: 'no_punch', mp: 'miss_punch', sp: 'short_punch',
 };
 const TYPE_LABELS: Record<RegType, string> = {
-  present: 'Present', absent: 'Absent', np: 'No Punch', mp: 'Miss Punch', sp: 'Short Punch',
+  present: 'Present', np: 'No Punch', mp: 'Miss Punch', sp: 'Short Punch',
 };
 
 const isStaff = (roleName: string) => STAFF_ROLES.includes(roleName);

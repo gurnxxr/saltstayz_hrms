@@ -151,6 +151,7 @@ export async function getMonthSummary(employeeId: number, month: string) {
       db.raw("SUM(CASE WHEN status = 'hhd' THEN 1 ELSE 0 END) as hhd"),
       db.raw("SUM(CASE WHEN status = 'miss_punch' THEN 1 ELSE 0 END) as miss_punch"),
       db.raw("SUM(CASE WHEN status = 'short_punch' THEN 1 ELSE 0 END) as short_punch"),
+      db.raw("SUM(CASE WHEN status = 'no_punch' THEN 1 ELSE 0 END) as no_punch"),
       db.raw("SUM(CASE WHEN status = 'on_leave' THEN 1 ELSE 0 END) as on_leave"),
       // working_hours is a float column; Postgres only defines round(numeric, int), so cast.
       db.raw("ROUND(AVG(working_hours)::numeric, 1) as avg_working_hours")
@@ -473,6 +474,7 @@ export async function getPropertySummary(date: string) {
       db.raw("SUM(CASE WHEN ar.status = 'hhd' THEN 1 ELSE 0 END) as hhd"),
       db.raw("SUM(CASE WHEN ar.status = 'miss_punch' THEN 1 ELSE 0 END) as miss_punch"),
       db.raw("SUM(CASE WHEN ar.status = 'short_punch' THEN 1 ELSE 0 END) as short_punch"),
+      db.raw("SUM(CASE WHEN ar.status = 'no_punch' THEN 1 ELSE 0 END) as no_punch"),
       db.raw("SUM(CASE WHEN ar.status = 'on_leave' THEN 1 ELSE 0 END) as on_leave"),
       // working_hours is a float column; Postgres only defines round(numeric, int), so cast.
       db.raw("ROUND(AVG(ar.working_hours)::numeric, 1) as avg_hours")
