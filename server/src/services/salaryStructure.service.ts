@@ -455,6 +455,8 @@ export async function listEmployeeSalary() {
     .select(
       'e.id as employee_id', 'e.employee_code', 'e.first_name', 'e.last_name',
       'e.branch_name', 'e.dept_name', 'jt.title as designation',
+      // Carried so callers can resolve the role's pay-grade band without a second lookup.
+      'e.job_title_id',
       'a.base', 'a.tds_amount',
       db.raw('CASE WHEN a.id IS NULL THEN 0 ELSE 1 END as configured'),
     )
@@ -526,9 +528,23 @@ export async function getSalaryOverview() {
   };
 
   const base = await listEmployeeSalary();
+
+  // Every role's pay-grade band, in one query, so each row can be judged against the band
+  // governing its designation without a lookup per employee.
+  const gradeRows = await db('job_titles as jt')
+    .leftJoin('pay_grades as pg', 'pg.id', 'jt.pay_grade_id')
+    .select('jt.id', 'jt.pay_grade_id', 'pg.name as pay_grade_name', 'pg.min_salary', 'pg.max_salary');
+  const bandByTitle = new Map<number, { name: string | null; min: number; max: number }>(
+    gradeRows
+      .filter((g: any) => g.pay_grade_id != null && Number(g.max_salary) > 0)
+      .map((g: any) => [g.id, { name: g.pay_grade_name ?? null, min: Number(g.min_salary) || 0, max: Number(g.max_salary) || 0 }]),
+  );
+
   const rows: any[] = [];
   const totals: Record<string, number> = {};
   let configured = 0;
+  let out_of_band = 0;
+  let ungraded = 0;
 
   for (const r of base) {
     const row: any = {
@@ -566,10 +582,39 @@ export async function getSalaryOverview() {
         for (const col of columns) totals[col.key] = (totals[col.key] ?? 0) + (v[col.key] ?? 0);
       } catch { /* leave values empty for a structure that can't resolve */ }
     }
+
+    // Is this person's CTC inside the band their ROLE's pay grade allows? Compared against the
+    // computed Total CTC above — the same figure the row displays — not against the structure's
+    // base, which sits ~9% below CTC and would misjudge anyone near a boundary.
+    const band = r.job_title_id != null ? bandByTitle.get(r.job_title_id) : undefined;
+    const ctc = row.values.ctc;
+    row.pay_grade_name = band?.name ?? null;
+    row.pay_grade_min = band?.min ?? null;
+    row.pay_grade_max = band?.max ?? null;
+    if (!band) {
+      // No grade on the role: not a breach, but not verifiable either. Called out separately so
+      // an ungraded role reads as "unchecked" rather than quietly passing as compliant.
+      row.band_status = 'ungraded';
+      if (row.configured) ungraded += 1;
+    } else if (ctc == null) {
+      row.band_status = 'unknown';           // no resolvable structure, nothing to compare
+    } else if (ctc > band.max) {
+      row.band_status = 'above';
+      row.band_variance = Math.round(ctc - band.max);
+      out_of_band += 1;
+    } else if (band.min > 0 && ctc < band.min) {
+      // Below the floor is flagged but never blocks — only above-max needs approval.
+      row.band_status = 'below';
+      row.band_variance = Math.round(band.min - ctc);
+      out_of_band += 1;
+    } else {
+      row.band_status = 'in';
+    }
+
     rows.push(row);
   }
 
-  return { columns, rows, totals, configured, total_employees: rows.length };
+  return { columns, rows, totals, configured, total_employees: rows.length, out_of_band, ungraded };
 }
 
 /** An employee's full salary config (lines + base + TDS + city) with a live breakdown. */
