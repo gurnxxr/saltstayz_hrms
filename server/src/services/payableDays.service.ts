@@ -64,6 +64,22 @@ export interface PayableDays extends AttendanceContext {
 const pad = (n: number) => String(n).padStart(2, '0');
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+/**
+ * Statuses that an approved regularisation must NOT pay in full.
+ *
+ * A regularisation pays the day outright because every status an employee can now ask for
+ * describes a day they say they DID work — a missed punch, a short punch, a missing biometric
+ * record. "Absent" is not a correction of that kind: it is the employee stating they did not
+ * work, so paying it in full would pay for a day they themselves disclaimed.
+ *
+ * Asking to be marked absent was removed upstream (see regularisation.service), but rows
+ * approved before that change still exist and migration 019 deliberately left them alone rather
+ * than rewriting history. This is the guard that stops those legacy rows quietly paying out on
+ * any month not yet locked. `on_leave` is listed for the same reason: a leave day's pay is the
+ * leave module's decision, not a by-product of someone having corrected the record.
+ */
+const NEVER_PAID_ON_REGULARISATION = new Set(['absent', 'on_leave']);
+
 const dowOf = (date: string): number => {
   const [y, m, d] = date.split('-').map(Number);
   return new Date(y, m - 1, d).getDay();
@@ -332,7 +348,7 @@ export async function computePayableDays(employeeId: number, month: number, year
     let dayStatus: DayStatus;
     let dayLop = 0;
 
-    if (regularised) {
+    if (regularised && !NEVER_PAID_ON_REGULARISATION.has(status ?? '')) {
       // Approved regularisation → full pay, overriding the code's rule and any overlapping leave.
       dayStatus = 'present';
     } else if (status === 'present') {
