@@ -3,7 +3,7 @@ import db from '../config/database';
 import { nextJobId } from '../utils/jobId';
 import { ValidationError } from '../utils/errors';
 import { getDefaultTemplateId } from './leaveTemplate.service';
-import { computePropertyBudget } from './manpower.service';
+import { computePropertyBudget, getRoleBand } from './manpower.service';
 import { advisoryXactLock, LOCK } from '../utils/locks';
 import { buildCsv } from '../utils/csv';
 
@@ -252,11 +252,16 @@ async function assertImportWithinCap(trx: Knex.Transaction, data: any): Promise<
       );
     }
     if (data.job_title_id) {
-      const rs = await trx('manpower_sanctions').where({ property_id: prop.id, job_title_id: data.job_title_id }).first();
-      const bandMax = rs ? Number(rs.band_max) : 0;
-      if (bandMax > 0 && ctc > bandMax) {
+      // The ceiling is the role's pay grade (one band per role company-wide), not the
+      // old per-property cap. Left permissive when the role has no grade: the hiring
+      // chokepoint (manpower.assertHireAllowed) is what refuses an ungraded role, and
+      // duplicating that refusal here would reject a direct create with a message that
+      // points at the wrong screen.
+      const band = await getRoleBand(data.job_title_id);
+      if (band.configured && ctc > band.band_max) {
+        const grade = band.pay_grade_name ? ` (${band.pay_grade_name})` : '';
         throw new ValidationError(
-          `₹${ctc.toLocaleString('en-IN')}/month is above the approved maximum of ₹${bandMax.toLocaleString('en-IN')} for that role at ${prop.name}.`,
+          `₹${ctc.toLocaleString('en-IN')}/month is above the pay-grade maximum of ₹${band.band_max.toLocaleString('en-IN')} for that role${grade}.`,
         );
       }
     }

@@ -90,6 +90,8 @@ export interface Availability {
   sanctioned_budget_monthly: number;
   band_min: number;
   band_max: number;
+  /** The pay grade the band came from, for display. Null when the role has none set. */
+  pay_grade_name?: string | null;
   committed_amount: number;
   non_left_headcount: number;
   remaining_budget: number;
@@ -242,19 +244,40 @@ export async function computePropertyBudget(propertyId: number, trx?: Knex.Trans
 
 /**
  * Availability for a single hire: budget + headcount caps come from the PROPERTY
- * total; the salary band comes from the per-role sanction. The suggestion reserves
+ * total; the salary band comes from the ROLE'S PAY GRADE. The suggestion reserves
  * band_min for the other open property slots.
+ *
+ * The band used to come from `manpower_sanctions.band_min/band_max`, one cap per
+ * property × role. It is now the role's pay grade, which is one band per role
+ * everywhere — so a Front Desk Executive is held to the same ceiling at every
+ * property instead of a figure that had to be re-entered per hotel and silently
+ * allowed anything where nobody had entered one.
+ *
+ * This is the ONLY place the band is read, so re-pointing it here moves every
+ * guarded path at once: direct hire, employee CSV import, recruitment offer
+ * release, and vacancy creation. Headcount and budget are untouched — they still
+ * come from computePropertyBudget, which rolls up `manpower_sanctions`, which is
+ * why that table stays.
  */
 export async function computeAvailability(propertyId: number, jobTitleId: number, trx?: Knex.Transaction, opts?: { excludeCandidateId?: number }): Promise<Availability> {
   const cx = trx || db;
-  const jt = await cx('job_titles').where('id', jobTitleId).first();
+  const jt = await cx('job_titles as jt')
+    .leftJoin('pay_grades as pg', 'pg.id', 'jt.pay_grade_id')
+    .where('jt.id', jobTitleId)
+    .select('jt.title', 'jt.pay_grade_id', 'pg.name as pay_grade_name', 'pg.min_salary', 'pg.max_salary')
+    .first();
   if (!jt) throw new NotFoundError('Role');
 
   const pb = await computePropertyBudget(propertyId, trx, opts);
+  // Still read for `is_locked` only — that flag locks the role's HEADCOUNT sanction,
+  // which has nothing to do with the salary band.
   const roleSanction = await cx('manpower_sanctions').where({ property_id: propertyId, job_title_id: jobTitleId }).first();
-  const band_min = roleSanction ? Number(roleSanction.band_min) : 0;
-  const band_max = roleSanction ? Number(roleSanction.band_max) : 0;
-  const band_configured = !!roleSanction && band_max > 0;
+  const band_min = Number(jt.min_salary) || 0;
+  const band_max = Number(jt.max_salary) || 0;
+  // A role with no pay grade has no approved ceiling, so it is NOT configured and
+  // hiring into it is blocked until an admin assigns a grade. Treating "unset" as
+  // "unlimited" would make an ungraded role the way to bypass the ceiling entirely.
+  const band_configured = jt.pay_grade_id != null && band_max > 0;
 
   // PIP positions are backfillable — grant a slot + budget allowance so HR can hire
   // a backup for each PIP employee (who still shows as committed in the displays).
@@ -274,6 +297,7 @@ export async function computeAvailability(propertyId: number, jobTitleId: number
     sanctioned_headcount: pb.sanctioned_headcount,
     sanctioned_budget_monthly: pb.sanctioned_budget_monthly,
     band_min, band_max,
+    pay_grade_name: jt.pay_grade_name ?? null,
     committed_amount: pb.committed_amount,
     non_left_headcount: pb.filled_headcount,
     remaining_budget,
@@ -299,8 +323,9 @@ export function evaluateGuardrail(a: Availability, ctc: number, opts?: { skipHea
       message: `No open slots — ${a.non_left_headcount}/${a.sanctioned_headcount} filled for ${a.job_title} at ${a.property_name} (pending offers included).` };
   }
   if (ctc > a.band_max) {
+    const grade = a.pay_grade_name ? ` (${a.pay_grade_name})` : '';
     return { exception_type: 'over_band', variance_amount: round2(ctc - a.band_max),
-      message: `₹${ctc.toLocaleString('en-IN')} is ₹${round2(ctc - a.band_max).toLocaleString('en-IN')}/month above the approved maximum of ₹${a.band_max.toLocaleString('en-IN')} for ${a.job_title}.` };
+      message: `₹${ctc.toLocaleString('en-IN')} is ₹${round2(ctc - a.band_max).toLocaleString('en-IN')}/month above the pay-grade maximum of ₹${a.band_max.toLocaleString('en-IN')} for ${a.job_title}${grade}.` };
   }
   if (ctc > a.remaining_budget) {
     return { exception_type: 'over_budget', variance_amount: round2(ctc - a.remaining_budget),
@@ -331,7 +356,7 @@ export async function assertHireAllowed(
     failure = new GuardrailError('No sanctioned budget/headcount is set for this property — an Admin must set it in Admin → Budget Control before hiring.',
       { exception_type: 'over_budget', variance_amount: 0, availability: a, requested_ctc: ctc });
   } else if (!a.band_configured) {
-    failure = new GuardrailError('No approved salary cap is set for this role at this property — an Admin must set it before an offer/hire.',
+    failure = new GuardrailError(`No pay grade is set for ${a.job_title} — an Admin must assign one in Admin → Organization → Job Titles before an offer/hire.`,
       { exception_type: 'over_band', variance_amount: 0, availability: a, requested_ctc: ctc });
   } else {
     const block = evaluateGuardrail(a, ctc, { skipHeadcount: opts?.skipHeadcount });
@@ -1242,22 +1267,41 @@ export async function setDepartmentWorkers(propertyId: number, department: strin
 
 // ─── Recruitment integration: vacancy headcount + salary-band checks ───
 
-export interface RoleBand { configured: boolean; band_min: number; band_max: number; }
+export interface RoleBand { configured: boolean; band_min: number; band_max: number; pay_grade_name?: string | null; }
 
-export async function getRoleBand(propertyId: number, jobTitleId: number): Promise<RoleBand> {
-  const s = await db('manpower_sanctions').where({ property_id: propertyId, job_title_id: jobTitleId }).first();
-  const band_max = s ? Number(s.band_max) : 0;
-  const band_min = s ? Number(s.band_min) : 0;
-  return { configured: !!s && band_max > 0, band_min, band_max };
+/**
+ * A role's salary band, from its pay grade.
+ *
+ * Takes no property: the band is one per role for the whole company. It used to be
+ * per property × role out of `manpower_sanctions`, which meant the same job could
+ * carry a different ceiling at each hotel — or, far more often, none at all,
+ * because a cap had to be typed in per property before it bound anything.
+ */
+export async function getRoleBand(jobTitleId: number): Promise<RoleBand> {
+  const r = await db('job_titles as jt')
+    .leftJoin('pay_grades as pg', 'pg.id', 'jt.pay_grade_id')
+    .where('jt.id', jobTitleId)
+    .select('jt.pay_grade_id', 'pg.name as pay_grade_name', 'pg.min_salary', 'pg.max_salary')
+    .first();
+  const band_max = Number(r?.max_salary) || 0;
+  const band_min = Number(r?.min_salary) || 0;
+  return {
+    configured: !!r?.pay_grade_id && band_max > 0,
+    band_min,
+    band_max,
+    pay_grade_name: r?.pay_grade_name ?? null,
+  };
 }
 
-/** The sanctioned salary band for an employee, resolved via their property (branch_name) + role. */
+/**
+ * The salary band governing an employee, i.e. their role's pay grade. No longer needs
+ * their property — the band is global — so an employee at a property that isn't in the
+ * `properties` table is no longer silently unbanded.
+ */
 export async function getBandForEmployee(employeeId: number): Promise<RoleBand> {
-  const emp = await db('employees').where('id', employeeId).first();
-  if (!emp?.job_title_id || !emp?.branch_name) return { configured: false, band_min: 0, band_max: 0 };
-  const prop = await db('properties').where('name', emp.branch_name).first();
-  if (!prop) return { configured: false, band_min: 0, band_max: 0 };
-  return getRoleBand(prop.id, emp.job_title_id);
+  const emp = await db('employees').where('id', employeeId).select('job_title_id').first();
+  if (!emp?.job_title_id) return { configured: false, band_min: 0, band_max: 0, pay_grade_name: null };
+  return getRoleBand(emp.job_title_id);
 }
 
 /**
@@ -1269,7 +1313,7 @@ export async function getVacancySanctionContext(propertyId: number, jobTitleId: 
   const pb = await computePropertyBudget(propertyId);
   const openVacs = await db('vacancies').where('property_id', propertyId).whereIn('status', LIVE_VACANCY_STATUSES).select('positions', 'filled');
   const open_vacancy_demand = openVacs.reduce((s: number, v: any) => s + Math.max(0, Number(v.positions || 0) - Number(v.filled || 0)), 0);
-  const band = await getRoleBand(propertyId, jobTitleId);
+  const band = await getRoleBand(jobTitleId);
   // Each PIP employee frees a backup slot (their position is backfillable).
   const pip = await propertyPipBackfill(db, pb.property_name);
   return {

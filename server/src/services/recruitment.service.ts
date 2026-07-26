@@ -879,7 +879,7 @@ export async function listOfferComponents() {
 export async function getOfferDefaults(candidateId: number) {
   const c = await offerContext(candidateId);
   const range = await getCtcRange(c.job_title_id);
-  const band = await getRoleBand(c.property_id, c.job_title_id);
+  const band = await getRoleBand(c.job_title_id);
   const structure = await getStructureByJobTitle(c.job_title_id);
   const issued = await db('offer_letters').where('candidate_id', candidateId).first();
   const issuedTpl = issued
@@ -919,7 +919,7 @@ export async function getOfferBreakdown(candidateId: number, baseGross: number, 
   const c = await offerContext(candidateId);
   const ob = await breakdownFor(c.job_title_id, baseGross, c.property_state, lines);
   if (!ob) throw new ValidationError('This designation has no salary structure — configure one first.');
-  const band = await getRoleBand(c.property_id, c.job_title_id);
+  const band = await getRoleBand(c.job_title_id);
   return { ...ob, band_max: band.configured ? band.band_max : null };
 }
 
