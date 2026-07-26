@@ -7,11 +7,14 @@ import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { allowedNextStages } from '@/lib/constants';
+import {
+  CANDIDATE_QUERY_KEYS, FUNNEL_ORDER, OFF_RAMPS, STAGE_COLORS, STAGE_LABELS, allowedNextStages,
+} from '@/lib/constants';
 import { formatDate } from '@/lib/utils';
 import Breadcrumb from '@/components/ui/Breadcrumb';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
-import { Plus, User, Eye, Archive, Users, FileText, Download, Loader2, Pencil, ArrowRight, PauseCircle, PlayCircle } from 'lucide-react';
+import AddApplicantDialog from '@/components/recruitment/AddApplicantDialog';
+import { UserPlus, User, Eye, Archive, Users, FileText, Download, Loader2, Pencil, ArrowRight, PauseCircle, PlayCircle } from 'lucide-react';
 
 const EMPLOYMENT_TYPES = ['Full-time', 'Part-time', 'Contract', 'Internship'];
 
@@ -24,18 +27,17 @@ const emptyJd = {
   experience: '', employment_type: 'Full-time', reporting_to: '',
 };
 
-const ACTIVE_STAGES = ['screening', 'interview', 'shortlisted', 'offered'] as const;
-const STAGE_LABELS: Record<string, string> = {
-  screening: 'Screening', interview: 'Interview', shortlisted: 'Shortlisted',
-  offered: 'Offered', rejected: 'Rejected',
-};
-const STAGE_COLORS: Record<string, string> = {
-  screening: 'bg-gray-100 text-gray-700',
-  interview: 'bg-blue-100 text-blue-700',
-  shortlisted: 'bg-purple-100 text-purple-700',
-  offered: 'bg-green-100 text-green-700',
-  rejected: 'bg-red-100 text-red-700',
-};
+const isOffRamp = (stage: string) => (OFF_RAMPS as readonly string[]).includes(stage);
+
+// Offer release, acceptance, decline and the final transfer all carry side effects and
+// have their own entry points on the candidate page — the server refuses them from a bare
+// stage change, so this table doesn't offer them. "View" is the way to reach those.
+const STAGE_MOVE_NEEDS_CANDIDATE_PAGE = ['offer_released', 'offer_accepted', 'offer_declined', 'transferred'];
+const inlineNextStages = (from: string) =>
+  allowedNextStages(from).filter(s => !STAGE_MOVE_NEEDS_CANDIDATE_PAGE.includes(s));
+
+// Steps 9-11 live in the Joining Queue.
+const JOINING_QUEUE_STAGES = ['pre_joining', 'joining', 'transferred'];
 
 export default function VacancyDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -43,9 +45,11 @@ export default function VacancyDetailPage({ params }: { params: Promise<{ id: st
   const queryClient = useQueryClient();
   const { can } = useAuth();
   const canEdit = can('recruitment', 'update');
+  // Adding an applicant is a create, not an update — the endpoint requires
+  // recruitment:create, so the button has to check the same thing.
+  const canCreate = can('recruitment', 'create');
 
-  const [showAddCandidate, setShowAddCandidate] = useState(false);
-  const [candidateForm, setCandidateForm] = useState({ name: '', email: '', phone: '', notes: '' });
+  const [showAddApplicant, setShowAddApplicant] = useState(false);
   const [statusEdit, setStatusEdit] = useState(false);
   const [newStatus, setNewStatus] = useState('');
   const [showArchived, setShowArchived] = useState(false);
@@ -68,29 +72,11 @@ export default function VacancyDetailPage({ params }: { params: Promise<{ id: st
     queryFn: () => api.get(`/recruitment/candidates?vacancy_id=${id}&archived=true`).then(r => r.data),
   });
 
+  // Every candidate view, plus the onboarding surfaces a stage move can feed.
   const invalidateAll = () => {
-    queryClient.invalidateQueries({ queryKey: ['vacancy-candidates', id] });
-    queryClient.invalidateQueries({ queryKey: ['vacancy-candidates-archived', id] });
-    queryClient.invalidateQueries({ queryKey: ['vacancy', id] });
-    queryClient.invalidateQueries({ queryKey: ['vacancies'] });
-    queryClient.invalidateQueries({ queryKey: ['vacancy-stats'] });
-    queryClient.invalidateQueries({ queryKey: ['candidates-by-stage'] });
-    queryClient.invalidateQueries({ queryKey: ['onboarding-stats'] });
-    queryClient.invalidateQueries({ queryKey: ['onboarding-checklists'] });
-    queryClient.invalidateQueries({ queryKey: ['offer-candidates'] });
+    [...CANDIDATE_QUERY_KEYS, 'onboarding-stats', 'onboarding-checklists', 'offer-candidates']
+      .forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
   };
-
-  const addCandidateMutation = useMutation({
-    mutationFn: (data: typeof candidateForm) =>
-      api.post('/recruitment/candidates', { ...data, vacancy_id: Number(id) }),
-    onSuccess: () => {
-      invalidateAll();
-      toast.success('Candidate added');
-      setCandidateForm({ name: '', email: '', phone: '', notes: '' });
-      setShowAddCandidate(false);
-    },
-    onError: () => toast.error('Failed to add candidate'),
-  });
 
   const updateStatusMutation = useMutation({
     mutationFn: (status: string) => api.put(`/recruitment/vacancies/${id}`, { status }),
@@ -109,12 +95,12 @@ export default function VacancyDetailPage({ params }: { params: Promise<{ id: st
     onSuccess: (_d, { stage }) => {
       invalidateAll();
       setStageConfirm(null);
-      if (stage === 'offered') {
-        toast.success('Candidate offered — moved to Onboarding', {
-          action: { label: 'Go to Onboarding', onClick: () => router.push('/recruitment/joining') },
+      if (JOINING_QUEUE_STAGES.includes(stage)) {
+        toast.success(`Moved to ${STAGE_LABELS[stage]} — now in the Joining Queue`, {
+          action: { label: 'Go to Joining Queue', onClick: () => router.push('/recruitment/joining') },
         });
-      } else if (stage === 'rejected') toast.success('Candidate rejected and archived');
-      else toast.success('Stage updated');
+      } else if (isOffRamp(stage)) toast.success(`${STAGE_LABELS[stage]} — application archived`);
+      else toast.success(`Moved to ${STAGE_LABELS[stage] || stage}`);
     },
     onError: (err: any) => toast.error(err.response?.data?.error || 'Failed to update stage'),
   });
@@ -170,9 +156,9 @@ export default function VacancyDetailPage({ params }: { params: Promise<{ id: st
 
   function handleStageChange(c: any, stage: string) {
     if (stage === c.stage) return;
-    // Offered / Rejected are consequential and terminal — confirm via dialog
-    // (consistent with the delete flow). Intermediate moves apply immediately.
-    if (stage === 'offered' || stage === 'rejected') { setStageConfirm({ candidate: c, stage }); return; }
+    // An off-ramp is terminal and archives the application — confirm via dialog
+    // (consistent with the delete flow). Forward moves apply immediately.
+    if (isOffRamp(stage)) { setStageConfirm({ candidate: c, stage }); return; }
     stageMoveMutation.mutate({ candidateId: c.id, stage });
   }
 
@@ -343,16 +329,16 @@ export default function VacancyDetailPage({ params }: { params: Promise<{ id: st
         </div>
 
         {/* Funnel summary */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-          {ACTIVE_STAGES.map(s => (
-            <div key={s} className="bg-card rounded-xl border border-border p-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+          {FUNNEL_ORDER.map(s => (
+            <div key={s} className="bg-card rounded-xl border border-border px-3 py-2.5">
               <p className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${STAGE_COLORS[s]}`}>{STAGE_LABELS[s]}</p>
-              <p className="text-2xl font-bold text-foreground mt-2">{stageCount(s)}</p>
+              <p className="text-xl font-bold text-foreground mt-1.5">{stageCount(s)}</p>
             </div>
           ))}
-          <div className="bg-card rounded-xl border border-border p-4">
+          <div className="bg-card rounded-xl border border-border px-3 py-2.5">
             <p className="inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium bg-red-100 text-red-700">Archived</p>
-            <p className="text-2xl font-bold text-foreground mt-2">{archivedCandidates.length}</p>
+            <p className="text-xl font-bold text-foreground mt-1.5">{archivedCandidates.length}</p>
           </div>
         </div>
 
@@ -373,51 +359,16 @@ export default function VacancyDetailPage({ params }: { params: Promise<{ id: st
             >
               <Archive size={15} /> {showArchived ? 'Show Active' : 'Show Archived'}
             </button>
-            {canEdit && !showArchived && (
+            {canCreate && !showArchived && (
               <button
-                onClick={() => setShowAddCandidate(!showAddCandidate)}
+                onClick={() => setShowAddApplicant(true)}
                 className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
               >
-                <Plus size={16} /> Add Applicant
+                <UserPlus size={16} /> Add Applicant
               </button>
             )}
           </div>
         </div>
-
-        {/* Add Candidate form */}
-        {showAddCandidate && !showArchived && (
-          <form
-            onSubmit={(e) => { e.preventDefault(); addCandidateMutation.mutate(candidateForm); }}
-            className="bg-card rounded-xl border border-border p-6 grid grid-cols-1 md:grid-cols-2 gap-4"
-          >
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-1">Name *</label>
-              <input required value={candidateForm.name} onChange={(e) => setCandidateForm(p => ({ ...p, name: e.target.value }))}
-                className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-1">Email</label>
-              <input type="email" value={candidateForm.email} onChange={(e) => setCandidateForm(p => ({ ...p, email: e.target.value }))}
-                className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-1">Phone</label>
-              <input value={candidateForm.phone} onChange={(e) => setCandidateForm(p => ({ ...p, phone: e.target.value }))}
-                className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-1">Notes</label>
-              <input value={candidateForm.notes} onChange={(e) => setCandidateForm(p => ({ ...p, notes: e.target.value }))}
-                className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            </div>
-            <div className="md:col-span-2 flex gap-3">
-              <button type="submit" disabled={addCandidateMutation.isPending} className="px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium disabled:opacity-50">
-                {addCandidateMutation.isPending ? 'Adding...' : 'Add Applicant'}
-              </button>
-              <button type="button" onClick={() => setShowAddCandidate(false)} className="px-4 py-2 border border-border rounded-lg text-sm">Cancel</button>
-            </div>
-          </form>
-        )}
 
         {/* Applicants table */}
         <div className="bg-card rounded-xl border border-border overflow-hidden">
@@ -477,29 +428,33 @@ export default function VacancyDetailPage({ params }: { params: Promise<{ id: st
                               <PlayCircle size={13} /> Resume
                             </button>
                           )}
-                          {canEdit && !c.archived && !c.on_hold && c.stage !== 'offered' && (
-                            <>
-                              <select
-                                value={c.stage}
-                                onChange={(e) => handleStageChange(c, e.target.value)}
-                                disabled={stageMoveMutation.isPending}
-                                className="px-2 py-1.5 border border-border rounded-lg bg-background text-xs focus:outline-none focus:ring-2 focus:ring-primary/50"
-                                title="Change stage"
-                              >
-                                {[c.stage, ...allowedNextStages(c.stage)].map(s => (
-                                  <option key={s} value={s}>{STAGE_LABELS[s] || s}</option>
-                                ))}
-                              </select>
-                              <button
-                                onClick={() => { setHoldTarget(c); setHoldReason(''); }}
-                                className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-secondary hover:text-foreground hover:bg-muted rounded-lg transition-colors"
-                                title="Put this candidate on hold"
-                              >
-                                <PauseCircle size={13} /> Hold
-                              </button>
-                            </>
+                          {/* A held candidate is frozen where they are, so the stage picker is
+                              withheld until someone resumes them. */}
+                          {canEdit && !c.archived && !c.on_hold && inlineNextStages(c.stage).length > 0 && (
+                            <select
+                              value={c.stage}
+                              onChange={(e) => handleStageChange(c, e.target.value)}
+                              disabled={stageMoveMutation.isPending}
+                              className="px-2 py-1.5 border border-border rounded-lg bg-background text-xs focus:outline-none focus:ring-2 focus:ring-primary/50"
+                              title="Change stage"
+                            >
+                              {[c.stage, ...inlineNextStages(c.stage)].map(s => (
+                                <option key={s} value={s}>{STAGE_LABELS[s] || s}</option>
+                              ))}
+                            </select>
                           )}
-                          {c.stage === 'offered' && !c.archived && (
+                          {/* Hold stays available even where no inline move is left: a candidate
+                              can be parked at any point, not only mid-funnel. */}
+                          {canEdit && !c.archived && !c.on_hold && (
+                            <button
+                              onClick={() => { setHoldTarget(c); setHoldReason(''); }}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-secondary hover:text-foreground hover:bg-muted rounded-lg transition-colors"
+                              title="Put this candidate on hold"
+                            >
+                              <PauseCircle size={13} /> Hold
+                            </button>
+                          )}
+                          {JOINING_QUEUE_STAGES.includes(c.stage) && !c.archived && (
                             <button
                               onClick={() => router.push('/recruitment/joining')}
                               className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-green-700 hover:bg-green-50 rounded-lg transition-colors"
@@ -525,14 +480,19 @@ export default function VacancyDetailPage({ params }: { params: Promise<{ id: st
         </div>
       </div>
 
+      {/* Only off-ramps reach here — every one of them is terminal and archives. */}
       <ConfirmDialog
         open={!!stageConfirm}
-        title={stageConfirm?.stage === 'offered' ? 'Mark as Offered?' : 'Reject applicant?'}
-        message={stageConfirm ? (stageConfirm.stage === 'offered'
-          ? <>Move <span className="font-medium text-foreground">{stageConfirm.candidate.name}</span> to Onboarding for offer-letter generation. The employee record is created only when the offer is accepted.</>
-          : <>Reject and archive <span className="font-medium text-foreground">{stageConfirm.candidate.name}</span>? Their application moves to the archive.</>) : undefined}
-        confirmLabel={stageConfirm?.stage === 'offered' ? 'Mark Offered' : 'Reject & Archive'}
-        danger={stageConfirm?.stage === 'rejected'}
+        title={stageConfirm ? `Move to ${STAGE_LABELS[stageConfirm.stage]}?` : ''}
+        message={stageConfirm ? (
+          <>
+            Move <span className="font-medium text-foreground">{stageConfirm.candidate.name}</span> to{' '}
+            {STAGE_LABELS[stageConfirm.stage]}. This is final — their application is archived out of
+            the active pipeline.
+          </>
+        ) : undefined}
+        confirmLabel={stageConfirm ? `${STAGE_LABELS[stageConfirm.stage]} & Archive` : 'Confirm'}
+        danger
         loading={stageMoveMutation.isPending}
         onConfirm={() => stageConfirm && stageMoveMutation.mutate({ candidateId: stageConfirm.candidate.id, stage: stageConfirm.stage })}
         onCancel={() => setStageConfirm(null)}
@@ -565,6 +525,12 @@ export default function VacancyDetailPage({ params }: { params: Promise<{ id: st
             </div>
           </div>
         </div>
+      )}
+      {showAddApplicant && (
+        <AddApplicantDialog
+          vacancy={{ id: Number(id), label: `${vacancy.job_title} — ${vacancy.property_name}` }}
+          onClose={() => setShowAddApplicant(false)}
+        />
       )}
     </AppShell>
   );
