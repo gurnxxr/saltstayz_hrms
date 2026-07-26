@@ -59,13 +59,12 @@ export default function BudgetControlPage() {
   // The detail view mounts the inner editors; leaving it (Back / a stale selection) unmounts them
   // and takes their unsaved typing with it. They report upward instead of holding that state
   // privately, so the page can ask before throwing it away.
-  const [nestedDirty, setNestedDirty] = useState({ dept: false, bands: false });
-  const nestedHasEdits = nestedDirty.dept || nestedDirty.bands;
+  const [nestedDirty, setNestedDirty] = useState({ dept: false });
+  const nestedHasEdits = nestedDirty.dept;
   // Set true when Back is pressed with unsaved edits — shows the discard prompt.
   const [pendingLeave, setPendingLeave] = useState(false);
 
   const setDeptDirty = useCallback((v: boolean) => setNestedDirty(p => (p.dept === v ? p : { ...p, dept: v })), []);
-  const setBandsDirty = useCallback((v: boolean) => setNestedDirty(p => (p.bands === v ? p : { ...p, bands: v })), []);
 
   const { data: rows = [], isLoading, isError, refetch } = useQuery({
     queryKey: ['budget-control'],
@@ -96,18 +95,18 @@ export default function BudgetControlPage() {
     // No rows.length guard: an empty list (scope narrowed to zero) must still clear the orphaned edit.
     if (selectedId != null && !isLoading && !rows.find((r: any) => r.property_id === selectedId)) {
       setEdits(e => { const n = { ...e }; delete n[selectedId]; return n; });
-      setNestedDirty({ dept: false, bands: false });
+      setNestedDirty({ dept: false });
       setSelectedId(null);
       setPendingLeave(false);
     }
   }, [selectedId, rows, isLoading]);
 
   // Leaving the detail view discards its unsaved typing (the editors unmount) — ask first.
-  const leaveToList = () => { setSelectedId(null); setNestedDirty({ dept: false, bands: false }); };
+  const leaveToList = () => { setSelectedId(null); setNestedDirty({ dept: false }); };
   const requestLeave = () => { if (detailDirty) setPendingLeave(true); else leaveToList(); };
   const confirmLeave = () => {
     if (selectedId != null) setEdits(e => { const n = { ...e }; delete n[selectedId]; return n; });
-    setNestedDirty({ dept: false, bands: false });
+    setNestedDirty({ dept: false });
     setSelectedId(null);
     setPendingLeave(false);
   };
@@ -300,10 +299,11 @@ export default function BudgetControlPage() {
                 {/* Who makes up Committed (drill-in) */}
                 <CommittedBreakdown propertyId={r.property_id} committed={committed} filled={filled} missing={missing} />
 
-                {/* Departments + salary bands — side by side on wide screens, stacked on narrow */}
-                <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                  <div className="bg-card rounded-xl border border-border p-4"><PropertyDeptCounts propertyId={r.property_id} onDirtyChange={setDeptDirty} /></div>
-                  <div className="bg-card rounded-xl border border-border p-4"><PropertyBands propertyId={r.property_id} onDirtyChange={setBandsDirty} /></div>
+                {/* Per-department headcount. The per-role salary caps that used to sit beside this
+                    are gone — a role's salary band is now its pay grade, set once for the whole
+                    company in Admin → Organization → Job Titles rather than re-entered per hotel. */}
+                <div className="bg-card rounded-xl border border-border p-4">
+                  <PropertyDeptCounts propertyId={r.property_id} onDirtyChange={setDeptDirty} />
                 </div>
               </div>
             );
@@ -408,7 +408,7 @@ export default function BudgetControlPage() {
                 );
               })}
             </div>
-            <p className="text-xs text-secondary">Headcount is cumulative across all roles at the property. Open a property to set its per-role maximum salary and per-department counts.</p>
+            <p className="text-xs text-secondary">Headcount is cumulative across all roles at the property. Open a property to set its per-department counts.</p>
           </>
         )}
       </div>
@@ -439,7 +439,7 @@ export default function BudgetControlPage() {
         title="Discard unsaved changes?"
         confirmLabel="Discard them"
         cancelLabel="Keep editing"
-        message={<>The budget, department, or salary-band changes you made here haven&apos;t been saved. Leaving this property will discard them.</>}
+        message={<>The budget or department changes you made here haven&apos;t been saved. Leaving this property will discard them.</>}
         onCancel={() => setPendingLeave(false)}
         onConfirm={confirmLeave}
       />
@@ -523,117 +523,6 @@ function PropertyDeptCounts({ propertyId, onDirtyChange }: { propertyId: number;
           })}
         </tbody>
       </table>
-    </div>
-  );
-}
-
-// Per-property role salary CAP editor. One approved MAXIMUM per role — no band minimum (the only
-// floor is the statutory minimum wage, enforced on the offer path). band_min is written as 0.
-function PropertyBands({ propertyId, onDirtyChange }: { propertyId: number; onDirtyChange: (d: boolean) => void }) {
-  const qc = useQueryClient();
-  const { data: roles = [], isLoading, isError, refetch } = useQuery({
-    queryKey: ['bc-sanctions', propertyId],
-    queryFn: () => api.get(`/manpower/sanctions?property_id=${propertyId}`).then(r => r.data),
-  });
-  const { data: jobTitles = [] } = useQuery({
-    queryKey: ['bc-jobtitles'], queryFn: () => api.get('/recruitment/job-titles').then(r => r.data).catch(() => []),
-  });
-  const [edits, setEdits] = useState<Record<number, string>>({});
-  const [add, setAdd] = useState({ job_title_id: '', max: '' });
-
-  const saveBand = useMutation({
-    mutationFn: (b: any) => api.put('/manpower/sanctions/band', b),
-    onSuccess: () => {
-      toast.success('Maximum salary saved');
-      qc.invalidateQueries({ queryKey: ['bc-sanctions', propertyId] });
-      qc.invalidateQueries({ queryKey: ['budget-control'] });
-      setEdits({}); setAdd({ job_title_id: '', max: '' });
-    },
-    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed'),
-  });
-
-  const bandedIds = new Set(roles.map((r: any) => r.job_title_id));
-  const addable = jobTitles.filter((j: any) => !bandedIds.has(j.id));
-  // Reported upward, not guarded here — see the note in PropertyDeptCounts.
-  const bandsDirty = Object.keys(edits).length > 0 || !!add.job_title_id || !!add.max;
-  useEffect(() => { onDirtyChange(bandsDirty); }, [bandsDirty, onDirtyChange]);
-  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
-
-  if (isError) return <LoadError compact message="Couldn't load salary caps." onRetry={() => refetch()} />;
-  if (isLoading) return <p className="text-xs text-secondary">Loading salary caps…</p>;
-
-  return (
-    <div className="space-y-2">
-      <p className="text-[11px] uppercase tracking-wide text-secondary">
-        Maximum salary (monthly CTC) by role
-        {bandsDirty && <span className="ml-2 normal-case tracking-normal font-medium text-amber-600">· Unsaved changes</span>}
-      </p>
-      <p className="text-[11px] text-secondary -mt-1">No offer at this property may exceed the role&apos;s maximum. There is no minimum — the statutory minimum wage is the only floor.</p>
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="text-left text-[11px] uppercase tracking-wide text-secondary">
-            <th className="py-1 pr-3 font-medium">Role</th>
-            <th className="py-1 pr-2 font-medium">Maximum salary</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-border/60">
-          {roles.length === 0 && <tr><td colSpan={3} className="py-2 text-secondary text-xs">No role caps yet — add one below.</td></tr>}
-          {roles.map((r: any) => {
-            const max = edits[r.id] != null ? edits[r.id] : String(r.band_max);
-            const invalid = max !== '' && Number(max) <= 0;
-            // A locked cap is refused by the server. Showing it as editable meant the only way
-            // to discover that was to type a number and have the save fail.
-            const locked = !!r.is_locked;
-            return (
-              <tr key={r.id}>
-                <td className="py-2 pr-3 font-medium text-foreground">
-                  <span className="inline-flex items-center gap-1.5">
-                    {r.job_title}
-                    {locked && (
-                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-muted text-secondary text-[10px] font-semibold" title="This cap is locked. Unlock it before editing.">
-                        <Lock size={10} /> locked
-                      </span>
-                    )}
-                  </span>
-                </td>
-                <td className="py-2 pr-2">
-                  <MoneyInput className="w-32" value={max} disabled={locked} invalid={invalid} placeholder="max"
-                    onChange={v => setEdits(p => ({ ...p, [r.id]: v }))} />
-                  {invalid && <p className="mt-0.5 text-[11px] font-medium text-red-600">Enter a maximum above 0</p>}
-                </td>
-                <td className="py-2 text-right align-top">
-                  {!locked && (
-                    <button disabled={edits[r.id] == null || invalid || saveBand.isPending}
-                      onClick={() => saveBand.mutate({ property_id: propertyId, job_title_id: r.job_title_id, band_min: 0, band_max: Number(max) })}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 bg-primary text-white rounded-lg text-xs font-medium disabled:opacity-40">
-                      <Save size={12} /> {saveBand.isPending ? 'Saving…' : 'Save'}
-                    </button>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-
-      {addable.length > 0 && (
-        <div className="flex flex-wrap items-end gap-2 pt-2 border-t border-border/60">
-          <label className="block"><span className="block text-xs text-secondary mb-1">Add role cap</span>
-            <select value={add.job_title_id} onChange={e => setAdd(a => ({ ...a, job_title_id: e.target.value }))} className="px-2 py-1 border border-border rounded-lg bg-background text-sm">
-              <option value="">Select role</option>
-              {addable.map((j: any) => <option key={j.id} value={j.id}>{j.title}</option>)}
-            </select>
-          </label>
-          <div>
-            <span className="block text-xs text-secondary mb-1">Maximum salary</span>
-            <MoneyInput className="w-32" value={add.max} placeholder="max" onChange={v => setAdd(a => ({ ...a, max: v }))} />
-          </div>
-          <button disabled={!add.job_title_id || !add.max || Number(add.max) <= 0 || saveBand.isPending}
-            onClick={() => saveBand.mutate({ property_id: propertyId, job_title_id: Number(add.job_title_id), band_min: 0, band_max: Number(add.max) })}
-            className="px-3 py-1.5 bg-primary text-white rounded-lg text-xs font-medium disabled:opacity-40">Add cap</button>
-        </div>
-      )}
     </div>
   );
 }

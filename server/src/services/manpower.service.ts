@@ -1123,24 +1123,6 @@ export async function propertyCommittedBreakdown(propertyId: number, user: JwtPa
     .orderByRaw('e.monthly_ctc DESC NULLS LAST');
 }
 
-// Set just the salary band for a property × role (used by the band drill-down).
-export async function upsertSanctionBand(propertyId: number, jobTitleId: number, bandMin: number, bandMax: number, user: JwtPayload) {
-  const min = Number(bandMin), max = Number(bandMax);
-  if (min < 0 || max < 0) throw new ValidationError('Band values cannot be negative.');
-  if (max < min) throw new ValidationError('Band maximum must be greater than or equal to band minimum.');
-  const existing = await db('manpower_sanctions').where({ property_id: propertyId, job_title_id: jobTitleId }).first();
-  if (existing) {
-    if (existing.is_locked) throw new ValidationError('This role band is locked. Unlock it before editing.');
-    await db('manpower_sanctions').where('id', existing.id).update({ band_min: min, band_max: max, updated_by: user?.userId || null, updated_at: db.fn.now() });
-  } else {
-    await db('manpower_sanctions').insert({
-      property_id: propertyId, job_title_id: jobTitleId, sanctioned_headcount: 0, sanctioned_budget_monthly: 0,
-      band_min: min, band_max: max, created_by: user?.userId || null, updated_by: user?.userId || null,
-    });
-  }
-  return db('manpower_sanctions').where({ property_id: propertyId, job_title_id: jobTitleId }).first();
-}
-
 // ─── Admin property console (city → property configuration) ───
 
 /**

@@ -22,7 +22,6 @@ router.get('/clusters', authorize('manpower', 'read'), ctrl.listClusters);
 
 // ─── Sanctions + clusters: HQ Admin only ───
 router.post('/sanctions', authorizeRoles('admin'), ctrl.upsertSanction);
-router.put('/sanctions/band', authorizeRoles('admin'), ctrl.upsertSanctionBand);
 router.put('/sanctions/:id/lock', authorizeRoles('admin'), ctrl.setSanctionLock);
 router.post('/property-budgets/:id', authorizeRoles('admin'), ctrl.upsertPropertyBudget);
 router.post('/clusters', authorizeRoles('admin'), ctrl.upsertCluster);

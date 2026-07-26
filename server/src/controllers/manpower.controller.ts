@@ -43,9 +43,6 @@ export async function setSanctionLock(req: AuthRequest, res: Response, next: Nex
   try { res.json(await svc.setSanctionLock(Number(req.params.id), !!req.body.locked, req.user!)); } catch (err) { next(err); }
 }
 
-export async function upsertSanctionBand(req: AuthRequest, res: Response, next: NextFunction) {
-  try { res.json(await svc.upsertSanctionBand(Number(req.body.property_id), Number(req.body.job_title_id), req.body.band_min, req.body.band_max, req.user!)); } catch (err) { next(err); }
-}
 
 // ─── Property-level budgets ───
 
