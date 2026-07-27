@@ -45,6 +45,10 @@ async function openCandidateInstanceIds(templateId: number, cx: Knex | Knex.Tran
     .where('ci.template_id', templateId)
     .whereNotNull('ci.candidate_id')
     .whereRaw('c.stage = ct.phase')
+    // Load-bearing: recomputeStatus locks each checklist_instances row FOR UPDATE, and a template
+    // edit locks several in one transaction. Taking them in a consistent id order is what stops two
+    // concurrent edits deadlocking on each other. Do not drop this.
+    .orderBy('ci.id')
     .pluck('ci.id');
 }
 
@@ -242,7 +246,17 @@ export async function reconcileInstanceToTemplate(instanceId: number, trx?: Knex
       changed = true;
     }
   }
-  if (changed) await recomputeStatus(instanceId, trx);
+  // Self-heal: recomputeStatus is the only writer of `status`, so a checklist ticked outside the
+  // service — a data fix, an import, a direct SQL update — leaves a stored verdict that disagrees
+  // with its own items, and nothing else would ever correct it. `instItems` is already loaded, so
+  // when nothing changed this costs no extra query.
+  const after = changed
+    ? await cx('checklist_instance_items').where('instance_id', instanceId).select('is_completed')
+    : instItems;
+  const expected = after.length > 0 && after.every((i: any) => i.is_completed)
+    ? 'completed'
+    : after.some((i: any) => i.is_completed) ? 'in_progress' : 'pending';
+  if (changed || instance.status !== expected) await recomputeStatus(instanceId, trx);
 }
 
 export async function getInstance(instanceId: number) {
@@ -304,17 +318,29 @@ export async function isComplete(key: TemplateKey, subject: Subject, trx?: Knex.
   return items.length > 0 && items.every((i: any) => i.is_completed);
 }
 
+/**
+ * The ONE place `checklist_instances.status` is written. Every item mutation below runs inside a
+ * transaction and hands that trx in, so the tick and the rollup commit together or not at all — a
+ * half-applied pair used to leave a fully-ticked checklist reading "pending" for good, because
+ * nothing on the read path recomputes.
+ */
 async function recomputeStatus(instanceId: number, trx?: Knex.Transaction) {
   const cx = trx || db;
+  // Take the instance row first. Postgres is MVCC: two concurrent ticks each read their own
+  // snapshot, so without this lock the loser can read a stale item set and write back a status
+  // that contradicts the tick that just committed. Locking first means the item read below is
+  // issued after the other writer has committed.
+  // Preserve the ORIGINAL completion timestamp: recomputes fire on renames,
+  // re-uploads and reconciles too, and must not rewrite completion history.
+  const current = await cx('checklist_instances').where('id', instanceId)
+    .select('completed_at').forUpdate().first();
+  if (!current) return;
   const items = await cx('checklist_instance_items').where('instance_id', instanceId).select('is_completed');
   const all = items.length > 0 && items.every((i: any) => i.is_completed);
   const any = items.some((i: any) => i.is_completed);
-  // Preserve the ORIGINAL completion timestamp: recomputes fire on renames,
-  // re-uploads and reconciles too, and must not rewrite completion history.
-  const current = await cx('checklist_instances').where('id', instanceId).select('completed_at').first();
   await cx('checklist_instances').where('id', instanceId).update({
     status: all ? 'completed' : any ? 'in_progress' : 'pending',
-    completed_at: all ? (current?.completed_at ?? cx.fn.now()) : null,
+    completed_at: all ? (current.completed_at ?? cx.fn.now()) : null,
     updated_at: cx.fn.now(),
   });
 }
@@ -322,47 +348,54 @@ async function recomputeStatus(instanceId: number, trx?: Knex.Transaction) {
 // ─── Items ───
 
 export async function toggleItem(itemId: number, userId: number) {
-  const item = await db('checklist_instance_items').where('id', itemId).first();
-  if (!item) throw new NotFoundError('Checklist item');
-  const next = !item.is_completed;
-  if (!next && item.document_url) {
-    throw new ValidationError('Remove the uploaded document before marking this item incomplete.');
-  }
-  await db('checklist_instance_items').where('id', itemId).update({
-    is_completed: next,
-    completed_at: next ? db.fn.now() : null,
-    completed_by: next ? userId : null,
-    updated_at: db.fn.now(),
+  return db.transaction(async (trx) => {
+    const item = await trx('checklist_instance_items').where('id', itemId).first();
+    if (!item) throw new NotFoundError('Checklist item');
+    const next = !item.is_completed;
+    if (!next && item.document_url) {
+      throw new ValidationError('Remove the uploaded document before marking this item incomplete.');
+    }
+    await trx('checklist_instance_items').where('id', itemId).update({
+      is_completed: next,
+      completed_at: next ? trx.fn.now() : null,
+      completed_by: next ? userId : null,
+      updated_at: trx.fn.now(),
+    });
+    // Ticking the last item completes the phase; unticking any item re-opens it.
+    await recomputeStatus(item.instance_id, trx);
+    return trx('checklist_instance_items').where('id', itemId).first();
   });
-  await recomputeStatus(item.instance_id);
-  return db('checklist_instance_items').where('id', itemId).first();
 }
 
 // "Mark all as collected": tick every still-open item on the checklist in one go, instead of one at a
 // time. Only SETS complete (never un-completes), so it can't trip the toggle guard that blocks
 // un-ticking an item with an uploaded document. A no-op on an already-complete list.
 export async function completeAllItems(instanceId: number, userId: number) {
-  const instance = await db('checklist_instances').where('id', instanceId).first();
-  if (!instance) throw new NotFoundError('Checklist');
-  await db('checklist_instance_items')
-    .where({ instance_id: instanceId, is_completed: false })
-    .update({ is_completed: true, completed_at: db.fn.now(), completed_by: userId, updated_at: db.fn.now() });
-  await recomputeStatus(instanceId);
-  return getInstance(instanceId);
+  await db.transaction(async (trx) => {
+    const instance = await trx('checklist_instances').where('id', instanceId).first();
+    if (!instance) throw new NotFoundError('Checklist');
+    await trx('checklist_instance_items')
+      .where({ instance_id: instanceId, is_completed: false })
+      .update({ is_completed: true, completed_at: trx.fn.now(), completed_by: userId, updated_at: trx.fn.now() });
+    await recomputeStatus(instanceId, trx);
+  });
+  return getInstance(instanceId); // after commit — getInstance reads through `db`
 }
 
 export async function addItem(instanceId: number, data: { label: string; category?: string }) {
-  const instance = await db('checklist_instances').where('id', instanceId).first();
-  if (!instance) throw new NotFoundError('Checklist');
-  const label = String(data.label || '').trim();
-  if (!label) throw new ValidationError('Item label is required');
-  const max = await db('checklist_instance_items').where('instance_id', instanceId).max({ m: 'sort_order' }).first();
-  const [{ id }] = await db('checklist_instance_items').insert({
-    instance_id: instanceId, label, category: data.category || 'General',
-    sort_order: Number((max as any)?.m || 0) + 1,
-  }).returning('id');
-  await recomputeStatus(instanceId); // a new unticked item can un-complete the phase
-  return db('checklist_instance_items').where('id', id).first();
+  return db.transaction(async (trx) => {
+    const instance = await trx('checklist_instances').where('id', instanceId).first();
+    if (!instance) throw new NotFoundError('Checklist');
+    const label = String(data.label || '').trim();
+    if (!label) throw new ValidationError('Item label is required');
+    const max = await trx('checklist_instance_items').where('instance_id', instanceId).max({ m: 'sort_order' }).first();
+    const [{ id }] = await trx('checklist_instance_items').insert({
+      instance_id: instanceId, label, category: data.category || 'General',
+      sort_order: Number((max as any)?.m || 0) + 1,
+    }).returning('id');
+    await recomputeStatus(instanceId, trx); // a new unticked item can un-complete the phase
+    return trx('checklist_instance_items').where('id', id).first();
+  });
 }
 
 export async function deleteItem(itemId: number) {
@@ -385,11 +418,14 @@ export async function deleteItem(itemId: number) {
       );
     }
   }
+  await db.transaction(async (trx) => {
+    await trx('checklist_instance_items').where('id', itemId).del();
+    await recomputeStatus(item.instance_id, trx);
+  });
+  // Unlink AFTER the commit: if the delete rolls back we must not have destroyed the file.
   if (item.document_url) {
     try { fs.unlinkSync(path.join(UPLOAD_DIR, path.basename(item.document_url))); } catch { /* already gone */ }
   }
-  await db('checklist_instance_items').where('id', itemId).del();
-  await recomputeStatus(item.instance_id);
   return { id: itemId };
 }
 
@@ -413,15 +449,17 @@ export async function uploadItemDocument(itemId: number, file: { originalname: s
     try { fs.unlinkSync(path.join(UPLOAD_DIR, path.basename(item.document_url))); } catch { /* ignore */ }
   }
 
-  await db('checklist_instance_items').where('id', itemId).update({
-    document_url: `uploads/checklists/${stored}`,
-    document_name: file.originalname.slice(0, 255),
-    is_completed: true,
-    completed_at: db.fn.now(),
-    completed_by: userId,
-    updated_at: db.fn.now(),
+  await db.transaction(async (trx) => {
+    await trx('checklist_instance_items').where('id', itemId).update({
+      document_url: `uploads/checklists/${stored}`,
+      document_name: file.originalname.slice(0, 255),
+      is_completed: true,
+      completed_at: trx.fn.now(),
+      completed_by: userId,
+      updated_at: trx.fn.now(),
+    });
+    await recomputeStatus(item.instance_id, trx);
   });
-  await recomputeStatus(item.instance_id);
   return db('checklist_instance_items').where('id', itemId).first();
 }
 
@@ -470,11 +508,13 @@ export async function removeItemDocument(itemId: number) {
   if (item.document_url) {
     try { fs.unlinkSync(path.join(UPLOAD_DIR, path.basename(item.document_url))); } catch { /* ignore */ }
   }
-  await db('checklist_instance_items').where('id', itemId).update({
-    document_url: null, document_name: null,
-    is_completed: false, completed_at: null, completed_by: null,
-    updated_at: db.fn.now(),
+  await db.transaction(async (trx) => {
+    await trx('checklist_instance_items').where('id', itemId).update({
+      document_url: null, document_name: null,
+      is_completed: false, completed_at: null, completed_by: null,
+      updated_at: trx.fn.now(),
+    });
+    await recomputeStatus(item.instance_id, trx);
   });
-  await recomputeStatus(item.instance_id);
   return db('checklist_instance_items').where('id', itemId).first();
 }

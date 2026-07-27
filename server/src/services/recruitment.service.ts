@@ -1,7 +1,7 @@
 import type { Knex } from 'knex';
 import db from '../config/database';
 import { NotFoundError, ValidationError } from '../utils/errors';
-import { getDefaultTemplateId } from './leaveTemplate.service';
+import { getDefaultTemplateId, assertHasWeeklyOff } from './leaveTemplate.service';
 import {
   getCtcRange, getStructureByJobTitle, seedEmployeeStructureFromTemplate,
   editorLines, previewStructure, saveEmployeeStructure, getMonthlyCtcMap,
@@ -691,6 +691,12 @@ export async function transferToManager(id: number, userId: number, notes?: stri
   const employee = await db('employees').where('id', candidate.employee_id).first();
   if (!employee) throw new NotFoundError('Employee');
 
+  // The transfer is the moment this body enters payroll. No creation path in this system assigns a
+  // shift, so a new hire's weekly off rests entirely on their leave template — and an unconfigured
+  // one means seven working days a week from day one. Checked before the advisory lock is taken:
+  // it is a read-only question about configuration, not about this row.
+  await assertHasWeeklyOff(employee.id, `${employee.first_name} ${employee.last_name}`.trim());
+
   // The final money gate must key off the vacancy's property_id (a real FK), NOT the employee's
   // branch_name text — a property rename between acceptance and transfer would leave branch_name
   // stale, matching no property, silently skipping the gate and committing an unbounded cost into
@@ -923,6 +929,34 @@ export async function getOfferBreakdown(candidateId: number, baseGross: number, 
   return { ...ob, band_max: band.configured ? band.band_max : null };
 }
 
+/**
+ * The offered monthly base must be a real, positive amount.
+ *
+ * It previously had no floor anywhere on the write path. The controllers coerce a missing,
+ * empty or non-numeric base to 0 (`Number(x) || 0`), and `breakdownFor` then substitutes the
+ * designation template's `default_base` for any base <= 0 — so an offer letter got filed at a
+ * figure nobody chose, with `offer_adjustment_pct` recorded as 0.00% so it read as deliberate.
+ * That base is cloned onto the employee's salary structure when the offer is accepted, which
+ * makes it what payroll pays. Where a template itself carries `default_base = 0`, the letter
+ * was issued at ₹0 outright.
+ *
+ * Neither existing gate caught it: `assertCtcMeetsMinimumWage` is a no-op for any state with no
+ * configured minimum wage, and the sanctioned band only has a maximum, which 0 clears trivially.
+ *
+ * Deliberately does NOT round — a valid base passes through byte-identical, so no existing offer
+ * moves by a rupee. `Number.isFinite` also closes Infinity, which survives the controllers' `|| 0`.
+ *
+ * The live editor breakdown is NOT affected: `getOfferBreakdown` calls `breakdownFor` directly,
+ * so an absent base still means "price the designation template" there.
+ */
+export function assertOfferedBase(baseGross: unknown): number {
+  const n = Number(baseGross);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new ValidationError('Enter the offered monthly base salary — it must be an amount greater than zero.');
+  }
+  return n;
+}
+
 /** Snapshot the letter template_data — exactly what the PDF renders. */
 async function buildOfferLetter(
   candidateId: number,
@@ -930,7 +964,7 @@ async function buildOfferLetter(
   { enforceBand = true }: { enforceBand?: boolean } = {},
 ) {
   const c = await offerContext(candidateId);
-  const ob = await breakdownFor(c.job_title_id, Number(opts.base_gross) || 0, c.property_state, opts.lines);
+  const ob = await breakdownFor(c.job_title_id, assertOfferedBase(opts.base_gross), c.property_state, opts.lines);
   if (!ob) throw new ValidationError('This designation has no salary structure — configure one first.');
 
   // Only the statutory floor is checked here. The full sanctioned-cap gate (role maximum +

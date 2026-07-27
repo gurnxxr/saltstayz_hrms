@@ -2,7 +2,7 @@ import type { Knex } from 'knex';
 import db from '../config/database';
 import { JwtPayload } from '../types';
 import { NotFoundError, ValidationError, ForbiddenError, GuardrailError } from '../utils/errors';
-import { getDefaultTemplateId } from './leaveTemplate.service';
+import { getDefaultTemplateId, assertHasWeeklyOff } from './leaveTemplate.service';
 import { nextJobId } from '../utils/jobId';
 import { LOCK, advisoryXactLock } from '../utils/locks';
 import { notifyRole } from './notification.service';
@@ -483,6 +483,10 @@ export async function createHire(input: HireInput, user: JwtPayload) {
     // Recompute + enforce INSIDE the transaction, now that we hold the lock (the single gate).
     const a = await assertHireAllowed(input.property_id, input.job_title_id, ctc, trx);
     const employeeId = await insertHire(trx, input, ctc, a, user, false);
+    // Same gate as the recruitment transfer path — this is the other door into payroll, and one
+    // blocked door with the other left open is no gate at all. Inside the transaction, so a refusal
+    // rolls the hire back rather than leaving a half-created employee with no rest day.
+    await assertHasWeeklyOff(employeeId, input.name?.trim() || 'This hire', trx);
     return getHire(employeeId, trx);
   });
 }

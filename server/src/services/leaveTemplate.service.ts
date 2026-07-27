@@ -1,7 +1,9 @@
 import type { Knex } from 'knex';
 import db from '../config/database';
 import { NotFoundError, ValidationError } from '../utils/errors';
-import { parseOffDayRules, type OffDayRule } from './shiftPattern';
+import { parseOffDayRules, rulesInForceOn, type OffDayRule } from './shiftPattern';
+// paySchedule imports only ../config/database and ../utils/errors, so this is not a cycle.
+import { getPaySchedule } from './paySchedule.service';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Leave Templates — the single resolver every leave read path uses to get an
@@ -129,17 +131,85 @@ export interface WorkWeek {
  * none falls through to the organisation work week (the caller's job). An empty pattern always
  * means "not configured" and NEVER "works every day" — the difference is somebody's Sunday.
  */
-export async function getEmployeeWorkWeek(employeeId: number): Promise<WorkWeek> {
-  const emp = await db('employees').where('id', employeeId).select('leave_template_id').first();
+export async function getEmployeeWorkWeek(employeeId: number, trx?: Knex.Transaction): Promise<WorkWeek> {
+  const cx = trx || db;
+  const emp = await cx('employees').where('id', employeeId).select('leave_template_id').first();
   if (emp?.leave_template_id) {
-    const own = await db('leave_templates').where('id', emp.leave_template_id).first();
+    const own = await cx('leave_templates').where('id', emp.leave_template_id).first();
     const rules = parseOffDayRules(own?.off_day_rules);
     if (rules.length) return { rules, source: 'template', name: own.name };
   }
-  const fallback = await db('leave_templates').where('is_default', true).first();
+  const fallback = await cx('leave_templates').where('is_default', true).first();
   const rules = parseOffDayRules(fallback?.off_day_rules);
   if (rules.length) return { rules, source: 'default_template', name: fallback.name };
   return { rules: [], source: 'none', name: null };
+}
+
+
+/**
+ * Refuses to let someone become a paid employee with no rest day at all.
+ *
+ * A weekly off is not decoration: it is what makes a Sunday marked "no punch" cost nothing instead
+ * of a full day's pay. It is resolved in three named rungs — the shift's own pattern, then the
+ * leave template's, then the organisation work week — and an empty pattern at every rung leaves
+ * someone working seven days a week, year round, from their first payslip.
+ *
+ * It deliberately does NOT pick a shift or invent a pattern. There is no default shift type in this
+ * schema and no property-level default, so any choice made here would be a guess, and a guessed
+ * off-day is a wrong salary divisor on someone's first payslip. It refuses and names the screen
+ * instead — the same shape as the sanctioned-budget gate this path already carries.
+ *
+ * Rung 1 is clamped to assignments already in force on the joining date. A future-dated assignment
+ * governs nothing on day one, so counting it would be a false pass — the gate would clear while the
+ * engine still saw no off days.
+ */
+export async function assertHasWeeklyOff(employeeId: number, who: string, trx?: Knex.Transaction): Promise<void> {
+  // Takes the transaction when there is one: createHire calls this on a row it has just inserted
+  // and not yet committed, which a connection outside the transaction cannot see.
+  const cx = trx || db;
+  const emp = await cx('employees').where('id', employeeId).select('date_of_joining').first();
+  const asOf = String(emp?.date_of_joining ?? '').slice(0, 10);
+  const schedule = await getPaySchedule();
+
+  // Both pattern rungs are asked the question the ENGINE asks, on the hire's own joining date:
+  // `rulesInForceOn` is the same clamp computePayableDays applies, so a pattern that the engine
+  // suppresses for that month cannot satisfy this gate. Without it the gate reads a configured
+  // pattern and passes while the engine still falls through to the organisation work week — the
+  // exact false pass that would let someone start with no rest day.
+  const inForce = (raw: unknown) => rulesInForceOn(asOf, parseOffDayRules(raw), schedule.work_pattern_effective_from).length > 0;
+
+  // Rung 1 — a shift already in force on the joining date that declares its own off days.
+  const shiftPatterns: unknown[] = await cx('employee_shift_assignments as a')
+    .join('shift_types as st', 'st.id', 'a.shift_type_id')
+    .where('a.employee_id', employeeId)
+    .where((q) => {
+      q.whereNull('a.effective_from');
+      if (asOf) q.orWhere('a.effective_from', '<=', asOf);
+    })
+    .pluck('st.weekly_off_days');
+  if (shiftPatterns.some(inForce)) return;
+
+  // Rung 2 — their own leave template, else the Default one.
+  const workWeek = await getEmployeeWorkWeek(employeeId, trx);
+  if (rulesInForceOn(asOf, workWeek.rules, schedule.work_pattern_effective_from).length > 0) return;
+
+  // Rung 3 — the organisation work week. Fewer than seven working days still leaves rest days.
+  if (schedule.work_week.length === 0) {
+    throw new ValidationError(
+      'The organisation work week has no working days at all, so no month can be paid. '
+      + 'Set it on Payroll → Pay Schedule before transferring anyone.',
+    );
+  }
+  if (schedule.work_week.length < 7) return;
+
+  throw new ValidationError(
+    `${who} would start with no weekly off on ${asOf || 'their joining date'}. No shift declares `
+    + `off days, no leave template work week applies on that date, and the organisation work week `
+    + `is all seven days — so every unmarked Sunday would cost them a full day's pay. Set the work `
+    + `week on Leave → Control Panel → Templates (or move them onto a template that has one), then `
+    + `transfer.${schedule.work_pattern_effective_from ? ` Note that weekly-off patterns only apply `
+    + `from ${schedule.work_pattern_effective_from}, so a joining date before that is not covered.` : ''}`,
+  );
 }
 
 /** All of an employee's leave rules, keyed by leave_type_id. */
