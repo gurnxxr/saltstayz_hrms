@@ -3,15 +3,16 @@
 import { useState } from 'react';
 import AppShell from '@/components/layout/AppShell';
 import Breadcrumb from '@/components/ui/Breadcrumb';
-import { Building2, Layers, Briefcase, Tag, DollarSign, BadgeCheck, Hotel } from 'lucide-react';
+import { Building2, Layers, Briefcase, Tag, DollarSign, BadgeCheck, Hotel, Network } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { PropertiesTab, SimpleListTab, PayGradesTab, DepartmentsTab, JobTitlesTab } from '@/components/admin/OrgTabs';
 
-type Tab = 'properties' | 'property-categories' | 'departments' | 'job-titles' | 'categories' | 'pay-grades' | 'statuses';
+type Tab = 'properties' | 'property-categories' | 'branches' | 'departments' | 'job-titles' | 'categories' | 'pay-grades' | 'statuses';
 
 const TABS: { key: Tab; label: string; icon: typeof Building2 }[] = [
   { key: 'properties', label: 'Properties', icon: Building2 },
   { key: 'property-categories', label: 'Property Categories', icon: Hotel },
+  { key: 'branches', label: 'Branches', icon: Network },
   { key: 'departments', label: 'Departments', icon: Layers },
   { key: 'job-titles', label: 'Job Titles', icon: Briefcase },
   { key: 'categories', label: 'Categories', icon: Tag },
@@ -49,6 +50,7 @@ export default function OrganizationPage() {
 
         {tab === 'properties' && <PropertiesTab />}
         {tab === 'property-categories' && <SimpleListTab endpoint="property-categories" label="Property Category" fieldName="name" queryKey="org-property-categories" />}
+        {tab === 'branches' && <SimpleListTab endpoint="branches" label="Branch" fieldName="name" queryKey="org-branches" />}
         {tab === 'departments' && <DepartmentsTab />}
         {tab === 'job-titles' && <JobTitlesTab />}
         {tab === 'categories' && <SimpleListTab endpoint="employee-categories" label="Category" fieldName="name" queryKey="org-categories" />}

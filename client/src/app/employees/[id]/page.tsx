@@ -49,6 +49,22 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
     queryFn: () => api.get('/admin/departments').then(r => r.data),
   });
 
+  // Branch is the same shape of thing, and matters more: it is the work location, and the
+  // location's state decides Professional Tax, Labour Welfare Fund and the minimum-wage floor.
+  // Typed free-hand, a name that matches no property silently costs the employee their state
+  // holidays and drops their statutory rates onto a default.
+  const { data: properties = [] } = useQuery({
+    queryKey: ['properties'],
+    queryFn: () => api.get('/admin/properties').then(r => r.data),
+  });
+
+  // Branches are a managed list too (Admin → Organization → Branches), for the same reason:
+  // typed by hand, "Corporate Office" and "Corp Office" become two units no report can add up.
+  const { data: branches = [] } = useQuery({
+    queryKey: ['branches'],
+    queryFn: () => api.get('/admin/branches').then(r => r.data),
+  });
+
   const updateMutation = useMutation({
     mutationFn: (data: any) => api.put(`/employees/${id}`, data).then(r => r.data),
     onSuccess: () => {
@@ -154,6 +170,26 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   if (currentDept && !deptNames.includes(currentDept)) deptNames.push(currentDept);
   const deptOptions = deptNames.map((n) => ({ value: n, label: n }));
 
+  // Same treatment for branch, with one addition: a value that matches no property is kept but
+  // LABELLED, because it is not merely off-catalog — it is the state of an employee whose
+  // statutory rates are currently resolved from a fallback rather than from where they work.
+  const activeProps = (properties as any[]).filter((p) => p.is_active !== false);
+  const propNames: string[] = activeProps.map((p) => p.name as string);
+  const currentBranch = (form.branch_name ?? '').trim();
+  const branchOptions = propNames.map((n) => ({ value: n, label: n }));
+  if (currentBranch && !propNames.includes(currentBranch)) {
+    branchOptions.unshift({ value: currentBranch, label: `${currentBranch} — not a property` });
+  }
+
+  // Same off-catalog guard as the property picker: an existing value that is not yet in the list
+  // stays selectable, so turning this into a dropdown never blanks somebody's record.
+  const unitNames: string[] = (branches as any[]).filter((b) => b.is_active !== false).map((b) => b.name as string);
+  const currentUnit = (form.branch_unit ?? '').trim();
+  const unitOptions = [{ value: '', label: '—' }, ...unitNames.map((n) => ({ value: n, label: n }))];
+  if (currentUnit && !unitNames.includes(currentUnit)) {
+    unitOptions.splice(1, 0, { value: currentUnit, label: `${currentUnit} — not in the branch list` });
+  }
+
   return (
     <AppShell>
       <div className="space-y-6 max-w-5xl">
@@ -242,7 +278,8 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
               <FormField label="Aadhaar Card No" value={form.aadhaar_number} onChange={(v) => setForm((p: any) => ({ ...p, aadhaar_number: v.replace(/\D/g, '') }))} maxLength={12} />
               <SelectField label="Dept Name" value={form.dept_name} onChange={(v) => setForm((p: any) => ({ ...p, dept_name: v }))} options={deptOptions} />
               <SelectField label="Designation Name" value={form.job_title_id} onChange={(v) => setForm((p: any) => ({ ...p, job_title_id: v ? Number(v) : null }))} options={jobTitles.map((j: any) => ({ value: j.id, label: j.title || j.name }))} />
-              <FormField label="Branch Name" value={form.branch_name} onChange={(v) => setForm((p: any) => ({ ...p, branch_name: v }))} />
+              <SelectField label="Property Name" value={form.branch_name} onChange={(v) => setForm((p: any) => ({ ...p, branch_name: v }))} options={branchOptions} />
+              <SelectField label="Branch Name" value={form.branch_unit} onChange={(v) => setForm((p: any) => ({ ...p, branch_unit: v }))} options={unitOptions} />
               {canEditStatus && (
                 <SelectField label="Status" value={form.is_active} onChange={(v) => setForm((p: any) => ({ ...p, is_active: Number(v) }))} options={[{ value: 1, label: 'Active' }, { value: 0, label: 'Inactive' }]} />
               )}
@@ -265,7 +302,8 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
               <InfoRow icon={Shield} label="PAN Card No" value={emp.pan_number ? maskValue(emp.pan_number, 4) : 'Not set'} />
               <InfoRow icon={Briefcase} label="Dept Name" value={emp.dept_name || 'N/A'} />
               <InfoRow icon={Briefcase} label="Designation Name" value={emp.designation_name || 'N/A'} />
-              <InfoRow icon={Briefcase} label="Branch Name" value={emp.branch_name || 'N/A'} />
+              <InfoRow icon={Briefcase} label="Property Name" value={emp.branch_name || 'N/A'} />
+              <InfoRow icon={Briefcase} label="Branch Name" value={emp.branch_unit || 'N/A'} />
               {/* Derived from the property, never stored on the employee — it decides
                   Professional Tax, LWF, minimum wage and per-state holidays. Change it
                   via the property in Admin → Organization. */}

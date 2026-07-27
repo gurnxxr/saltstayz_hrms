@@ -85,6 +85,7 @@ export async function listEmployees(filters: EmployeeFilters) {
         'e.id', 'e.employee_code', 'e.first_name', 'e.last_name',
         'e.email', 'e.phone', 'e.date_of_birth', 'e.date_of_joining',
         'e.father_name', 'e.aadhaar_number', 'e.pan_number', 'e.dept_name', 'e.branch_name',
+        'e.branch_unit',
         'e.is_active',
         'j.title as designation_name',
         'p.state as state',
@@ -137,6 +138,7 @@ export async function exportEmployeesCsv(filters: EmployeeFilters): Promise<stri
         'e.employee_code', 'e.first_name', 'e.last_name', 'e.email', 'e.phone', 'e.gender',
         'e.date_of_birth', 'e.date_of_joining', 'e.probation_end_date', 'e.last_working_day',
         'e.father_name', 'e.aadhaar_number', 'e.pan_number', 'e.dept_name', 'e.branch_name',
+        'e.branch_unit',
         'e.employment_status', 'e.is_active', 'e.job_id',
         'j.title as job_title',
         'p.state as state',
@@ -149,14 +151,14 @@ export async function exportEmployeesCsv(filters: EmployeeFilters): Promise<stri
   const header = [
     'employee_code', 'first_name', 'last_name', 'email', 'phone', 'gender',
     'date_of_birth', 'date_of_joining', 'probation_end_date', 'last_working_day',
-    'father_name', 'aadhaar_number', 'pan_number', 'department', 'branch_name', 'job_title',
+    'father_name', 'aadhaar_number', 'pan_number', 'department', 'branch_name', 'branch_unit', 'job_title',
     'reporting_manager_code', 'state', 'employment_status', 'status', 'job_id',
   ];
 
   return buildCsv(header, rows.map((r: any) => [
     r.employee_code, r.first_name, r.last_name, r.email, r.phone, r.gender,
     r.date_of_birth, r.date_of_joining, r.probation_end_date, r.last_working_day,
-    r.father_name, r.aadhaar_number, r.pan_number, r.dept_name, r.branch_name, r.job_title,
+    r.father_name, r.aadhaar_number, r.pan_number, r.dept_name, r.branch_name, r.branch_unit, r.job_title,
     r.reporting_manager_code,
     // Derived from the property rather than stored, so it is informational — the uploader
     // ignores it, and editing it in the file changes nothing on the way back in.
@@ -208,6 +210,7 @@ export async function getMyReportees(managerId: number) {
       'e.last_name',
       'e.dept_name',
       'e.branch_name',
+      'e.branch_unit',
       'j.title as designation_name',
     )
     .orderBy([{ column: 'e.first_name' }, { column: 'e.last_name' }]);
@@ -328,6 +331,10 @@ const HEADER_ALIASES: Record<string, string> = {
   pan_number: 'pan_number', pan: 'pan_number', pan_card: 'pan_number', pan_card_no: 'pan_number',
   department: 'dept_name', dept_name: 'dept_name', dept: 'dept_name',
   branch: 'branch_name', branch_name: 'branch_name', property: 'branch_name', location: 'branch_name',
+  property_name: 'branch_name',
+  // The reporting unit — a different fact from the property. Existing files say `branch` when
+  // they mean the hotel, so that alias is left where it is and the unit gets explicit ones.
+  branch_unit: 'branch_unit', business_unit: 'branch_unit', unit: 'branch_unit',
   designation: 'job_title', job_title: 'job_title', title: 'job_title', role: 'job_title',
   reporting_manager_code: 'reporting_manager_code', manager_code: 'reporting_manager_code',
   is_active: 'is_active', status: 'is_active', active: 'is_active',
@@ -371,6 +378,7 @@ export async function bulkUploadEmployees(csvContent: string) {
     if (row.phone) data.phone = row.phone.trim();
     if (row.dept_name) data.dept_name = row.dept_name.trim();
     if (row.branch_name) data.branch_name = row.branch_name.trim();
+    if (row.branch_unit) data.branch_unit = row.branch_unit.trim();
     if (row.father_name) data.father_name = row.father_name.trim();
     if (row.aadhaar_number) data.aadhaar_number = row.aadhaar_number.trim();
     if (row.pan_number) {

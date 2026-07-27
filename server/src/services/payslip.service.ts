@@ -7,7 +7,9 @@ import {
 import {
   getAssignment, getStructureByJobTitle, getStructureRow, computeForStructure,
 } from './salaryStructure.service';
-import { getEmployeeState, getMinimumWageFor, getStatutoryRates } from './statutory.service';
+import {
+  getEmployeeState, getMinimumWageFor, getStatutoryRates, DEFAULT_STATUTORY_STATE,
+} from './statutory.service';
 import { getPaySchedule } from './paySchedule.service';
 import { computePayableDays, getMonthlyHours, getOvertimeHours } from './payableDays.service';
 import { notifyEmployee } from './notification.service';
@@ -746,7 +748,14 @@ export async function getRunDetails(month: number, year: number) {
 
   // Minimum-wage validation (Phase 1): flag any slip whose full-month Basic is
   // below the configured minimum wage of the employee's work-location state.
-  const states = [...new Set(rows.map((r: any) => r.work_state).filter(Boolean))] as string[];
+  // Include the fallback state, so an employee whose branch matches no property is still CHECKED
+  // against a minimum wage rather than skipped. Previously `work_state` being null made minWage
+  // null, which made below_min_wage false — silencing the warning for precisely the people whose
+  // pay setup is least trustworthy. A missing state is a reason to look harder, not to stop looking.
+  const states = [...new Set([
+    ...rows.map((r: any) => r.work_state).filter(Boolean),
+    DEFAULT_STATUTORY_STATE,
+  ])] as string[];
   const minWageByState = new Map<string, number | null>();
   for (const s of states) minWageByState.set(s, await getMinimumWageFor(s));
 
@@ -764,7 +773,11 @@ export async function getRunDetails(month: number, year: number) {
     // Skip hourly slips: their Basic derives from rate × hours, not the days ratio,
     // so a working/payment rescale would produce an arbitrary figure.
     const isHourly = days != null && days.hours != null;
-    const minWage = r.work_state ? minWageByState.get(r.work_state) ?? null : null;
+    // No property match → their statutory state is a fallback, not a fact. Check them against it
+    // anyway, and say so on the row.
+    const stateUnresolved = !r.work_state;
+    const effectiveState = r.work_state || DEFAULT_STATUTORY_STATE;
+    const minWage = minWageByState.get(effectiveState) ?? null;
     let fullBasic: number | null = basic > 0 ? basic : null;
     if (fullBasic !== null && !isHourly && days && num(days.payment_days) > 0 && num(days.working_days) > 0) {
       fullBasic = Math.round(fullBasic * num(days.working_days) / num(days.payment_days));
@@ -778,6 +791,10 @@ export async function getRunDetails(month: number, year: number) {
       designation: r.designation || null,
       branch: r.branch_name || null,
       work_state: r.work_state || null,
+      // True when branch_name matched no property, so work_state — and every statutory rate
+      // derived from it — came from the default rather than from where this person works.
+      state_unresolved: stateUnresolved,
+      state_used: effectiveState,
       gross_earnings: num(r.gross_earnings),
       total_deduction: num(r.total_deduction),
       net_pay: num(r.net_pay),

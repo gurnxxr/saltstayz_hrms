@@ -63,10 +63,45 @@ function isoUTC(d: Date): string {
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
 }
 
+const MONTH_NAMES: Record<string, number> = {
+  jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4,
+  may: 5, jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8,
+  sep: 9, sept: 9, september: 9, oct: 10, october: 10, nov: 11, november: 11, dec: 12, december: 12,
+};
+/** A leading weekday label, which the export writes but which carries no information. */
+const WEEKDAY_PREFIX = /^(?:mon|tue|tues|wed|weds|thu|thur|thurs|fri|sat|sun)[a-z]*[\s,.\-/]+/i;
+
 /**
- * Read a header cell as a date. Accepts a real date (Excel date cell or ISO/DD-MM-YY
- * text) or a bare day-of-month number — the latter only when `month` (YYYY-MM) is given,
- * since a "7" alone can't be placed without knowing the month.
+ * Which calendar year a bare "01 Jul" belongs to.
+ *
+ * The header names a day and a month but no year, so it comes from the month the uploader
+ * chose. A dashboard can run a payroll cycle rather than a calendar month (26 Jun – 25 Jul),
+ * so the header month is allowed to differ from the chosen one; only the December/January
+ * boundary needs care, or a cycle straddling New Year lands twelve months out.
+ */
+function yearForMonthName(mon: number, month?: string): number | null {
+  if (!month || !/^\d{4}-\d{2}$/.test(month)) return null;
+  const [selYear, selMon] = month.split('-').map(Number);
+  if (selMon === 1 && mon === 12) return selYear - 1;
+  if (selMon === 12 && mon === 1) return selYear + 1;
+  return selYear;
+}
+
+/**
+ * Read a header cell as a date.
+ *
+ * Accepts what the exports actually produce:
+ *   • a real Excel date cell, or ISO text            2026-07-01
+ *   • DD-MM-YY(YY)                                   01-07-2026, 1/7/26
+ *   • day + month name, with or without a weekday    "Fri 01 Jul", "01 Jul", "1-Jul-2026"
+ *   • month name + day                               "Jul 01"
+ *   • a bare day-of-month number                     7
+ *
+ * The last two both need `month` (YYYY-MM) to place them, and the weekday label is read
+ * but ignored: the exports carry stale ones, so trusting it would reject good files.
+ *
+ * A day number is required in every text form. That is what keeps the dashboard's summary
+ * columns — "Present", "Half Day", "No Punch" — from being mistaken for dates.
  */
 export function parseHeaderDate(v: any, month?: string): string | null {
   if (v instanceof Date) return isoUTC(v);
@@ -82,6 +117,23 @@ export function parseHeaderDate(v: any, month?: string): string | null {
     let year = dmy[3];
     if (year.length === 2) year = (Number(year) > 50 ? '19' : '20') + year;
     if (day >= 1 && day <= 31 && mon >= 1 && mon <= 12) return `${year}-${pad(mon)}-${pad(day)}`;
+    return null;
+  }
+
+  // Day + month name, either order, optional weekday prefix and optional year.
+  const named = t.replace(WEEKDAY_PREFIX, '').trim();
+  const dm = named.match(/^(\d{1,2})[\s,.\-/]*([a-z]{3,9})\.?(?:[\s,.\-/]*(\d{2,4}))?$/i)
+    ?? named.match(/^([a-z]{3,9})\.?[\s,.\-/]*(\d{1,2})(?:[\s,.\-/]*(\d{2,4}))?$/i);
+  if (dm) {
+    const dayFirst = /^\d/.test(dm[1]);
+    const day = Number(dayFirst ? dm[1] : dm[2]);
+    const mon = MONTH_NAMES[String(dayFirst ? dm[2] : dm[1]).toLowerCase()];
+    if (mon && day >= 1 && day <= 31) {
+      let year: number | null;
+      if (dm[3]) year = dm[3].length === 2 ? Number((Number(dm[3]) > 50 ? '19' : '20') + dm[3]) : Number(dm[3]);
+      else year = yearForMonthName(mon, month);
+      if (year) return `${year}-${pad(mon)}-${pad(day)}`;
+    }
     return null;
   }
 

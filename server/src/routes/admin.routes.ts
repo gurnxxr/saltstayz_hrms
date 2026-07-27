@@ -41,6 +41,7 @@ router.use(authenticate);
 router.get('/properties', orgCtrl.listProperties);
 router.get('/departments', orgCtrl.listDepartments);
 router.get('/property-categories', orgCtrl.listPropertyCategories);
+router.get('/branches', orgCtrl.listBranches);
 router.get('/job-titles', orgCtrl.listJobTitles);
 router.get('/employee-categories', orgCtrl.listCategories);
 // NOT a general lookup: pay grades carry the company's salary bands, so this is the whole pay
@@ -63,6 +64,9 @@ router.delete('/departments/:id', authorize('admin', 'delete'), orgCtrl.deleteDe
 router.post('/property-categories', authorize('admin', 'create'), orgCtrl.createPropertyCategory);
 router.put('/property-categories/:id', authorize('admin', 'update'), orgCtrl.updatePropertyCategory);
 router.delete('/property-categories/:id', authorize('admin', 'delete'), orgCtrl.deletePropertyCategory);
+router.post('/branches', authorize('admin', 'create'), orgCtrl.createBranch);
+router.put('/branches/:id', authorize('admin', 'update'), orgCtrl.updateBranch);
+router.delete('/branches/:id', authorize('admin', 'delete'), orgCtrl.deleteBranch);
 
 router.post('/job-titles', authorize('admin', 'create'), orgCtrl.createJobTitle);
 router.put('/job-titles/:id', authorize('admin', 'update'), orgCtrl.updateJobTitle);

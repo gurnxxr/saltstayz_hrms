@@ -138,7 +138,7 @@ export default function ProfilePage() {
             <InfoRow icon={Calendar} label="Date of Joining" value={profile.date_of_joining ? new Date(profile.date_of_joining).toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' }) : 'N/A'} />
             <InfoRow icon={Briefcase} label="Dept Name" value={profile.dept_name || 'N/A'} />
             <InfoRow icon={Briefcase} label="Designation Name" value={profile.designation_name || 'N/A'} />
-            <InfoRow icon={Briefcase} label="Branch Name" value={profile.branch_name || 'N/A'} />
+            <InfoRow icon={Briefcase} label="Property Name" value={profile.branch_name || 'N/A'} />
             <InfoRow icon={CreditCard} label="Status" value={profile.is_active ? 'Active' : 'Inactive'} />
 
             {/* Editable fields */}

@@ -207,7 +207,8 @@ export default function EmployeeDetailsPage() {
                     <th className="text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Designation</th>
                     <th className="hidden sm:table-cell text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Date of Joining</th>
                     <th className="hidden lg:table-cell text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">PAN Card No</th>
-                    <th className="hidden sm:table-cell text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Branch Name</th>
+                    <th className="hidden sm:table-cell text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Property Name</th>
+                    <th className="hidden lg:table-cell text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Branch Name</th>
                     <th className="hidden lg:table-cell text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">State</th>
                     <th className="hidden sm:table-cell text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Reporting Manager</th>
                     <th className="hidden sm:table-cell text-left px-4 py-3 text-xs font-semibold text-secondary uppercase">Phone Number</th>
@@ -234,6 +235,10 @@ export default function EmployeeDetailsPage() {
                         <td className="hidden sm:table-cell px-4 py-3 text-sm text-foreground whitespace-nowrap">{formatDate(emp.date_of_joining)}</td>
                         <td className="hidden lg:table-cell px-4 py-3 text-sm text-foreground whitespace-nowrap">{emp.pan_number || '—'}</td>
                         <td className="hidden sm:table-cell px-4 py-3 text-sm text-foreground">{emp.branch_name || '—'}</td>
+                        {/* The reporting unit — a different fact from the property above. One is where
+                            they physically work (and so which state's statutory rules apply); this is
+                            which part of the business they belong to. */}
+                        <td className="hidden lg:table-cell px-4 py-3 text-sm text-secondary">{emp.branch_unit || '—'}</td>
                         {/* Derived from the property. Blank means the branch isn't a known
                             property, and payroll silently falls back to Haryana rates. */}
                         <td className="hidden lg:table-cell px-4 py-3 text-sm text-foreground">

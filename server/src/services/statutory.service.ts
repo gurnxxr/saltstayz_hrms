@@ -107,16 +107,33 @@ export function resolveStatutoryState(cityOrState?: string | null): string {
 
 /**
  * The employee's statutory state: employee → property (branch_name) → state.
- * properties.state is mandatory in the org UI; the head-office fallback only
- * covers unmatched/legacy branch names.
+ *
+ * `resolved` is the point. This returned a bare string, so no caller could tell a state read
+ * from the person's actual work location apart from the head-office fallback — and the fallback
+ * fires whenever `branch_name` matches no property, which is silent, permanent, and decides their
+ * Professional Tax, Labour Welfare Fund and minimum-wage floor. A guess that cannot be
+ * distinguished from a fact is how ~90 people came to be paid another state's rates unnoticed.
  */
-export async function getEmployeeState(employeeId: number): Promise<string> {
+export interface ResolvedState {
+  state: string;
+  resolved: 'property' | 'fallback';
+}
+
+export async function resolveEmployeeState(employeeId: number): Promise<ResolvedState> {
   const row = await db('employees as e')
     .leftJoin('properties as p', 'p.name', 'e.branch_name')
     .where('e.id', employeeId)
     .select('p.state')
     .first();
-  return resolveStatutoryState(row?.state ?? null);
+  const state = row?.state ?? null;
+  return state
+    ? { state: resolveStatutoryState(state), resolved: 'property' }
+    : { state: DEFAULT_STATUTORY_STATE, resolved: 'fallback' };
+}
+
+/** The state alone, for callers that only need the rate lookup. */
+export async function getEmployeeState(employeeId: number): Promise<string> {
+  return (await resolveEmployeeState(employeeId)).state;
 }
 
 /**
