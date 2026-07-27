@@ -9,7 +9,8 @@ import Breadcrumb from '@/components/ui/Breadcrumb';
 import LoadError from '@/components/ui/LoadError';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import Pagination, { pageSlice } from '@/components/ui/Pagination';
-import { Plus, Pencil, X, Loader2, Save, CalendarRange, Trash2, Layers, Users, Tag, Search, Ban, Star } from 'lucide-react';
+import { Plus, Pencil, X, Loader2, Save, CalendarRange, Trash2, Layers, Users, Tag, Search, Ban, Star, AlertTriangle } from 'lucide-react';
+import OffDayPicker, { type OffDay } from '@/components/shifts/OffDayPicker';
 
 const inputCls = 'w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50';
 const EMP_PAGE_SIZE = 20;
@@ -359,12 +360,12 @@ interface TRow {
   half_day_allowed: boolean; after_probation_only: boolean; count_sandwich_days: boolean;
   eligibility: string; cannot_club_with: number[];
 }
-type TForm = { name: string; is_active: boolean; rows: TRow[] };
+type TForm = { name: string; is_active: boolean; rows: TRow[]; off_day_rules: OffDay[] };
 
 function TemplatesPanel() {
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<number | 'new' | null>(null);
-  const [form, setForm] = useState<TForm>({ name: '', is_active: true, rows: [] });
+  const [form, setForm] = useState<TForm>({ name: '', is_active: true, rows: [], off_day_rules: [] });
   const [confirmDel, setConfirmDel] = useState<any | null>(null);
 
   const { data: templates = [], isLoading } = useQuery({
@@ -380,8 +381,11 @@ function TemplatesPanel() {
   });
 
   useEffect(() => {
-    if (selectedId === 'new') { setForm({ name: '', is_active: true, rows: [] }); return; }
-    if (detail) setForm({ name: detail.name, is_active: detail.is_active, rows: detail.rows.map((r: any) => ({ ...r })) });
+    if (selectedId === 'new') { setForm({ name: '', is_active: true, rows: [], off_day_rules: [] }); return; }
+    if (detail) setForm({
+      name: detail.name, is_active: detail.is_active, rows: detail.rows.map((r: any) => ({ ...r })),
+      off_day_rules: detail.off_day_rules ?? [],
+    });
   }, [detail, selectedId]);
 
   const selected = typeof selectedId === 'number' ? templates.find((t: any) => t.id === selectedId) : null;
@@ -395,7 +399,7 @@ function TemplatesPanel() {
     mutationFn: () => {
       const norm = (v: any) => (v === '' || v === null || v === undefined ? null : Number(v));
       const payload = {
-        name: form.name.trim(), is_active: form.is_active,
+        name: form.name.trim(), is_active: form.is_active, off_day_rules: form.off_day_rules,
         rows: form.rows.map((r) => ({
           leave_type_id: r.leave_type_id, default_days: Number(r.default_days) || 0,
           is_paid: r.is_paid, is_encashable: r.is_encashable,
@@ -487,6 +491,24 @@ function TemplatesPanel() {
                   onChange={(e) => setForm((p) => ({ ...p, is_active: e.target.checked }))} className="h-4 w-4 rounded border-border text-primary focus:ring-2 focus:ring-primary/50" />
                 <span className="text-sm text-foreground">Active {selected?.is_default && <span className="text-xs text-secondary">(the Default plan is always active)</span>}</span>
               </label>
+            </div>
+
+            {/* The work week. This is what decides whether a day was one the person was SCHEDULED
+                to work — and therefore whether an unevidenced day costs them anything. It lives on
+                the leave template because that is where the business decides it. */}
+            <div className="border-t border-border pt-4">
+              <label className="block text-xs font-medium text-secondary mb-1">Weekly off</label>
+              <p className="text-xs text-secondary mb-3">
+                The days employees on this plan are not scheduled to work. A missing punch on one of
+                these costs them nothing — they were never rostered. Leave it unset and they fall back
+                to the Default plan&apos;s week.
+              </p>
+              <OffDayPicker
+                value={form.off_day_rules}
+                onChange={(v) => setForm((p) => ({ ...p, off_day_rules: v }))}
+                emptyHint="No weekly off set — employees on this plan fall back to the Default plan, then the company work week."
+                preview
+              />
             </div>
           </div>
 
@@ -662,11 +684,12 @@ function ByEmployeePanel() {
                 <th className="px-4 py-3">Designation</th>
                 <th className="px-4 py-3">Property</th>
                 <th className="px-4 py-3">Leave template</th>
+                <th className="px-4 py-3">Weekly off</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {isLoading ? <tr><td colSpan={5} className="p-6 text-center text-secondary">Loading…</td></tr>
-                : filtered.length === 0 ? <tr><td colSpan={5} className="p-6 text-center text-secondary">No employees.</td></tr>
+              {isLoading ? <tr><td colSpan={6} className="p-6 text-center text-secondary">Loading…</td></tr>
+                : filtered.length === 0 ? <tr><td colSpan={6} className="p-6 text-center text-secondary">No employees.</td></tr>
                 : paged.map((e: any) => (
                   <tr key={e.id} className="hover:bg-muted/30">
                     <td className="px-4 py-2.5"><input type="checkbox" checked={selected.has(e.id)} onChange={() => toggle(e.id)} className="h-4 w-4 rounded border-border text-primary" /></td>
@@ -683,6 +706,15 @@ function ByEmployeePanel() {
                         )}
                         {activeTemplates.map((t: any) => <option key={t.id} value={t.id}>{t.name}</option>)}
                       </select>
+                    </td>
+                    {/* The days this person is NOT scheduled to work — resolved exactly as payroll
+                        resolves it, so this column and their pay can never disagree. "Not set"
+                        is deliberately not blank: an unconfigured work week is the thing that
+                        made an unevidenced Sunday cost somebody a day's pay. */}
+                    <td className="px-4 py-2.5">
+                      {e.off_days === 'Not set'
+                        ? <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-700"><AlertTriangle size={11} /> Not set</span>
+                        : <span className="text-secondary whitespace-nowrap">{e.off_days}</span>}
                     </td>
                   </tr>
                 ))}

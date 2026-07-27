@@ -74,6 +74,15 @@ export default function AttendanceCalendar() {
     return map;
   }, [calendarData]);
 
+  // The server's own work calendar: which days this person was scheduled to work, and what said
+  // so. Without it the screen had to guess Sat/Sun for everybody, which is wrong for anyone on a
+  // six-day week and gave no reason at all for a rest day.
+  const dayMap = useMemo(() => {
+    const map: Record<string, { kind: string; decided_by_name?: string }> = {};
+    for (const d of calendarData?.days ?? []) map[d.date] = d;
+    return map;
+  }, [calendarData]);
+
   function prevMonth() {
     if (calMonth === 0) { setCalMonth(11); setCalYear(y => y - 1); }
     else setCalMonth(m => m - 1);
@@ -163,8 +172,12 @@ export default function AttendanceCalendar() {
 
                 for (let d = 1; d <= daysInMonth; d++) {
                   const dateStr = `${calYear}-${String(calMonth + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-                  const dayOfWeek = new Date(calYear, calMonth, d).getDay();
-                  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+                  // Whether this was a day THEY were scheduled to work, from the server's own work
+                  // calendar — the same one payroll reads. This used to be `dayOfWeek === 0 || 6`,
+                  // which told a six-day employee their Saturday was a day off when they had
+                  // worked it, and gave no hint at all why a Sunday "no punch" cost them nothing.
+                  const scheduled = dayMap[dateStr];
+                  const isWeekend = scheduled ? scheduled.kind === 'weekly_off' : false;
                   const isToday = dateStr === todayStr;
                   const isFuture = new Date(calYear, calMonth, d) > today;
                   const record = attendanceMap[dateStr];
@@ -214,8 +227,12 @@ export default function AttendanceCalendar() {
                       badge = 'R'; badgeBg = 'bg-indigo-100'; badgeText = 'text-indigo-700';
                     }
                   } else if (isWeekend && !isFuture) {
-                    badge = 'WO'; badgeBg = 'bg-gray-100'; badgeText = 'text-gray-500'; tooltip = 'Weekly Off';
-                    statusLabel = 'Weekly Off';
+                    badge = 'WO'; badgeBg = 'bg-gray-100'; badgeText = 'text-gray-500';
+                    // Name the policy that made it a rest day, so "why wasn't I docked?" — and its
+                    // mirror, "why WAS I?" — has an answer on the day itself.
+                    const why = scheduled?.decided_by_name ? ` — ${scheduled.decided_by_name}` : '';
+                    tooltip = `Weekly Off${why}`;
+                    statusLabel = `Weekly Off${why}`;
                   }
 
                   const isOnLeave = record?.status === 'on_leave' || !!leave;

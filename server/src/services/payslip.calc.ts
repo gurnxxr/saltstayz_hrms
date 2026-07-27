@@ -92,6 +92,11 @@ export interface AttendanceContext {
   hours?: number | null; // hourly-rated only: attendance working hours
   counts?: Record<string, number>; // day-status counts for the review screen
   lop_overridden?: boolean;        // HR replaced the computed LOP in review
+  // Which named policy set the working days — the divisor every deduction is measured against.
+  // Stored on the payslip so a month can always say what priced it, rather than the answer
+  // depending on whatever the settings happen to say when someone next opens it.
+  calendar_name?: string;
+  calendar_source?: string;
 }
 
 export interface PayslipLine {

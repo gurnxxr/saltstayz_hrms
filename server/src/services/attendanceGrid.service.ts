@@ -1,6 +1,7 @@
 import ExcelJS from 'exceljs';
 import db from '../config/database';
 import { ValidationError } from '../utils/errors';
+import { buildWorkCalendar } from './payableDays.service';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Marked-grid attendance importer.
@@ -201,6 +202,11 @@ export interface GridUploadResult {
   unrecognized: string[];
   locked_months: string[];
   dates: string[];
+  // Marks that landed on a day the person was not scheduled to work. Reported, never counted as
+  // `skipped` — those are problems, and this is routine. Every register has them, because of
+  // course there is no punch on a rest day.
+  off_calendar: number;
+  off_calendar_sample: Array<{ employee_code: string; date: string; code: string; kind: string; because: string }>;
 }
 
 /**
@@ -235,7 +241,19 @@ export async function uploadMarkedGrid(buffer: Buffer, fileName: string, month?:
   const result: GridUploadResult = {
     total: cells.length, created: 0, updated: 0, skipped: 0,
     unmatched: [], unrecognized, locked_months: [...lockedMonths], dates,
+    off_calendar: 0, off_calendar_sample: [],
   };
+
+  // One work calendar per employee for the whole upload, built once and reused across their ~31
+  // cells. A grid cell is a clerical mark, not evidence: writing "no punch" onto somebody's rest
+  // day records nothing (nobody was working) while making every attendance summary read as though
+  // they had missed a shift. The biometric path deliberately does NOT do this — a punch IS
+  // evidence somebody was there, and dropping it would destroy the only record of it.
+  const sorted = [...dates].sort();
+  const calendars = new Map<number, Awaited<ReturnType<typeof buildWorkCalendar>>>();
+  for (const employeeId of new Set(empMap.values())) {
+    calendars.set(employeeId, await buildWorkCalendar(employeeId, sorted[0], sorted[sorted.length - 1]));
+  }
 
   for (const cell of cells) {
     const employeeId = empMap.get(cell.empCode);
@@ -245,6 +263,18 @@ export async function uploadMarkedGrid(buffer: Buffer, fileName: string, month?:
       continue;
     }
     if (lockedMonths.has(cell.date.slice(0, 7))) { result.skipped++; continue; }
+
+    const day = calendars.get(employeeId)?.classify(cell.date);
+    if (day && day.base !== 'working') {
+      result.off_calendar++;
+      if (result.off_calendar_sample.length < 20) {
+        result.off_calendar_sample.push({
+          employee_code: cell.empCode, date: cell.date, code: cell.code,
+          kind: day.base, because: day.base === 'holiday' ? (day.holidayName ?? 'Holiday') : day.sourceName,
+        });
+      }
+      continue;
+    }
 
     const existing = await db('attendance_records')
       .where({ employee_id: employeeId, date: cell.date }).first();

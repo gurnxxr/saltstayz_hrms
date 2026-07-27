@@ -101,8 +101,31 @@ async function capturePayslips(dir: string) {
       'locked_at', 'unlocked_at', 'unlock_reason')
     .orderBy(['year', 'month']);
 
-  write(dir, 'payslips.json', { captured_at: new Date().toISOString(), runs, payslips: out });
-  return { periods: periods.length, payslips: out.length };
+  // A locked run with no payslips behind it is the one gap this baseline cannot close. Every
+  // comparison downstream iterates payslips that exist, so a paid month holding none is invisible
+  // to all of them — and with nothing stored, the app computes those figures live at whatever the
+  // rules say today. Surface it here, at capture, rather than letting a green verify imply cover
+  // that was never there.
+  const withSlips = new Set(out.map((r) => `${r.year}-${r.month}`));
+  const unreproducible = runs
+    .filter((r: any) => r.status === 'locked' && !withSlips.has(`${r.year}-${r.month}`))
+    .map((r: any) => ({
+      month: r.month, year: r.year, employee_count: r.employee_count,
+      total_net: r.total_net, locked_at: r.locked_at,
+    }));
+  if (unreproducible.length) {
+    console.log('');
+    for (const u of unreproducible) {
+      console.log(`   WARNING ${String(u.month).padStart(2, '0')}/${u.year} is LOCKED with ` +
+        `${u.employee_count} employee(s) and ₹${Math.round(Number(u.total_net) || 0).toLocaleString('en-IN')} ` +
+        `net, but holds NO payslips — those figures cannot be reproduced.`);
+    }
+  }
+
+  write(dir, 'payslips.json', {
+    captured_at: new Date().toISOString(), runs, payslips: out, unreproducible_runs: unreproducible,
+  });
+  return { periods: periods.length, payslips: out.length, unreproducible: unreproducible.length };
 }
 
 async function captureRosterProvenance(dir: string) {
@@ -260,6 +283,14 @@ async function main() {
     `Payslips        ${p.payslips} across ${p.periods} period(s)`,
     `Roster cells    ${r.cells} across ${r.periods} period(s)`,
     `Patterns        ${w.employees} employee(s), ${w.confident} confident / ${w.employees - w.confident} need review`,
+    ...(p.payslips === 0
+      ? [``, `WARNING: this baseline holds NO payslips, so it proves nothing. Capture it against`,
+         `the database you are about to change, not an empty one.`]
+      : []),
+    ...(p.unreproducible
+      ? [``, `WARNING: ${p.unreproducible} locked run(s) hold no payslips. Those months were paid but`,
+         `cannot be reproduced — the app computes them live at today's rules.`]
+      : []),
     ``,
     `payslips.json          reference for proving no paid month moved`,
     `roster-provenance.json which months actually followed a published roster`,

@@ -1,21 +1,30 @@
 import db from '../config/database';
+import { ValidationError } from '../utils/errors';
 import { getPaySchedule } from './paySchedule.service';
 import { getAttendancePayRules } from './attendancePayRules.service';
 import { getEmployeeRegion } from './leave.service';
-import { getEmployeeLeaveRules } from './leaveTemplate.service';
-import { isOffDay, parseOffDayRules, pickAssignmentFor, shiftLengthHours } from './shiftPattern';
+import { getEmployeeLeaveRules, getEmployeeWorkWeek } from './leaveTemplate.service';
+import {
+  isOffDay, parseOffDayRules, pickAssignmentFor, rulesInForceOn, shiftLengthHours, type OffDayRule,
+} from './shiftPattern';
 import type { AttendanceContext } from './payslip.calc';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Payable-days engine.
 //
-// Each employee has their own working-day calendar, resolved from the shift they are
-// mapped to on each date:
-//   • the shift declares its own off days, including patterns like the 2nd and 4th
-//     Saturday — there is no weekly grid to fill in;
-//   • a shift declaring no off days falls back to the org Pay Schedule work week, so a
-//     shift with nothing configured never quietly turns weekends into working days;
-//   • regional/national holidays overlay on top;
+// Each employee has their own working-day calendar. Which days they were SCHEDULED to work is
+// resolved through named policies, most specific first, so no day is ever decided by an
+// anonymous constant:
+//   • the shift's own off days, when it declares any — the narrow override, for when the
+//     shift itself dictates the pattern;
+//   • otherwise the WORK WEEK ON THEIR LEAVE TEMPLATE. This is the main axis: it is where the
+//     business decides who is off which day, and it expresses patterns like "every Sunday plus
+//     the 2nd and 4th Saturday" directly;
+//   • otherwise the Default template's, then the org Pay Schedule work week. An empty pattern
+//     always means "not configured", never "works every day" — the difference is somebody's
+//     Sunday, and a blank policy must not quietly turn rest days into working days;
+//   • regional/national holidays overlay on top, but only on days already scheduled — a
+//     holiday landing on a rest day is still a rest day, not a bonus day in the divisor;
 //   • days outside the employment span [date_of_joining, last_working_day] are
 //     "not employed" — they stay in the denominator but are never paid, so a
 //     mid-month joiner/leaver is paid exactly for the days they were employed.
@@ -30,6 +39,10 @@ export type DayStatus =
   | 'paid_leave' | 'unpaid_leave'
   | 'unmarked' | 'future' | 'not_employed';
 
+/** Which named policy decided a day was, or was not, one the person was scheduled to work. */
+export type OffDaySource = 'shift' | 'template' | 'default_template' | 'work_week';
+export type DayDecidedBy = OffDaySource | 'holiday' | 'employment_span';
+
 export interface DayTrace {
   date: string;                                   // YYYY-MM-DD
   kind: 'working' | 'weekly_off' | 'holiday' | 'not_employed';
@@ -38,6 +51,10 @@ export interface DayTrace {
   leave_debit?: number;                           // paid-leave fraction the code consumes (e.g. Half Day → 0.5)
   holiday_name?: string;
   leave_type?: string;                            // leave category on a leave day
+  // Provenance. Without these, "why was this Sunday paid?" has no answer anywhere in the system,
+  // which is exactly how a whole company came to be treated as working seven days a week.
+  decided_by?: DayDecidedBy;
+  decided_by_name?: string;                       // the shift, the leave template, or the holiday
 }
 
 export interface PayableDays extends AttendanceContext {
@@ -58,6 +75,9 @@ export interface PayableDays extends AttendanceContext {
   method: string;            // actual_days | fixed_days
   unmarked_policy: string;   // present | absent
   shift_driven: boolean;     // true when the calendar came from a shift's own off days
+  /** The policy that decided the working days, for the payslip. 'mixed' if it changed mid-month. */
+  calendar_source: OffDaySource | 'mixed';
+  calendar_name: string;
   trace: DayTrace[];
 }
 
@@ -92,7 +112,17 @@ interface DayInfo {
   shiftHours: number;   // length of the shift in effect (0 when the employee has none)
   allowOt: boolean;     // that shift allows overtime
   otAfter: number;      // hours after which overtime starts (0 = the shift's own length)
+  source: OffDaySource; // which named policy decided whether this was a scheduled working day
+  sourceName: string;
+  employmentNote?: string; // why they were not employed on this date, when they weren't
 }
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** '2026-06-10' → '10 Jun 2026', for a reason a person reads rather than parses. */
+const humanDate = (iso: string) => {
+  const [y, m, d] = iso.slice(0, 10).split('-');
+  return `${Number(d)} ${MONTHS[Number(m) - 1]} ${y}`;
+};
 
 export interface WorkCalendar {
   classify(date: string): DayInfo;
@@ -120,6 +150,11 @@ export async function buildWorkCalendar(
 
   const schedule = await getPaySchedule();
   const workWeek = new Set<number>(schedule.work_week);
+  // The first date any work pattern is allowed to speak for. Patterns are configured today but
+  // evaluated across history, so without this a pattern saved this morning would silently
+  // re-price a month that has already been paid. See `rulesInForceOn`.
+  const patternsFrom = schedule.work_pattern_effective_from ?? null;
+  const workWeekPolicy = await getEmployeeWorkWeek(employeeId);
 
   // Every dated assignment in one query, resolved per date in memory — the alternative is a
   // lookup per day, and this runs for every employee on every payroll run.
@@ -153,24 +188,57 @@ export async function buildWorkCalendar(
     .select('date', 'name');
   const holidayByDate = new Map<string, string>(holidayRows.map((h: any) => [String(h.date).slice(0, 10), h.name]));
 
-  /** True when the shift itself decided this date, rather than the company work week. */
-  const shiftDriven = (date: string) => (shiftOn(date)?.offRules.length ?? 0) > 0;
+  /**
+   * Which named policy owns this date's off-day pattern, most specific first.
+   *
+   * Each rung is a thing with a name, so every day can say what decided it. An empty pattern at
+   * any rung means "not configured" and falls through — it never means "works every day", because
+   * a blank policy quietly turning rest days into working days is the failure this whole change
+   * exists to fix.
+   */
+  const policyFor = (date: string): { rules: OffDayRule[]; source: OffDaySource; name: string } => {
+    const shift = shiftOn(date);
+    const shiftRules = rulesInForceOn(date, shift?.offRules ?? [], patternsFrom);
+    if (shiftRules.length) return { rules: shiftRules, source: 'shift', name: shift!.name };
+
+    const templateRules = rulesInForceOn(date, workWeekPolicy.rules, patternsFrom);
+    if (templateRules.length && workWeekPolicy.source !== 'none') {
+      return {
+        rules: templateRules,
+        source: workWeekPolicy.source === 'template' ? 'template' : 'default_template',
+        name: workWeekPolicy.name ?? 'Leave template',
+      };
+    }
+    return { rules: [], source: 'work_week', name: 'Company work week' };
+  };
+
+  /** True when the shift itself decided this date, rather than a leave template or the work week. */
+  const shiftDriven = (date: string) => policyFor(date).source === 'shift';
 
   const classify = (date: string): DayInfo => {
     const employed = (!doj || date >= doj) && (!lwd || date <= lwd);
+    const employmentNote = employed ? undefined
+      : (doj && date < doj) ? `Joined ${humanDate(doj)}`
+      : (lwd ? `Left ${humanDate(lwd)}` : 'Outside their employment dates');
     const shift = shiftOn(date);
     const shiftHours = shift?.hours ?? 0;
     const allowOt = shift?.allowOt ?? false;
     const otAfter = shift?.otAfter ?? 0;
 
+    const { rules, source, name } = policyFor(date);
+    const isOff = rules.length ? isOffDay(date, rules) : !workWeek.has(dowOf(date));
     const holidayName = holidayByDate.get(date);
-    if (holidayName !== undefined) return { base: 'holiday', employed, holidayName, shiftHours, allowOt, otAfter };
 
-    // The shift's own off-day pattern decides. With no pattern — or no shift at all — the
-    // company work week does.
-    const rules = shift?.offRules ?? [];
-    const isWorking = rules.length ? !isOffDay(date, rules) : workWeek.has(dowOf(date));
-    return { base: isWorking ? 'working' : 'weekly_off', employed, shiftHours, allowOt, otAfter };
+    // The off-day question is answered BEFORE the holiday overlay, and that order is the whole
+    // point. A holiday landing on someone's rest day is still a rest day: they were never
+    // scheduled to work it. Tested the other way round, it became a PAID HOLIDAY and added a day
+    // to the salary divisor that nobody was rostered for — which quietly changed the price of
+    // every lost day in that month. The holiday's name is kept on the day either way; it is
+    // still Diwali, it just does not move any money.
+    const common = { employed, employmentNote, shiftHours, allowOt, otAfter, source, sourceName: name };
+    if (isOff) return { base: 'weekly_off', holidayName, ...common };
+    if (holidayName !== undefined) return { base: 'holiday', holidayName, ...common };
+    return { base: 'working', ...common };
   };
 
   return { classify, shiftDriven };
@@ -199,6 +267,42 @@ export async function countWorkingDaysInRange(employeeId: number, startDate: str
     cur.setDate(cur.getDate() + 1);
   }
   return count;
+}
+
+/**
+ * The dates a leave request actually covers — the single answer both the balance and the
+ * attendance calendar must use.
+ *
+ * They used to disagree. The debit counted working days while the calendar was marked for every
+ * date in the range, so a Friday-to-Monday leave took 2 days off the balance and wrote 4 "on
+ * leave" days, two of them on a weekend nobody had asked for. That was harmless only for as long
+ * as payroll ignored rest days entirely; once a six-day week makes Saturday a working day, an
+ * unpaid-leave mark sitting on it costs a full day of pay the employee never requested.
+ *
+ * `countSandwich` is the leave type's sandwich rule: when on, the rest days and holidays bridging
+ * a leave are consumed too, so they are BOTH debited and marked. When off, neither.
+ */
+export async function leaveDatesFor(
+  employeeId: number, startDate: string, endDate: string, countSandwich: boolean,
+): Promise<string[]> {
+  const cal = await buildWorkCalendar(employeeId, startDate, endDate);
+  const out: string[] = [];
+  const [sy, sm, sd] = startDate.split('-').map(Number);
+  const [ey, em, ed] = endDate.split('-').map(Number);
+  const cur = new Date(sy, sm - 1, sd);
+  const last = new Date(ey, em - 1, ed);
+  // The same 400-day ceiling the old walker used, but explicit: silently truncating a range is
+  // how the count and the marks came to differ in the first place.
+  while (cur <= last) {
+    if (out.length >= 400) {
+      throw new ValidationError('A leave request cannot span more than 400 days.');
+    }
+    const date = `${cur.getFullYear()}-${pad(cur.getMonth() + 1)}-${pad(cur.getDate())}`;
+    const info = cal.classify(date);
+    if (countSandwich || (info.base === 'working' && info.employed)) out.push(date);
+    cur.setDate(cur.getDate() + 1);
+  }
+  return out;
 }
 
 /**
@@ -308,15 +412,31 @@ export async function computePayableDays(employeeId: number, month: number, year
   let lop = 0;
   let leaveDebit = 0;       // paid-leave fraction codes consume (Half Day → ½), measured not mutated
   let shiftDriven = false; // true once any day in the month was decided by a shift's own off days
+  // Which named policy set the working days. Collected across the month so the payslip can say
+  // it in one line, and so a mid-month change reads as 'mixed' rather than silently as the last
+  // one seen.
+  const sourcesSeen = new Map<OffDaySource, string>();
 
   for (let d = 1; d <= periodDays; d++) {
     const date = `${year}-${pad(month)}-${pad(d)}`;
     const info = cal.classify(date);
     if (cal.shiftDriven(date)) shiftDriven = true;
+    sourcesSeen.set(info.source, info.sourceName);
+    const decided = { decided_by: info.source, decided_by_name: info.sourceName };
 
     if (info.base === 'weekly_off') {
-      if (info.employed) { weeklyOffs += 1; trace.push({ date, kind: 'weekly_off', status: null, lop: 0 }); }
-      else { trace.push({ date, kind: 'not_employed', status: null, lop: 0 }); }
+      // A holiday can coincide with a rest day. It stays named on the day — it is still Diwali —
+      // but it is the rest day that decided nothing was owed, so that is what is recorded.
+      const alsoHoliday = info.holidayName ? { holiday_name: info.holidayName } : {};
+      if (info.employed) {
+        weeklyOffs += 1;
+        trace.push({ date, kind: 'weekly_off', status: null, lop: 0, ...alsoHoliday, ...decided });
+      } else {
+        trace.push({
+          date, kind: 'not_employed', status: null, lop: 0,
+          decided_by: 'employment_span', decided_by_name: info.employmentNote ?? 'Outside their employment dates',
+        });
+      }
       continue;
     }
 
@@ -329,7 +449,10 @@ export async function computePayableDays(employeeId: number, month: number, year
         workingDays += 1;
         if (!info.employed) { notEmployedDays += 1; counts.not_employed += 1; }
       }
-      trace.push({ date, kind: 'holiday', status: info.employed ? null : 'not_employed', lop: 0, holiday_name: info.holidayName });
+      trace.push({
+        date, kind: 'holiday', status: info.employed ? null : 'not_employed', lop: 0,
+        holiday_name: info.holidayName, decided_by: 'holiday', decided_by_name: info.holidayName ?? 'Holiday',
+      });
       continue;
     }
 
@@ -338,7 +461,10 @@ export async function computePayableDays(employeeId: number, month: number, year
     if (!info.employed) {
       notEmployedDays += 1;
       counts.not_employed += 1;
-      trace.push({ date, kind: 'not_employed', status: 'not_employed', lop: 0 });
+      trace.push({
+        date, kind: 'not_employed', status: 'not_employed', lop: 0,
+        decided_by: 'employment_span', decided_by_name: info.employmentNote ?? 'Outside their employment dates',
+      });
       continue;
     }
 
@@ -427,6 +553,7 @@ export async function computePayableDays(employeeId: number, month: number, year
       date, kind: 'working', status: dayStatus, lop: dayLop,
       ...(dayLeaveDebit > 0 ? { leave_debit: dayLeaveDebit } : {}),
       ...(leaveName ? { leave_type: leaveName } : {}),
+      decided_by: info.source, decided_by_name: info.sourceName,
     });
   }
 
@@ -442,6 +569,13 @@ export async function computePayableDays(employeeId: number, month: number, year
   const paidRatio = workingDays > 0 ? Math.max(0, workingDays - notEmployedDays - lop) / workingDays : 0;
   const paymentDays = round2(denominator * paidRatio);
 
+  // One line for the payslip: which named policy set this month's working days. More than one
+  // means the person moved between policies mid-month, and saying 'mixed' is honest where naming
+  // whichever happened to be seen last would not be.
+  const [onlySource, onlyName] = sourcesSeen.size === 1 ? [...sourcesSeen.entries()][0] : [null, null];
+  const calendarSource: OffDaySource | 'mixed' = onlySource ?? 'mixed';
+  const calendarName = onlyName ?? [...sourcesSeen.values()].join(' + ');
+
   return {
     period_days: periodDays,
     working_days: denominator,
@@ -456,6 +590,8 @@ export async function computePayableDays(employeeId: number, month: number, year
     method,
     unmarked_policy: unmarkedPolicy,
     shift_driven: shiftDriven,
+    calendar_source: calendarSource,
+    calendar_name: calendarName || 'Company work week',
     trace,
   };
 }

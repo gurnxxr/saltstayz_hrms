@@ -67,6 +67,31 @@ export function isOffDay(iso: string, rules: OffDayRule[]): boolean {
 }
 
 /**
+ * Which off-day rules are allowed to decide a date.
+ *
+ * A work pattern is configured today but evaluated across history, and `pickAssignmentFor` will
+ * project an assignment backwards over dates that pre-date it. Together those mean a pattern saved
+ * this morning can silently redefine which days were working days in a month that has already been
+ * paid — moving its salary divisor, and with it every deduction in that month.
+ *
+ * `notBefore` is the first date any pattern may speak for: the day the patterns were introduced.
+ * Earlier dates resolve to no pattern at all, which is exactly an unconfigured shift, so they keep
+ * whatever priced them at the time.
+ *
+ * It is deliberately a FIXED date rather than "the month after the newest locked run". A moving
+ * boundary would suppress patterns for the very months those patterns had already priced: lock
+ * June, and June's own calendar would change underneath its own payslips.
+ *
+ * A null `notBefore` means there is no history to protect — a fresh install, or a test database.
+ */
+export function rulesInForceOn(
+  iso: string, rules: OffDayRule[], notBefore?: string | null,
+): OffDayRule[] {
+  if (!notBefore) return rules;
+  return String(iso).slice(0, 10) >= String(notBefore).slice(0, 10) ? rules : [];
+}
+
+/**
  * Which of an employee's dated assignments governs a given date.
  *
  * The answer is the latest assignment starting on or before that date. When the date falls

@@ -1,6 +1,7 @@
 import type { Knex } from 'knex';
 import db from '../config/database';
 import { NotFoundError, ValidationError } from '../utils/errors';
+import { parseOffDayRules, type OffDayRule } from './shiftPattern';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Leave Templates — the single resolver every leave read path uses to get an
@@ -108,6 +109,39 @@ export async function resolveTemplateId(employeeId: number): Promise<number | nu
   return emp?.leave_template_id ?? (await getDefaultTemplateId());
 }
 
+/** Which days of the week an employee does not work, and the named policy that says so. */
+export interface WorkWeek {
+  rules: OffDayRule[];
+  /** Where it came from — for the payslip and the day-by-day trace. */
+  source: 'template' | 'default_template' | 'none';
+  name: string | null;
+}
+
+/**
+ * An employee's weekly off, from the leave template they are assigned.
+ *
+ * This is the axis that decides whether a day was one they were SCHEDULED to work — which is what
+ * makes an unevidenced day cost pay or not. It lives here rather than on the shift because that is
+ * where the business decides it, and because a shift is about what time you start: two people on
+ * the same morning shift can have different days off.
+ *
+ * A template with no pattern of its own falls through to the Default template, and a Default with
+ * none falls through to the organisation work week (the caller's job). An empty pattern always
+ * means "not configured" and NEVER "works every day" — the difference is somebody's Sunday.
+ */
+export async function getEmployeeWorkWeek(employeeId: number): Promise<WorkWeek> {
+  const emp = await db('employees').where('id', employeeId).select('leave_template_id').first();
+  if (emp?.leave_template_id) {
+    const own = await db('leave_templates').where('id', emp.leave_template_id).first();
+    const rules = parseOffDayRules(own?.off_day_rules);
+    if (rules.length) return { rules, source: 'template', name: own.name };
+  }
+  const fallback = await db('leave_templates').where('is_default', true).first();
+  const rules = parseOffDayRules(fallback?.off_day_rules);
+  if (rules.length) return { rules, source: 'default_template', name: fallback.name };
+  return { rules: [], source: 'none', name: null };
+}
+
 /** All of an employee's leave rules, keyed by leave_type_id. */
 export async function getEmployeeLeaveRules(employeeId: number): Promise<Map<number, LeaveRule>> {
   const templateId = await resolveTemplateId(employeeId);
@@ -193,6 +227,7 @@ export async function listTemplates() {
   const nullCount = Number((nullRow as any)?.c ?? 0);
   return templates.map((t: any) => ({
     id: t.id, name: t.name, is_default: !!t.is_default, is_active: !!t.is_active,
+    off_day_rules: parseOffDayRules(t.off_day_rules),
     row_count: rc.get(t.id) ?? 0,
     employee_count: (ec.get(t.id) ?? 0) + (t.id === defaultId ? nullCount : 0),
   }));
@@ -213,6 +248,7 @@ export async function getTemplate(id: number) {
   for (const c of conflicts) { const a = byRow.get(c.template_row_id) ?? []; a.push(c.conflict_leave_type_id); byRow.set(c.template_row_id, a); }
   return {
     id: t.id, name: t.name, is_default: !!t.is_default, is_active: !!t.is_active,
+    off_day_rules: parseOffDayRules(t.off_day_rules),
     rows: rows.map((r: any) => ({
       leave_type_id: r.leave_type_id, leave_type_name: r.leave_type_name,
       default_days: Number(r.default_days) || 0, is_paid: !!r.is_paid, is_encashable: !!r.is_encashable,
@@ -225,7 +261,7 @@ export async function getTemplate(id: number) {
   };
 }
 
-interface TemplateInput { name: string; is_active: boolean; rows: any[]; }
+interface TemplateInput { name: string; is_active: boolean; rows: any[]; off_day_rules?: OffDayRule[]; }
 async function validateTemplateInput(data: any, excludeId?: number): Promise<TemplateInput> {
   const name = String(data.name ?? '').trim();
   if (!name) throw new ValidationError('Template name is required');
@@ -276,7 +312,14 @@ async function validateTemplateInput(data: any, excludeId?: number): Promise<Tem
       }
     }
   }
-  return { name, is_active: data.is_active === undefined ? true : !!data.is_active, rows };
+  // The work week travels with the template because that is where the business decides it.
+  // Validated through the same parser the shift screen uses, so a bad day index or a
+  // nonsense occurrence is rejected here rather than quietly ignored at pay time.
+  const off_day_rules = 'off_day_rules' in data ? parseOffDayRules(data.off_day_rules) : undefined;
+  if (off_day_rules && off_day_rules.length >= 7) {
+    throw new ValidationError('A work week cannot have every day off — that would make the month unpayable.');
+  }
+  return { name, is_active: data.is_active === undefined ? true : !!data.is_active, rows, off_day_rules };
 }
 
 async function writeRows(trx: Knex.Transaction, templateId: number, rows: any[]) {
@@ -295,12 +338,57 @@ export async function createTemplate(data: any) {
   const input = await validateTemplateInput(data);
   try {
     const id = await db.transaction(async (trx) => {
-      const [{ id: tId }] = await trx('leave_templates').insert({ name: input.name, is_default: false, is_active: input.is_active }).returning('id');
+      const [{ id: tId }] = await trx('leave_templates').insert({
+        name: input.name, is_default: false, is_active: input.is_active,
+        off_day_rules: JSON.stringify(input.off_day_rules ?? []),
+      }).returning('id');
       await writeRows(trx, tId, input.rows);
       return tId;
     });
     return getTemplate(id);
   } catch (e) { rethrowDuplicate(e); }
+}
+
+/**
+ * A copy of an existing template that differs ONLY by its work week.
+ *
+ * This exists because of a trap. A leave template carries a whole leave plan — entitlements,
+ * paid/unpaid, notice periods, what can be clubbed with what. Splitting the workforce by work
+ * week means moving people onto new templates, and a new template built from scratch would
+ * silently rewrite the leave of everyone moved onto it. So the rows are copied across verbatim,
+ * conflicts included, and the ONLY difference is which days of the week are not worked.
+ *
+ * Idempotent by name: running the rollout twice does not produce two of everything.
+ */
+export async function cloneTemplateWithWorkWeek(
+  sourceTemplateId: number, name: string, offDayRules: OffDayRule[],
+): Promise<{ id: number; name: string; created: boolean }> {
+  const existing = await db('leave_templates').whereRaw('lower(name) = lower(?)', [name]).first();
+  if (existing) {
+    await db('leave_templates').where('id', existing.id)
+      .update({ off_day_rules: JSON.stringify(offDayRules), updated_at: db.fn.now() });
+    return { id: existing.id, name: existing.name, created: false };
+  }
+  const id = await db.transaction(async (trx) => {
+    const [{ id: newId }] = await trx('leave_templates').insert({
+      name, is_default: false, is_active: true, off_day_rules: JSON.stringify(offDayRules),
+    }).returning('id');
+
+    const rows = await trx('leave_template_rows').where('template_id', sourceTemplateId);
+    for (const r of rows) {
+      const { id: oldRowId, ...rest } = r;
+      const [{ id: newRowId }] = await trx('leave_template_rows')
+        .insert({ ...rest, template_id: newId }).returning('id');
+      const conflicts = await trx('leave_template_row_conflicts').where('template_row_id', oldRowId);
+      if (conflicts.length) {
+        await trx('leave_template_row_conflicts').insert(conflicts.map((c: any) => ({
+          template_row_id: newRowId, conflict_leave_type_id: c.conflict_leave_type_id,
+        })));
+      }
+    }
+    return newId;
+  });
+  return { id, name, created: true };
 }
 
 export async function updateTemplate(id: number, data: any) {
@@ -311,7 +399,11 @@ export async function updateTemplate(id: number, data: any) {
     await db.transaction(async (trx) => {
       // The Default template is the NULL fallback and every new hire's plan — it can be
       // renamed but never deactivated, or the resolver would keep using an "inactive" plan.
-      await trx('leave_templates').where('id', id).update({ name: input.name, is_active: t.is_default ? true : input.is_active, updated_at: trx.fn.now() });
+      await trx('leave_templates').where('id', id).update({
+        name: input.name, is_active: t.is_default ? true : input.is_active,
+        ...(input.off_day_rules ? { off_day_rules: JSON.stringify(input.off_day_rules) } : {}),
+        updated_at: trx.fn.now(),
+      });
       // Editing replaces the rows wholesale — the change applies to everyone on this template
       // going forward; leave already taken/approved is untouched (it lives in leave_requests /
       // leave_entitlements, not here).
@@ -341,7 +433,8 @@ export async function listTemplateAssignments(filters: { search?: string } = {})
     .leftJoin('leave_templates as t', 't.id', 'e.leave_template_id')
     .where('e.is_active', true)
     .select('e.id', 'e.employee_code', 'e.first_name', 'e.last_name', 'e.branch_name', 'e.dept_name',
-      'jt.title as designation', 'e.leave_template_id', 't.name as template_name', 't.is_default as template_is_default')
+      'jt.title as designation', 'e.leave_template_id', 't.name as template_name',
+      't.is_default as template_is_default', 't.off_day_rules as template_off_days')
     .orderBy('e.first_name');
   if (filters.search && filters.search.trim()) {
     const term = `%${filters.search.trim()}%`;
@@ -359,6 +452,10 @@ export async function listTemplateAssignments(filters: { search?: string } = {})
     // NULL assignment resolves to Default (that's what the engine reads).
     leave_template_id: r.leave_template_id ?? defaultId,
     template_name: r.template_name ?? defaultRow?.name ?? 'Default',
+    // The work week the engine will actually read for them, resolved the same way it is:
+    // their own template, else Default. This is the column that answers "who is off when?".
+    off_days: describeOffDays(parseOffDayRules(
+      r.leave_template_id ? r.template_off_days : defaultRow?.off_day_rules)),
   }));
 }
 
@@ -380,4 +477,25 @@ export async function bulkAssignTemplate(employeeIds: any[], templateId: number)
   if (!ids.length) throw new ValidationError('Select at least one employee');
   const assigned = await db('employees').whereIn('id', ids).update({ leave_template_id: templateId });
   return { assigned, template_id: templateId };
+}
+
+const DOW_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const OCCURRENCE = ['', '1st', '2nd', '3rd', '4th', '5th'];
+
+/**
+ * A work week in words: "Sun", "Sat + Sun", "Sun + 2nd & 4th Sat".
+ *
+ * An empty pattern is NOT "works every day" — it means nobody has configured one, and saying so
+ * is the point. That distinction is the whole bug: a blank policy was being read as a seven-day
+ * working week for an entire company.
+ */
+export function describeOffDays(rules: OffDayRule[]): string {
+  if (!rules.length) return 'Not set';
+  return rules
+    .slice()
+    .sort((a, b) => a.day - b.day)
+    .map((r) => (r.weeks === null
+      ? DOW_SHORT[r.day]
+      : `${r.weeks.slice().sort().map((w) => OCCURRENCE[w] ?? `${w}th`).join(' & ')} ${DOW_SHORT[r.day]}`))
+    .join(' + ');
 }

@@ -6,6 +6,7 @@ import { getEmployeeRegion } from './leave.service';
 import { getPaySchedule } from './paySchedule.service';
 import { overnightHours, judgeDay } from './attendance.calc';
 import { pickAssignmentFor } from './shiftPattern';
+import { buildWorkCalendar } from './payableDays.service';
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
@@ -105,7 +106,8 @@ export async function autoMarkAttendance(date?: string) {
 export async function getMyCalendar(employeeId: number, month: string) {
   // month format: "2026-06"
   const startDate = `${month}-01`;
-  const endDate = `${month}-31`;
+  const lastDay = new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate();
+  const endDate = `${month}-${String(lastDay).padStart(2, '0')}`;
 
   const records = await db('attendance_records')
     .where('employee_id', employeeId)
@@ -133,7 +135,25 @@ export async function getMyCalendar(employeeId: number, month: string) {
     .select('date', 'name')
     .orderBy('date', 'asc');
 
-  return { records, leaves, holidays };
+  // Which days this person was actually scheduled to work, and what said so.
+  //
+  // Without this the calendar cannot tell a rest day from a day HR forgot to mark, so a "no
+  // punch" appears on somebody's Sunday with nothing explaining why it did not cost them
+  // anything — and the screen had to guess, hard-coding Saturday and Sunday for everyone.
+  const cal = await buildWorkCalendar(employeeId, startDate, endDate);
+  const days = [];
+  for (let d = 1; d <= lastDay; d++) {
+    const date = `${month}-${String(d).padStart(2, '0')}`;
+    const info = cal.classify(date);
+    days.push({
+      date,
+      kind: info.employed ? info.base : 'not_employed',
+      decided_by_name: info.base === 'holiday' ? (info.holidayName ?? 'Holiday') : info.sourceName,
+      ...(info.holidayName ? { holiday_name: info.holidayName } : {}),
+    });
+  }
+
+  return { records, leaves, holidays, days };
 }
 
 export async function getMonthSummary(employeeId: number, month: string) {

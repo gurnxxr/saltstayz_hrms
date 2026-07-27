@@ -2,7 +2,7 @@ import type { Knex } from 'knex';
 import db from '../config/database';
 import { NotFoundError, ValidationError, ForbiddenError } from '../utils/errors';
 import { notifyEmployee } from './notification.service';
-import { countWorkingDaysInRange } from './payableDays.service';
+import { countWorkingDaysInRange, leaveDatesFor } from './payableDays.service';
 import { LOCK, advisoryXactLock } from '../utils/locks';
 import { INDIAN_STATES } from './statutory.service';
 import {
@@ -22,14 +22,17 @@ function enumerateDates(start: string, end: string): string[] {
 }
 
 /**
- * Reflects approved leave on the attendance calendar: every day in the range is
- * upserted as 'on_leave' (overriding any prior mark). This both shows on the
- * calendar and provides the data a Loss-of-Pay calculation reads.
+ * Reflects approved leave on the attendance calendar, on the dates the request actually covers.
+ *
+ * It takes the dates rather than a range on purpose. It used to walk every calendar day between
+ * start and end while the balance was debited only for working days, so a Friday-to-Monday leave
+ * took 2 days off the balance and wrote 4 "on leave" marks — two of them on a weekend the
+ * employee never asked for. Both sides now come from `leaveDatesFor`, so they cannot disagree.
  */
 async function markLeaveDaysOnAttendance(
-  trx: Knex.Transaction, employeeId: number, startDate: string, endDate: string,
+  trx: Knex.Transaction, employeeId: number, dates: string[],
 ) {
-  for (const date of enumerateDates(startDate, endDate)) {
+  for (const date of dates) {
     const existing = await trx('attendance_records').where({ employee_id: employeeId, date }).first();
     if (existing) {
       await trx('attendance_records').where('id', existing.id).update({
@@ -749,9 +752,7 @@ export async function applyLeave(employeeId: number, data: {
   // Sandwich policy: when ON, holidays/weekly-offs between leave days count too
   // (all calendar days); default OFF counts only the employee's working days (one
   // calendar everywhere — so leave balance and payroll LOP agree).
-  const days = rule.count_sandwich_days
-    ? enumerateDates(start_date, end_date).length
-    : await countWorkingDaysInRange(employeeId, start_date, end_date);
+  const days = (await leaveDatesFor(employeeId, start_date, end_date, rule.count_sandwich_days)).length;
   if (days <= 0) throw new ValidationError('Leave must be at least 1 day for this employee');
 
   const period = await getCurrentPeriod();
@@ -894,6 +895,16 @@ export async function approveLeave(requestId: number, approverId: number, roleNa
 
   const period = await getCurrentPeriod();
 
+  // Which dates this leave actually covers — resolved BEFORE the transaction opens, deliberately.
+  // The work calendar reads through the module-level connection, not `trx`, so building it inside
+  // would run on a second pooled connection while this one holds locks. Nothing it reads is
+  // written here today, but resolving it first removes the hazard rather than documenting it.
+  const rule = await getEmployeeLeaveRule(leave.employee_id, leave.leave_type_id);
+  const dates = await leaveDatesFor(
+    leave.employee_id, String(leave.start_date).slice(0, 10), String(leave.end_date).slice(0, 10),
+    !!rule?.count_sandwich_days,
+  );
+
   // Atomic: approve, consume entitlement, and reflect the days on attendance together.
   await db.transaction(async (trx) => {
     await trx('leave_requests').where('id', requestId).update({
@@ -910,7 +921,7 @@ export async function approveLeave(requestId: number, approverId: number, roleNa
       })
       .increment('used_days', leave.days);
 
-    await markLeaveDaysOnAttendance(trx, leave.employee_id, leave.start_date, leave.end_date);
+    await markLeaveDaysOnAttendance(trx, leave.employee_id, dates);
   });
 
   await notifyEmployee(leave.employee_id, {

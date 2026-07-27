@@ -77,22 +77,46 @@ async function main() {
 
   const baseline = JSON.parse(fs.readFileSync(file, 'utf8'));
   const rows: any[] = baseline.payslips ?? [];
+  const baselineRuns: any[] = baseline.runs ?? [];
   console.log(`Baseline captured ${baseline.captured_at}`);
   console.log(`${rows.length} payslip(s) to check\n`);
 
   if (!rows.length) {
-    console.log('The baseline is empty — there were no payslips when it was taken, so there is');
-    console.log('nothing that could have moved. Nothing to prove here.\n');
+    console.error('The baseline is EMPTY — it holds no payslips at all, so it cannot prove anything.\n');
+    console.error('This is a FAILURE, not a pass. It previously reported PASSED for exactly this');
+    console.error('state, which meant a change to the pay engine could ship with nothing underneath');
+    console.error('it and still show a green run.\n');
+    console.error('Capture one against the database you are about to change, then re-run:');
+    console.error('  npm run baseline:capture --workspace=server\n');
     await db.destroy();
-    return;
+    process.exit(1);
   }
+
+  const periodKey = (month: number, year: number) => `${year}-${String(month).padStart(2, '0')}`;
+
+  /**
+   * Months that were already PAID when the baseline was taken.
+   *
+   * This distinction only matters for the SERVED check. A locked month must hand back the same
+   * figures forever, so any drift is a stop-the-line failure. A draft is meant to be re-runnable,
+   * so it recomputing is correct behaviour — counting the two together would either bury a real
+   * failure among expected noise, or halt a release over a month nobody has been paid for.
+   * STORED drift stays a failure for both: nothing should ever rewrite a saved row.
+   */
+  const lockedAtCapture = new Set(
+    baselineRuns.filter((r: any) => r.status === 'locked').map((r: any) => periodKey(r.month, r.year)),
+  );
 
   let storedMismatches = 0;
   let servedMismatches = 0;
   let missing = 0;
   let appeared = 0;
   let runMismatches = 0;
+  let unreproducible = 0;
   let checked = 0;
+  /** SERVED drift on a month that was still a draft — expected, reported, but not a failure. */
+  let draftDrift = 0;
+  const draftNotes: string[] = [];
   const shadowDrift: Array<{
     who: string; period: string; fields: number;
     netBefore: unknown; netAfter: unknown; paths: string[];
@@ -108,7 +132,8 @@ async function main() {
   }
 
   for (const [period, group] of [...byPeriod.entries()].sort()) {
-    let periodStored = 0, periodServed = 0, periodMissing = 0, periodAppeared = 0;
+    let periodStored = 0, periodServed = 0, periodMissing = 0, periodAppeared = 0, periodDraft = 0;
+    const wasPaid = lockedAtCapture.has(period);
 
     for (const base of group) {
       checked += 1;
@@ -145,11 +170,15 @@ async function main() {
       }
       const servedDiff = diffFields(base.snapshot, served);
       if (servedDiff.length) {
-        servedMismatches += 1; periodServed += 1;
-        failures.push(
-          `${period} employee ${base.employee_id}: the payslip SERVED to the app changed — ` +
-          servedDiff.slice(0, 3).map((d) => `${d.path}: ${JSON.stringify(d.before)} -> ${JSON.stringify(d.after)}`).join('; '),
-        );
+        const detail = servedDiff.slice(0, 3)
+          .map((d) => `${d.path}: ${JSON.stringify(d.before)} -> ${JSON.stringify(d.after)}`).join('; ');
+        if (wasPaid) {
+          servedMismatches += 1; periodServed += 1;
+          failures.push(`${period} employee ${base.employee_id}: the payslip SERVED to the app changed — ${detail}`);
+        } else {
+          draftDrift += 1; periodDraft += 1;
+          draftNotes.push(`${period} employee ${base.employee_id}: ${detail}`);
+        }
       }
 
       // ── SHADOW: what today's rules would produce, if we let them ──
@@ -187,16 +216,22 @@ async function main() {
       }
     }
 
-    const flag = (periodStored + periodServed + periodMissing + periodAppeared) ? 'CHANGED' : 'identical';
-    console.log(`  ${period}  ${String(group.length).padStart(4)} payslip(s)  ${flag}`);
+    const flag = (periodStored + periodServed + periodMissing + periodAppeared) ? 'CHANGED'
+      : periodDraft ? `${periodDraft} recomputed (expected — draft)`
+      : 'identical';
+    console.log(`  ${period}  ${String(group.length).padStart(4)} payslip(s)  ${wasPaid ? 'paid ' : 'draft'}  ${flag}`);
   }
 
   // ── RUN TOTALS: the month's headline figures ──
   // What finance actually reports and pays against. They are an aggregate, so they can move
   // even when every individual payslip is byte-identical.
-  const baselineRuns: any[] = baseline.runs ?? [];
   if (!baselineRuns.length) {
-    console.log('\n  (the baseline holds no payroll runs, so run totals are not covered)');
+    runMismatches += 1;
+    failures.push(
+      "the baseline holds no payroll runs, so a month's headline figures — the numbers finance " +
+      'reports and pays against — were never covered here. They are an aggregate and can move ' +
+      'even when every individual payslip is byte-identical.',
+    );
   }
   for (const b of baselineRuns) {
     const live = await db('payroll_runs').where({ month: b.month, year: b.year }).first();
@@ -216,11 +251,33 @@ async function main() {
     }
   }
 
+  // ── A LOCKED run with no payslips behind it ──
+  // Every other check here iterates payslips that exist, so a paid month holding none is invisible
+  // to all of them. It is the worst case rather than a gap: with nothing stored, the read path
+  // falls through to computing the figures live, so what a payslip screen shows for that month is
+  // whatever today's engine produces — not what the person was actually paid. It moves silently
+  // every time the rules change.
+  const periodsWithSlips = new Set(rows.map((r: any) => periodKey(r.month, r.year)));
+  for (const b of baselineRuns) {
+    if (b.status !== 'locked') continue;
+    const period = periodKey(b.month, b.year);
+    if (periodsWithSlips.has(period)) continue;
+    const live = await db('payslip_history').where({ month: b.month, year: b.year }).count('id as c').first();
+    if (Number(live?.c ?? 0) > 0) continue;
+    unreproducible += 1;
+    failures.push(
+      `${period}: the run is LOCKED — ${b.employee_count} employee(s), ${money(b.total_net)} net — ` +
+      'but holds no payslips at all, so those figures cannot be reproduced from this system',
+    );
+  }
+
   console.log('');
   console.log(`Checked            ${checked}`);
   console.log(`Saved payslips     ${storedMismatches ? `${storedMismatches} CHANGED` : 'all identical'}`);
-  console.log(`Served payslips    ${servedMismatches ? `${servedMismatches} CHANGED` : 'all identical'}`);
-  console.log(`Run totals         ${runMismatches ? `${runMismatches} CHANGED` : baselineRuns.length ? 'all identical' : 'not covered'}`);
+  console.log(`Served payslips    ${servedMismatches ? `${servedMismatches} CHANGED` : 'all identical'} (paid months)`);
+  console.log(`Run totals         ${runMismatches ? `${runMismatches} CHANGED` : baselineRuns.length ? 'all identical' : 'NOT COVERED'}`);
+  if (draftDrift) console.log(`Draft recomputed   ${draftDrift} (expected — a draft is meant to be re-runnable)`);
+  if (unreproducible) console.log(`Unreproducible     ${unreproducible} paid month(s) with no payslips`);
   if (missing) console.log(`Missing            ${missing}`);
   if (appeared) console.log(`Appeared           ${appeared}`);
 
@@ -228,6 +285,13 @@ async function main() {
     console.log(`\nThe following moved — this is a stop-the-line failure, not something to tolerate:\n`);
     for (const f of failures.slice(0, 40)) console.log(`  ${f}`);
     if (failures.length > 40) console.log(`  …and ${failures.length - 40} more`);
+  }
+
+  if (draftNotes.length) {
+    console.log(`\nDrafts that now compute differently — expected, but read them rather than`);
+    console.log(`assuming: these become real money the moment someone runs and locks the month.\n`);
+    for (const n of draftNotes.slice(0, 10)) console.log(`  ${n}`);
+    if (draftNotes.length > 10) console.log(`  …and ${draftNotes.length - 10} more`);
   }
 
   if (shadow) {
@@ -256,7 +320,7 @@ async function main() {
     }
   }
 
-  const failed = storedMismatches + servedMismatches + missing + appeared + runMismatches > 0;
+  const failed = storedMismatches + servedMismatches + missing + appeared + runMismatches + unreproducible > 0;
   console.log(`\n${failed ? 'FAILED — a paid month moved.' : 'PASSED — every paid month reproduces exactly.'}\n`);
   await db.destroy();
   process.exit(failed ? 1 : 0);

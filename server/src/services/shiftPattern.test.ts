@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   dayOfWeek, occurrenceInMonth, parseOffDayRules, isOffDay, shiftLengthHours, fullDayHoursFor,
-  pickAssignmentFor,
+  pickAssignmentFor, rulesInForceOn,
 } from './shiftPattern';
 
 describe('pickAssignmentFor', () => {
@@ -177,5 +177,38 @@ describe('fullDayHoursFor', () => {
   it('uses the supplied fallback with no shift at all', () => {
     expect(fullDayHoursFor(null, 8)).toBe(8);
     expect(fullDayHoursFor(undefined, 8)).toBe(8);
+  });
+});
+
+describe('rulesInForceOn', () => {
+  const SUNDAY_OFF = [{ day: 0, weeks: null }];
+
+  it('lets a pattern decide dates on or after the day patterns were introduced', () => {
+    expect(rulesInForceOn('2026-08-01', SUNDAY_OFF, '2026-08-01')).toEqual(SUNDAY_OFF);
+    expect(rulesInForceOn('2026-09-13', SUNDAY_OFF, '2026-08-01')).toEqual(SUNDAY_OFF);
+  });
+
+  it('refuses to let a pattern reach a month that was priced before it existed', () => {
+    // The failure this exists to stop: a work pattern saved today, projected back over a month
+    // that has already been paid, changing its working-day count and therefore every deduction
+    // in it. Earlier dates resolve to no pattern at all — the same as an unconfigured shift.
+    expect(rulesInForceOn('2026-07-31', SUNDAY_OFF, '2026-08-01')).toEqual([]);
+    expect(rulesInForceOn('2026-05-10', SUNDAY_OFF, '2026-08-01')).toEqual([]);
+  });
+
+  it('holds whatever today is — the boundary is a stored date, not the clock', () => {
+    // pickAssignmentFor's historical fallback switches on `today`, so an assignment dated in the
+    // future starts governing the past the moment that date arrives. The clamp must not share
+    // that property, or the guard silently expires on a calendar day nobody is watching.
+    for (const today of ['2026-07-01', '2026-08-01', '2027-01-01']) {
+      expect(rulesInForceOn('2026-05-10', SUNDAY_OFF, '2026-08-01')).toEqual([]);
+      expect(isOffDay(today, rulesInForceOn('2026-05-10', SUNDAY_OFF, '2026-08-01'))).toBe(false);
+    }
+  });
+
+  it('applies the pattern everywhere when there is no history to protect', () => {
+    // A fresh install or a test database: nothing has been paid, so nothing needs shielding.
+    expect(rulesInForceOn('2020-01-01', SUNDAY_OFF, null)).toEqual(SUNDAY_OFF);
+    expect(rulesInForceOn('2020-01-01', SUNDAY_OFF, undefined)).toEqual(SUNDAY_OFF);
   });
 });

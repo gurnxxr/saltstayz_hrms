@@ -125,6 +125,8 @@ export async function getMonthlyBreakdown(
       not_employed_days: days.not_employed_days,
       payment_days: days.payment_days,
       counts: days.counts as any,
+      calendar_name: days.calendar_name,
+      calendar_source: days.calendar_source,
     };
     if (hourly) attendance.hours = await getMonthlyHours(employeeId, month!, year!);
 
@@ -265,7 +267,11 @@ export async function computeForEmployee(
 // v3: attendance-code pay is now driven by the configurable Attendance Pay Rules table
 // (payableDays.service) rather than hardcoded fractions, and an approved regularisation pays the
 // day in full. Months paid under v2 keep their stored snapshots and are never recomputed.
-export const CALC_VERSION = 3;
+// v4: which days someone was SCHEDULED to work now comes from the work week on their leave
+// template rather than an organisation-wide setting, and a holiday landing on a rest day no
+// longer enters the salary divisor. Both change the divisor, so they change what a lost day
+// costs. Months computed under v3 keep their stored snapshots.
+export const CALC_VERSION = 4;
 
 /** The stored snapshot for a locked month, or null when the month isn't locked. */
 async function lockedSnapshot(employeeId: number, month: number, year: number): Promise<ComputedPayslip | null> {
@@ -283,7 +289,21 @@ async function lockedSnapshot(employeeId: number, month: number, year: number): 
  */
 async function frozenSnapshot(employeeId: number, month: number, year: number): Promise<ComputedPayslip | null> {
   const row = await db('payslip_history').where({ employee_id: employeeId, month, year }).first();
-  if (!row) return null;
+  if (!row) {
+    // A locked month with nothing stored is the worst case, not a gap to fall through. Without a
+    // snapshot the only way to answer is to compute the figures again — at today's rules, not the
+    // ones the money went out under — so the number shown drifts every time the rules change and
+    // is presented as though it were what was paid. Say so instead.
+    const run = await getRun(month, year);
+    if (run?.status === 'locked') {
+      throw new AppError(
+        `${monthName(month)} ${year} is locked, but no payslip was stored for this employee, so the ` +
+        `figures they were paid cannot be reproduced. See the payroll register for ${monthName(month)} ${year}.`,
+        409,
+      );
+    }
+    return null;
+  }
   if (Number(row.calc_version) < CALC_VERSION) return parseSnapshot(row.snapshot);
   const run = await getRun(month, year);
   return run?.status === 'locked' ? parseSnapshot(row.snapshot) : null;
@@ -295,6 +315,30 @@ async function frozenSnapshot(employeeId: number, month: number, year: number): 
  */
 export async function getPayslipForStaff(employeeId: number, month: number, year: number): Promise<ComputedPayslip> {
   return (await frozenSnapshot(employeeId, month, year)) ?? computeForEmployee(employeeId, month, year);
+}
+
+/**
+ * The day-by-day payable-days view, respecting the same freeze as the payslip itself.
+ *
+ * It has to, or the two contradict each other: this recomputed live and unconditionally, so on a
+ * month whose payslip is served from a stored snapshot, the "why" screen would show a working-day
+ * count the payslip disagrees with. Finance reads that as corruption, and they would be right to.
+ *
+ * A frozen month has totals but no day-by-day record — the trace is not stored — so it says so
+ * rather than quietly showing today's reconstruction of a month priced under older rules.
+ */
+export async function getPayableDaysForStaff(employeeId: number, month: number, year: number) {
+  const frozen = await frozenSnapshot(employeeId, month, year);
+  if (!frozen) return { ...(await computePayableDays(employeeId, month, year)), frozen: false };
+  const days = ((frozen as any).breakdown?.days ?? {}) as Record<string, unknown>;
+  return {
+    ...days,
+    trace: [],
+    frozen: true,
+    frozen_reason: 'These are the figures this month was priced on. The day-by-day breakdown is '
+      + 'not stored for a closed month, so it cannot be shown without recomputing it under rules '
+      + 'that were not the ones applied.',
+  };
 }
 
 /**

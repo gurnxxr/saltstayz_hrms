@@ -223,6 +223,36 @@ export async function updateShiftType(id: number, data: any) {
     throw new ValidationError('This shift ends at or before it starts, so "ends next day" must be on');
   }
 
+  // A shift type carries no effective date, so editing one reaches every month it has ever
+  // governed — `pickAssignmentFor` projects a shift backwards over dates that pre-date the
+  // mapping itself. `assignShift` has always been guarded against that; this write never was,
+  // even though these fields are the ones that move money: the timings set the overtime
+  // threshold, and the hour ladder decides the auto-marked verdict for a day.
+  //
+  // `weekly_off_days` is deliberately NOT in this list. Which days count as working days is
+  // clamped in the work calendar instead (`rulesInForceOn`), so a pattern can never speak for a
+  // month priced before patterns existed — a dated mechanism, rather than a blanket refusal.
+  // Guarding it here as well would make the off-day pattern uneditable the moment any month is
+  // locked, which is precisely the thing HR has to be able to configure.
+  const REPRICES_HISTORY = [
+    'start_time', 'end_time', 'ends_next_day',
+    'allow_overtime', 'overtime_after_hours', 'enable_auto_attendance',
+    'absent_hours', 'half_day_hours', 'full_day_hours', 'office_hour_time',
+  ];
+  const changed = REPRICES_HISTORY.filter(
+    (k) => k in set && String(set[k] ?? '') !== String((existing as any)[k] ?? ''),
+  );
+  if (changed.length) {
+    const locked = await db('payroll_runs').where('status', 'locked').orderBy(['year', 'month']).first();
+    if (locked) {
+      throw new ValidationError(
+        `Payroll for ${locked.month}/${locked.year} is locked, and this shift has no effective date — ` +
+        `changing its hours would re-price every month it has ever covered, including that one. ` +
+        `Create a new shift type with the new hours and move people onto it from a date instead.`,
+      );
+    }
+  }
+
   await db('shift_types').where('id', id).update({ ...set, updated_at: db.fn.now() });
   return getShiftType(id);
 }

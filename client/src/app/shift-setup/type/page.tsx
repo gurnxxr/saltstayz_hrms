@@ -1,5 +1,7 @@
 'use client';
 
+import OffDayPicker, { type OffDay } from '@/components/shifts/OffDayPicker';
+
 import { useState, type ReactNode } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
@@ -27,13 +29,11 @@ const colorHex = (name: string) => ROSTER_COLORS.find((c) => c.name === name)?.h
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const DAYS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const WEEK_ORDINALS = [1, 2, 3, 4, 5];
 
 const inputCls =
   'w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50';
 
 /** An off day, and optionally which occurrences of it in the month (null = every week). */
-interface OffDay { day: number; weeks: number[] | null }
 
 interface ShiftTypeForm {
   name: string;
@@ -190,75 +190,6 @@ function NotYetApplied() {
  * The off-day pattern. Tick a weekday to make it an off day; by default that's every week,
  * but it can be narrowed to particular occurrences — the 2nd and 4th Saturday, say.
  */
-function OffDayPicker({ value, onChange }: { value: OffDay[]; onChange: (v: OffDay[]) => void }) {
-  const byDay = new Map(value.map((o) => [o.day, o]));
-
-  const toggleDay = (day: number) => {
-    if (byDay.has(day)) onChange(value.filter((o) => o.day !== day));
-    else onChange([...value, { day, weeks: null }].sort((a, b) => a.day - b.day));
-  };
-
-  const toggleWeek = (day: number, week: number) => {
-    onChange(value.map((o) => {
-      if (o.day !== day) return o;
-      const cur = o.weeks ?? [];
-      const next = cur.includes(week) ? cur.filter((w) => w !== week) : [...cur, week].sort();
-      // Clearing every week means "every week" again, not "no weeks".
-      return { ...o, weeks: next.length ? next : null };
-    }));
-  };
-
-  return (
-    <div className="space-y-2">
-      {DAYS.map((label, day) => {
-        const off = byDay.get(day);
-        const isOff = !!off;
-        return (
-          <div key={day} className="flex items-center gap-3 flex-wrap">
-            <label className="flex items-center gap-2 cursor-pointer select-none w-32 shrink-0">
-              <input
-                type="checkbox"
-                checked={isOff}
-                onChange={() => toggleDay(day)}
-                className="h-4 w-4 rounded border-border text-primary focus:ring-2 focus:ring-primary/50"
-              />
-              <span className="text-sm text-foreground">{label}</span>
-            </label>
-            {isOff && (
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <span className="text-xs text-secondary mr-1">
-                  {off!.weeks === null ? 'Every week' : 'Only:'}
-                </span>
-                {WEEK_ORDINALS.map((w) => {
-                  const on = off!.weeks?.includes(w) ?? false;
-                  return (
-                    <button
-                      key={w}
-                      type="button"
-                      onClick={() => toggleWeek(day, w)}
-                      className={`px-2 py-0.5 rounded-full text-xs font-medium border transition-colors ${
-                        on ? 'border-primary bg-primary/10 text-primary' : 'border-border text-secondary hover:bg-muted'
-                      }`}
-                      title={`${w}${['st', 'nd', 'rd', 'th', 'th'][w - 1]} ${DAYS_SHORT[day]} of the month`}
-                    >
-                      {w}
-                      {['st', 'nd', 'rd', 'th', 'th'][w - 1]}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        );
-      })}
-      {value.length === 0 && (
-        <p className="text-xs text-secondary pt-1">
-          No off days set — employees on this shift follow the company work week.
-        </p>
-      )}
-    </div>
-  );
-}
 
 /** Human summary of an off-day pattern, for the list table. */
 function offDaySummary(offs: any): string {
