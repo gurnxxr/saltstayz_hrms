@@ -9,17 +9,24 @@ import { ACCESS_MODULES } from './moduleAccess.service';
 // pin the documented contract of ACCESS_MODULES, which is the guard list used by
 // setEmployeeAccess's `!ACCESS_MODULES.includes(module)` validation.
 
-// The documented set (see the header comment / migration 077 in the source).
+// The documented set (see the header comment / migration 024 in the source).
+// API-gating = a matching authorize('<key>', …) sits on the routes, so the toggle
+// governs the API as well as the sidebar. employee_lifecycle joined this group when
+// employeeLifecycle.routes.ts swapped its role gate for authorize('employee_lifecycle',
+// 'read'); payroll_setup was minted for the four payroll-config route files.
 const GATING_KEYS = [
   'analytics', 'attendance', 'leave', 'recruitment',
   'payroll', 'salary', 'shifts', 'admin',
+  'employees', 'onboarding', 'manpower', 'finance', 'admin.users', 'payroll_setup',
+  'employee_lifecycle',
 ];
 const NAV_ONLY_KEYS = [
-  'dashboard_admin', 'dashboard_employee', 'employee_lifecycle', 'my_shifts',
+  'dashboard_admin', 'dashboard_employee', 'my_shifts',
 ];
 const EXPECTED_ORDER = [
   'dashboard_admin', 'dashboard_employee', 'analytics', 'attendance', 'leave',
   'recruitment', 'employee_lifecycle', 'payroll', 'salary', 'shifts', 'my_shifts', 'admin',
+  'employees', 'onboarding', 'manpower', 'finance', 'admin.users', 'payroll_setup',
 ];
 
 describe('ACCESS_MODULES — shape & type', () => {
@@ -27,9 +34,9 @@ describe('ACCESS_MODULES — shape & type', () => {
     expect(Array.isArray(ACCESS_MODULES)).toBe(true);
   });
 
-  it('has exactly 12 entries (8 gating + 4 nav-only)', () => {
-    expect(ACCESS_MODULES.length).toBe(12);
-    expect(GATING_KEYS.length + NAV_ONLY_KEYS.length).toBe(12);
+  it('has exactly 18 entries (15 gating + 3 nav-only)', () => {
+    expect(ACCESS_MODULES.length).toBe(18);
+    expect(GATING_KEYS.length + NAV_ONLY_KEYS.length).toBe(18);
   });
 
   it('contains only non-empty strings', () => {
@@ -70,8 +77,8 @@ describe('ACCESS_MODULES — exact membership', () => {
   it('does not contain lookalike/legacy keys that are NOT part of the set', () => {
     // Guards against accidental additions of near-miss names.
     const notMembers = [
-      'dashboard', 'employees', 'onboarding', 'reports', 'profile',
-      'shift', 'my_shift', 'lifecycle', 'employee', 'admins',
+      'dashboard', 'reports', 'profile', 'payroll_config',
+      'shift', 'my_shift', 'lifecycle', 'employee', 'admins', 'users',
     ];
     for (const nm of notMembers) {
       expect(ACCESS_MODULES).not.toContain(nm);
@@ -101,8 +108,10 @@ describe('ACCESS_MODULES — .includes() guard semantics (mirrors setEmployeeAcc
   });
 
   it('every entry matches lowercase snake_case naming', () => {
+    // One dotted namespace segment is permitted, for keys that mirror a namespaced
+    // permission module (`admin.users`). Everything else stays plain snake_case.
     for (const m of ACCESS_MODULES) {
-      expect(m).toMatch(/^[a-z]+(_[a-z]+)*$/);
+      expect(m).toMatch(/^[a-z]+(_[a-z]+)*(\.[a-z]+(_[a-z]+)*)?$/);
     }
   });
 });

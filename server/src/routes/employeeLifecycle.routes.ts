@@ -1,17 +1,24 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import { authenticate } from '../middleware/auth';
-import { authorizeRoles } from '../middleware/rbac';
+import { authorize, authorizeRoles } from '../middleware/rbac';
 import * as ctrl from '../controllers/employeeLifecycle.controller';
 
 // Employee Lifecycle (Promotion / Transfer / Exit Interview) — HR-side module.
-// Gated by role only (like statutory routes): hr_manager belongs to this nav
-// but holds no broad module permissions.
+//
+// Gated on the `employee_lifecycle` module rather than a hard-coded role list, so the
+// Admin → Module Access toggle for this module governs the API and not just the sidebar.
+// The swap is access-neutral: `employee_lifecycle:read` is granted to exactly admin,
+// chro, hr and hr_manager — the same four the old authorizeRoles() list allowed.
+//
+// `read` is the only action minted for this module (see seed 01 / archived migration 077),
+// so every endpoint here checks 'read'. Do not reach for 'create'/'update' actions that
+// do not exist — authorize() would reject everyone. Write-side narrowing is done with the
+// ADMIN_ONLY role gate below.
 const router = Router();
 router.use(authenticate);
 
-const LIFECYCLE_ROLES = authorizeRoles('admin', 'chro', 'hr', 'hr_manager');
-router.use(LIFECYCLE_ROLES);
+router.use(authorize('employee_lifecycle', 'read'));
 
 // Item catalog + assignment deletions are corrective, admin-only actions.
 const ADMIN_ONLY = authorizeRoles('admin');

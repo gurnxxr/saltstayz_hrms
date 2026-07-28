@@ -57,6 +57,15 @@ export async function seed(knex: Knex): Promise<void> {
   };
   Object.keys(NAV_MODULE_ROLES).forEach(mod => permRows.push({ module: mod, action: 'read' }));
 
+  // `payroll_setup` gates the org-wide payroll configuration screens (Statutory
+  // Components, Pay Schedule, Attendance Pay Rules, Salary Component catalog). Those
+  // routes pair authorize('payroll_setup', …) with the authorizeRoles('admin','finance')
+  // gate they already had — BOTH must pass — so the grant list below is deliberately
+  // identical to that role gate: admin and finance, nobody else. Mirrored idempotently
+  // in migration 024_payroll_setup_module.ts so a migrated DB matches a seeded one.
+  const PAYROLL_SETUP_ROLES = ['admin', 'finance'];
+  ['create', 'read', 'update', 'delete'].forEach(act => permRows.push({ module: 'payroll_setup', action: act }));
+
   const perms = await knex('permissions').insert(permRows).returning('*');
   const permMap: Record<string, number> = {};
   perms.forEach((p: any) => { permMap[`${p.module}:${p.action}`] = p.id; });
@@ -132,6 +141,9 @@ export async function seed(knex: Knex): Promise<void> {
   for (const [mod, rolesForMod] of Object.entries(NAV_MODULE_ROLES)) {
     rolesForMod.forEach(role => grant(role, mod, ['read']));
   }
+
+  // Payroll configuration — admin + finance only (see PAYROLL_SETUP_ROLES note above).
+  PAYROLL_SETUP_ROLES.forEach(role => grant(role, 'payroll_setup', crud));
 
   await knex('role_permissions').insert(rpRows);
 }

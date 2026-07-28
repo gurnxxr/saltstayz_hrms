@@ -26,6 +26,12 @@ const MODULE_LABELS: Record<string, string> = {
   shifts: 'Shift Management',
   my_shifts: 'My Shift',
   admin: 'Admin',
+  employees: 'Employee Records',
+  onboarding: 'Onboarding',
+  manpower: 'Manpower & Budget',
+  finance: 'Bank Details',
+  'admin.users': 'User Administration',
+  payroll_setup: 'Payroll Configuration',
 };
 
 export default function ModuleAccessPage() {
