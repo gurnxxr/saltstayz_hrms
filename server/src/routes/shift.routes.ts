@@ -41,9 +41,23 @@ router.post('/assignments', authorize('shifts', 'create'), SHIFT_STAFF, ctrl.ass
 // expect to be able to do this — gating on it would show them a button that always 403s.
 router.delete('/assignments/:id', authorize('shifts', 'create'), SHIFT_STAFF, ctrl.removeShiftAssignment);
 
-// Shift-change requests — employees apply via /me/change-requests; managers/HR
-// review here. Listing needs shifts:read; approving writes an assignment (shifts:create).
-router.get('/change-requests', authorize('shifts', 'read'), SHIFT_STAFF, ctrl.listChangeRequests);
-router.post('/change-requests/:id/decision', authorize('shifts', 'create'), SHIFT_STAFF, ctrl.decideChangeRequest);
+// Shift-change requests — employees apply via /me/change-requests; the REPORTING MANAGER or HR
+// reviews here. Deliberately NOT gated on SHIFT_STAFF: a reporting manager is usually just an
+// `employee`, so the role list locked out exactly the person the notification tells to come. They
+// clicked "Shift change request to review", landed here and got Forbidden, with the nav entry
+// hidden too — no way in and no explanation.
+//
+// Who may act is a per-ROW question ("is this your report?"), which no module permission can
+// express, so the service answers it and fails closed on both paths: listChangeRequests narrows a
+// non-HR caller to their own reports (`?? -1`, so a null employeeId matches nobody), and
+// decideChangeRequest independently rejects anyone who is neither HR nor that request's reporting
+// manager. Reaching the route grants nothing on its own.
+//
+// The decision is gated on shifts:READ, not create. It does write an assignment on approval, but
+// `employee` holds only read, and gating on create would 403 the manager at the Approve button
+// while letting them see the list — the same dead end in a different place. Keeping an
+// `authorize()` call on both is what keeps these routes inside Admin → Module Access.
+router.get('/change-requests', authorize('shifts', 'read'), ctrl.listChangeRequests);
+router.post('/change-requests/:id/decision', authorize('shifts', 'read'), ctrl.decideChangeRequest);
 
 export default router;
