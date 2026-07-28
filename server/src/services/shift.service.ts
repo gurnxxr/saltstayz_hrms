@@ -54,7 +54,7 @@ function mapShiftType(row: any) {
 function parseWeeklyOffDays(raw: any): Array<{ day: number; weeks: number[] | null }> {
   if (!Array.isArray(raw)) throw new ValidationError('Weekly off days must be a list');
   const seen = new Set<number>();
-  return raw.map((entry: any) => {
+  const out = raw.map((entry: any) => {
     const day = Math.trunc(Number(entry?.day));
     if (!Number.isInteger(day) || day < 0 || day > 6) {
       throw new ValidationError('Each weekly off day must be a weekday from 0 (Sunday) to 6 (Saturday)');
@@ -70,6 +70,19 @@ function parseWeeklyOffDays(raw: any): Array<{ day: number; weeks: number[] | nu
     }
     return { day, weeks: weeks.length ? [...new Set<number>(weeks)].sort() : null };
   });
+
+  // Every weekday off leaves no working day to divide the salary by: the month's scheduled days
+  // fall to 0, so `payment_days` is 0 and everyone on the shift nets zero — silently, because
+  // zero is arithmetically valid and nothing downstream objects. The hiring guard doesn't catch
+  // it either: `assertHasWeeklyOff` correctly reports that a rest day exists. The write is the
+  // hole, so it closes here, where both create and update pass through.
+  //
+  // Only unrestricted entries count. Seven days each limited to specific weeks (`{day, weeks}`)
+  // still leaves working days in the weeks not named, so that stays legal.
+  if (out.length >= 7 && out.every((r: { weeks: number[] | null }) => r.weeks === null)) {
+    throw new ValidationError('A shift cannot have every day off — that would leave no working days to pay.');
+  }
+  return out;
 }
 
 /**
@@ -229,26 +242,42 @@ export async function updateShiftType(id: number, data: any) {
   // even though these fields are the ones that move money: the timings set the overtime
   // threshold, and the hour ladder decides the auto-marked verdict for a day.
   //
-  // `weekly_off_days` is deliberately NOT in this list. Which days count as working days is
-  // clamped in the work calendar instead (`rulesInForceOn`), so a pattern can never speak for a
-  // month priced before patterns existed — a dated mechanism, rather than a blanket refusal.
-  // Guarding it here as well would make the off-day pattern uneditable the moment any month is
-  // locked, which is precisely the thing HR has to be able to configure.
+  // `weekly_off_days` IS in this list, and the reasoning that previously excluded it was wrong.
+  // The old comment argued that `rulesInForceOn` already clamps a pattern so it cannot speak for
+  // a month priced before patterns existed. That clamp is real, but it only bounds how far BACK a
+  // pattern reaches — it does nothing for a month that was locked AFTER the clamp date. Such a
+  // month re-prices freely: measured on a real absent day, moving a shift from 26 scheduled days
+  // to 17 raised the cost of that one day from 1.15 to 1.76 salary-days, a 53% jump, backwards,
+  // from a single save. Stored payslips are snapshots and survive, but the payroll register, the
+  // day-by-day trace and any unlock-and-rerun all read the live calendar.
+  //
+  // The pattern does NOT become uneditable: the dated escape hatch is the same one the message
+  // below already recommends — make a new shift type and move people onto it from a date.
   const REPRICES_HISTORY = [
     'start_time', 'end_time', 'ends_next_day',
     'allow_overtime', 'overtime_after_hours', 'enable_auto_attendance',
     'absent_hours', 'half_day_hours', 'full_day_hours', 'office_hour_time',
+    'weekly_off_days',
   ];
+  // `weekly_off_days` needs shape-aware comparison. `set` carries it as a JSON string (that is what
+  // gets written to the jsonb column) while `existing` comes back from pg already parsed, so a bare
+  // String() gives '[object Object]' for the stored side and never matches. Without this, resaving
+  // an UNCHANGED pattern would read as changed and block every shift-type edit — including a pure
+  // rename — the moment any month is locked.
+  const norm = (k: string, v: any) => (k === 'weekly_off_days'
+    ? JSON.stringify(typeof v === 'string' ? (() => { try { return JSON.parse(v || '[]'); } catch { return []; } })() : (v ?? []))
+    : String(v ?? ''));
   const changed = REPRICES_HISTORY.filter(
-    (k) => k in set && String(set[k] ?? '') !== String((existing as any)[k] ?? ''),
+    (k) => k in set && norm(k, set[k]) !== norm(k, (existing as any)[k]),
   );
   if (changed.length) {
     const locked = await db('payroll_runs').where('status', 'locked').orderBy(['year', 'month']).first();
     if (locked) {
       throw new ValidationError(
         `Payroll for ${locked.month}/${locked.year} is locked, and this shift has no effective date — ` +
-        `changing its hours would re-price every month it has ever covered, including that one. ` +
-        `Create a new shift type with the new hours and move people onto it from a date instead.`,
+        `changing its ${changed.includes('weekly_off_days') ? 'off days' : 'hours'} would re-price every ` +
+        `month it has ever covered, including that one. Create a new shift type with the change and ` +
+        `move people onto it from a date instead.`,
       );
     }
   }
