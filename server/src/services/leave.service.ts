@@ -2,7 +2,9 @@ import type { Knex } from 'knex';
 import db from '../config/database';
 import { NotFoundError, ValidationError, ForbiddenError } from '../utils/errors';
 import { notifyEmployee } from './notification.service';
-import { countWorkingDaysInRange, leaveDatesFor } from './payableDays.service';
+import { buildWorkCalendar, countWorkingDaysInRange, leaveDatesFor } from './payableDays.service';
+import { findBreak } from './holidayBreak';   // date shifting uses this file's own shiftDate
+import { audienceOf, scopeHolidaysTo } from './holidayScope';
 import { LOCK, advisoryXactLock } from '../utils/locks';
 import { INDIAN_STATES } from './statutory.service';
 import {
@@ -1040,17 +1042,83 @@ export async function setPropertyRegion(propertyId: number, regionId: number | n
 }
 
 /**
- * Resolve an employee's holiday scope via their property (branch_name =
- * properties.name): the property's state decides which state holidays apply.
+ * Why an employee's holiday scope came out the way it did.
+ *
+ * A bare `null` region collapses three different problems into one, and they need three
+ * different things said to the person looking at an empty list: nobody recorded where they
+ * work, or they work somewhere that isn't a configured property, or the property exists but
+ * has no state. Only the last one is really "the data is fine, there's just nothing here".
  */
-export async function getEmployeeRegion(employeeId: number) {
-  const emp = await db('employees').where('id', employeeId).select('branch_name').first();
-  if (!emp?.branch_name) return null;
-  const prop = await db('properties as p')
-    .where('p.name', emp.branch_name)
-    .select('p.id as property_id', 'p.name as property_name', 'p.state as state').first();
-  if (!prop) return null;
-  return { property_id: prop.property_id, property_name: prop.property_name, state: prop.state || null };
+export type HolidayScopeStatus =
+  | 'ok'                     // property matched and carries a state
+  | 'no_state_on_property'   // matched, but properties.state is null — only national can apply
+  | 'branch_not_matched'     // branch_name set, no properties.name equals it
+  | 'no_branch_on_profile';  // employees.branch_name empty
+
+/**
+ * The department axis, reported separately from the property axis rather than as more values on
+ * the enum above.
+ *
+ * One enum can only report one problem, and a person can easily have both a work location that
+ * matches nothing AND a department that matches nothing — each losing them a DIFFERENT set of
+ * holidays. Collapsed into one status, HR fixes the first, reloads, and meets the second.
+ */
+export type HolidayDeptStatus =
+  | 'ok'                         // dept_name matched a departments row
+  | 'no_department_on_profile'   // employees.dept_name empty
+  | 'department_not_matched';    // set, but no departments.name equals it
+
+export interface HolidayScope {
+  status: HolidayScopeStatus;
+  dept_status: HolidayDeptStatus;
+  /** Echoed back so the UI can quote the offending value rather than say "something is wrong". */
+  branch_name: string | null;
+  dept_name: string | null;
+  region: { property_id: number; property_name: string; state: string | null } | null;
+  department: { department_id: number; department_name: string } | null;
+}
+
+/**
+ * Everything about an employee that decides which holidays reach them: their property (and so
+ * their state) and their department.
+ *
+ * Both links are name matches, not foreign keys — `branch_name` → `properties.name` and
+ * `dept_name` → `departments.name`. The asymmetry between them is deliberate and load-bearing:
+ * the property match is case-SENSITIVE because that is what it has always been and it decides
+ * which state's holidays and statutory rates apply, while the department match is
+ * case-insensitive, matching `departmentIdByName` above. Quietly making the property match
+ * case-insensitive here would move people between states, which is a different change.
+ */
+export async function resolveHolidayScope(employeeId: number): Promise<HolidayScope> {
+  const row = await db('employees as e')
+    .leftJoin('properties as p', 'p.name', 'e.branch_name')
+    .leftJoin('departments as d', db.raw('lower(d.name) = lower(e.dept_name)'))
+    .where('e.id', employeeId)
+    .select(
+      'e.branch_name', 'e.dept_name',
+      'p.id as property_id', 'p.name as property_name', 'p.state as state',
+      'd.id as department_id', 'd.name as department_name',
+    )
+    .first();
+
+  const branch_name = row?.branch_name ? String(row.branch_name).trim() : null;
+  const dept_name = row?.dept_name ? String(row.dept_name).trim() : null;
+
+  const region = row?.property_id
+    ? { property_id: row.property_id, property_name: row.property_name, state: row.state || null }
+    : null;
+  const status: HolidayScopeStatus = !branch_name ? 'no_branch_on_profile'
+    : !region ? 'branch_not_matched'
+    : region.state ? 'ok' : 'no_state_on_property';
+
+  const department = row?.department_id
+    ? { department_id: row.department_id, department_name: row.department_name }
+    : null;
+  const dept_status: HolidayDeptStatus = !dept_name ? 'no_department_on_profile'
+    : !department ? 'department_not_matched'
+    : 'ok';
+
+  return { status, dept_status, branch_name, dept_name, region, department };
 }
 
 // ─── Holidays (national + per-state) ───
@@ -1067,30 +1135,314 @@ function holidayBase() {
   return db('holidays as h').select('h.*');
 }
 
-/** Admin view: every holiday; optional scope (national|state) / state / year filters. */
+/**
+ * Admin view: every holiday with the audience it was given to, plus how many active employees
+ * that audience actually reaches.
+ *
+ * The reach count is what makes the opt-in rule safe to live with. "Front Desk at Gurgaon" is a
+ * perfectly valid setting that reaches nobody if Gurgaon has no front desk staff, and no
+ * client-side check can spot that — only counting real employees can.
+ */
 export async function getHolidays(filters: { state?: string; scope?: string; year?: string } = {}) {
   const q = holidayBase().orderBy('h.date');
   if (filters.scope === 'national') q.where('h.is_national', true);
   else if (filters.scope === 'state') q.where('h.is_national', false).whereNotNull('h.state');
   if (filters.state) q.where('h.state', filters.state);
   if (filters.year) q.whereRaw("substr(h.date, 1, 4) = ?", [String(filters.year)]);
-  return q;
+  const rows = await q;
+  if (!rows.length) return rows;
+
+  const ids = rows.map((r: any) => r.id);
+  // Two grouped reads rather than a query per row.
+  const [deptLinks, propLinks] = await Promise.all([
+    db('holiday_departments as hd').join('departments as d', 'd.id', 'hd.department_id')
+      .whereIn('hd.holiday_id', ids).select('hd.holiday_id', 'd.id', 'd.name').orderBy('d.name'),
+    db('holiday_properties as hp').join('properties as p', 'p.id', 'hp.property_id')
+      .whereIn('hp.holiday_id', ids).select('hp.holiday_id', 'p.id', 'p.name').orderBy('p.name'),
+  ]);
+  const byHoliday = (links: any[]) => {
+    const m = new Map<number, Array<{ id: number; name: string }>>();
+    for (const l of links) {
+      if (!m.has(l.holiday_id)) m.set(l.holiday_id, []);
+      m.get(l.holiday_id)!.push({ id: l.id, name: l.name });
+    }
+    return m;
+  };
+  const depts = byHoliday(deptLinks);
+  const props = byHoliday(propLinks);
+
+  return Promise.all(rows.map(async (r: any) => {
+    const departments = depts.get(r.id) ?? [];
+    const properties = props.get(r.id) ?? [];
+    return {
+      ...r,
+      departments,
+      properties,
+      department_ids: departments.map((d) => d.id),
+      property_ids: properties.map((p) => p.id),
+      reaches_count: await countHolidayReach({
+        is_national: !!r.is_national,
+        state: r.state ?? null,
+        all_departments: !!r.all_departments,
+        department_ids: departments.map((d) => d.id),
+        all_properties: !!r.all_properties,
+        property_ids: properties.map((p) => p.id),
+      }),
+    };
+  }));
 }
 
-/** Employee view: national holidays + the holidays for the employee's state. */
-export async function getMyHolidays(employeeId: number, year?: string) {
-  const region = await getEmployeeRegion(employeeId);
-  const q = holidayBase().orderBy('h.date');
-  q.where(function (this: any) {
-    this.where('h.is_national', true);
-    if (region?.state) this.orWhere('h.state', region.state);
+export interface HolidayReachScope {
+  is_national: boolean;
+  state: string | null;
+  all_departments: boolean;
+  department_ids: number[];
+  all_properties: boolean;
+  property_ids: number[];
+}
+
+/**
+ * How many ACTIVE employees a scope reaches — counted from the employee side, applying all
+ * three axes, so the answer is a fact about people rather than about rows.
+ *
+ * Deliberately a second implementation of the rule, computed from the opposite direction: a DB
+ * test cross-checks it against `getMyHolidays`, so the two disagreeing is a caught failure
+ * rather than a silent one.
+ */
+export async function countHolidayReach(scope: HolidayReachScope): Promise<number> {
+  const q = db('employees as e')
+    .leftJoin('properties as p', 'p.name', 'e.branch_name')
+    .leftJoin('departments as d', db.raw('lower(d.name) = lower(e.dept_name)'))
+    .where('e.is_active', true);
+  if (!scope.is_national) q.where('p.state', scope.state ?? '');
+  // Knex renders an empty array as `1 = 0`, which is exactly the opt-in answer: nobody.
+  if (!scope.all_departments) q.whereIn('d.id', scope.department_ids);
+  if (!scope.all_properties) q.whereIn('p.id', scope.property_ids);
+  const row: any = await q.count('e.id as c').first();
+  return Number(row?.c ?? 0);
+}
+
+/** The reach of a holiday already saved. */
+export async function getHolidayReach(id: number): Promise<number> {
+  const h = await db('holidays').where('id', id).first();
+  if (!h) throw new NotFoundError('Holiday');
+  const [department_ids, property_ids] = await Promise.all([
+    db('holiday_departments').where('holiday_id', id).pluck('department_id'),
+    db('holiday_properties').where('holiday_id', id).pluck('property_id'),
+  ]);
+  return countHolidayReach({
+    is_national: !!h.is_national,
+    state: h.state ?? null,
+    all_departments: !!h.all_departments,
+    department_ids,
+    all_properties: !!h.all_properties,
+    property_ids,
   });
-  if (year) q.whereRaw("substr(h.date, 1, 4) = ?", [String(year)]);
-  const holidays = await q;
-  return { region, holidays };
 }
 
-function normalizeHolidayInput(data: any) {
+export interface MyHoliday {
+  id: number;
+  name: string;
+  date: string;
+  is_national: boolean;
+  state: string | null;
+  /**
+   * How the date lands on THIS employee's roster. `weekly_off` means they were already off,
+   * so the holiday gains them nothing — the same verdict the payroll engine reaches, because
+   * it comes from the same calendar.
+   */
+  falls_on: 'working' | 'weekly_off';
+  /** The policy that decided the day: their shift, their leave template, or the work week. */
+  decided_by_name: string;
+  break_days: number;
+  break_start: string;
+  break_end: string;
+  break_bounded: boolean;
+  in_employment: boolean;
+  employment_note: string | null;
+}
+
+export interface MyHolidaysResult {
+  year: string;
+  /**
+   * `no_holidays_for_you` is the opt-in case: the calendar IS published, none of it has been
+   * given to this person's department or property yet. Telling them nothing was published would
+   * send them to the wrong person with the wrong question.
+   */
+  scope_status: HolidayScopeStatus | 'no_holidays_published' | 'no_holidays_for_you';
+  dept_status: HolidayDeptStatus;
+  branch_name: string | null;
+  dept_name: string | null;
+  region: HolidayScope['region'];
+  department: HolidayScope['department'];
+  available_years: number[];
+  counts: {
+    total: number;
+    remaining: number;
+    this_month: number;
+    rest_day_clashes: number;
+    long_weekends: number;
+  };
+  holidays: MyHoliday[];
+}
+
+/**
+ * Employee view: national holidays + the holidays for the employee's state, each annotated with
+ * how it lands on that person's own roster.
+ *
+ * The annotation comes from `buildWorkCalendar` — the same calendar payroll uses to decide how
+ * many days to pay — rather than a second implementation of the off-day rules. That is the point:
+ * the list a person reads and the payslip they receive cannot disagree about whether Diwali was
+ * a day off for them.
+ */
+export async function getMyHolidays(employeeId: number, year?: string): Promise<MyHolidaysResult> {
+  const y = year !== undefined && year !== null && String(year).trim() !== ''
+    ? String(year).trim()
+    : new Date().toISOString().slice(0, 4);
+  // Without this a typo silently returns nothing, which then reads as "your HR team hasn't
+  // published anything" — blaming the data for a bad request.
+  if (!/^\d{4}$/.test(y)) {
+    throw new ValidationError('Year must be a four-digit year, for example 2026.');
+  }
+
+  const scope = await resolveHolidayScope(employeeId);
+  // The one shared definition of who a holiday reaches — region, department and property.
+  // payableDays.service (buildWorkCalendar) and attendance.service (getMyCalendar) call the
+  // same function, so the list, the calendar and the payslip cannot disagree.
+  const audience = audienceOf(scope);
+  const scoped = (q: any) => scopeHolidaysTo(q, audience, 'h');
+
+  // Bounded by the same predicate as the list itself, or the year arrows would offer a year
+  // that then renders "your HR team hasn't published a calendar" when it has — just not for
+  // this person.
+  const yearRows = await scoped(db('holidays as h'))
+    .select(db.raw('DISTINCT substr(h.date, 1, 4) as yr'))
+    .orderBy('yr');
+  const available_years = yearRows.map((r: any) => Number(r.yr)).filter((n: number) => n > 0);
+
+  const rows = await scoped(holidayBase())
+    .whereRaw('substr(h.date, 1, 4) = ?', [y])
+    // Two rows can share a date (a national and a state holiday both on 26 Jan). Ordering by
+    // date alone leaves that pair in whatever order Postgres happens to return, so the list
+    // reshuffles between requests.
+    .orderBy([{ column: 'h.date' }, { column: 'h.is_national', order: 'desc' }, { column: 'h.id' }]);
+
+  const empty = { total: 0, remaining: 0, this_month: 0, rest_day_clashes: 0, long_weekends: 0 };
+  if (rows.length === 0) {
+    // An empty list has three different causes now, and they send the reader to three different
+    // places. Only ask the extra question on the already-empty path.
+    const anyPublished = await db('holidays').whereRaw('substr(date, 1, 4) = ?', [y]).first();
+    const emptyStatus: MyHolidaysResult['scope_status'] = !anyPublished
+      ? 'no_holidays_published'                       // nothing exists for this year at all
+      : scope.status !== 'ok' ? scope.status          // their profile is what is blocking it
+      : scope.dept_status !== 'ok' ? 'no_holidays_for_you'
+      : 'no_holidays_for_you';                        // published, just not given to them yet
+    return {
+      year: y,
+      scope_status: emptyStatus,
+      dept_status: scope.dept_status,
+      branch_name: scope.branch_name,
+      dept_name: scope.dept_name,
+      region: scope.region,
+      department: scope.department,
+      available_years,
+      counts: empty,
+      holidays: [],
+    };
+  }
+
+  // Pad the window by a week so a break straddling 31 Dec / 1 Jan is measured rather than clipped.
+  // buildWorkCalendar issues the same queries regardless of range width, so the pad is free.
+  const windowStart = shiftDate(`${y}-01-01`, -7);
+  const windowEnd = shiftDate(`${y}-12-31`, 7);
+  const cal = await buildWorkCalendar(employeeId, windowStart, windowEnd);
+
+  const seen = new Map<string, ReturnType<typeof cal.classify>>();
+  const info = (d: string) => {
+    let v = seen.get(d);
+    if (!v) { v = cal.classify(d); seen.set(d, v); }
+    return v;
+  };
+  // A day outside the employment span ends a run exactly as a working day does. `base` is
+  // computed independently of `employed`, so without the second half a leaver's last holiday
+  // reports a break running to the edge of the window.
+  const isBreakDay = (d: string) => {
+    const i = info(d);
+    return i.base !== 'working' && i.employed;
+  };
+
+  const today = new Date().toISOString().slice(0, 10);
+  const holidays: MyHoliday[] = rows.map((h: any) => {
+    const date = String(h.date).slice(0, 10);
+    const day = info(date);
+    const inEmployment = day.employed;
+    const brk = inEmployment
+      ? findBreak(date, isBreakDay, windowStart, windowEnd)
+      : { start: date, end: date, days: 0, bounded: false };
+
+    return {
+      id: h.id,
+      name: h.name,
+      date,
+      is_national: !!h.is_national,
+      state: h.state ?? null,
+      falls_on: day.base === 'weekly_off' ? 'weekly_off' : 'working',
+      decided_by_name: day.sourceName,
+      break_days: brk.days,
+      break_start: brk.start,
+      break_end: brk.end,
+      break_bounded: brk.bounded,
+      in_employment: inEmployment,
+      employment_note: day.employmentNote ?? null,
+    };
+  });
+
+  // Counts are over distinct DATES, not rows: a national and a state holiday sharing 26 Jan is
+  // one day off, not two.
+  const dates = new Set(holidays.map((h) => h.date));
+  const remaining = new Set(
+    holidays.filter((h) => h.date >= today && h.in_employment).map((h) => h.date),
+  );
+  const monthPrefix = today.slice(0, 7);
+  const thisMonth = new Set(
+    holidays.filter((h) => h.date.slice(0, 7) === monthPrefix).map((h) => h.date),
+  );
+  const clashes = new Set(holidays.filter((h) => h.falls_on === 'weekly_off').map((h) => h.date));
+  // Deduped by the run they belong to, or two holidays inside one long weekend count it twice.
+  const breaks = new Set(
+    holidays.filter((h) => h.break_days >= 3 && !h.break_bounded).map((h) => h.break_start),
+  );
+
+  return {
+    year: y,
+    scope_status: scope.status,
+    dept_status: scope.dept_status,
+    branch_name: scope.branch_name,
+    dept_name: scope.dept_name,
+    region: scope.region,
+    department: scope.department,
+    available_years,
+    counts: {
+      total: dates.size,
+      remaining: remaining.size,
+      this_month: thisMonth.size,
+      rest_day_clashes: clashes.size,
+      long_weekends: breaks.size,
+    },
+    holidays,
+  };
+}
+
+export interface NormalizedHoliday {
+  row: {
+    name: string; date: string; is_national: boolean; state: string | null;
+    is_recurring: boolean; all_departments: boolean; all_properties: boolean;
+  };
+  department_ids: number[];
+  property_ids: number[];
+}
+
+export function normalizeHolidayInput(data: any): NormalizedHoliday {
   const name = String(data.name || '').trim();
   if (!name) throw new ValidationError('Holiday name is required.');
   const date = normalizeDateStr(String(data.date || ''));
@@ -1102,56 +1454,244 @@ function normalizeHolidayInput(data: any) {
     if (!state) throw new ValidationError('Select a state, or mark the holiday as national.');
     if (!INDIAN_STATES.includes(state)) throw new ValidationError('Unknown state.');
   }
-  return { name, date, is_national, state, is_recurring: !!data.is_recurring };
+
+  const ids = (raw: any): number[] => [...new Set(
+    (Array.isArray(raw) ? raw : []).map(Number).filter((n) => Number.isInteger(n) && n > 0),
+  )];
+
+  // Opt-in, enforced at the door. "Everyone" is a tick; neither a tick nor a list is a REFUSAL,
+  // not a saved holiday that quietly reaches nobody. No admin ever wants the second thing, and
+  // the cost of finding out is a person turning up to work on Diwali.
+  //
+  // The column defaults stay `false` so any path that bypasses this function still fails safe.
+  // The two rules do different jobs: this one refuses the null choice, the schema catches the
+  // writes that never made a choice at all.
+  const all_departments = !!data.all_departments;
+  const department_ids = all_departments ? [] : ids(data.department_ids);
+  if (!all_departments && department_ids.length === 0) {
+    throw new ValidationError(
+      'Choose the departments this holiday applies to, or tick "Every department". A holiday with neither reaches nobody.',
+    );
+  }
+  const all_properties = !!data.all_properties;
+  const property_ids = all_properties ? [] : ids(data.property_ids);
+  if (!all_properties && property_ids.length === 0) {
+    throw new ValidationError(
+      'Choose the properties this holiday applies to, or tick "Every property". A holiday with neither reaches nobody.',
+    );
+  }
+
+  return {
+    row: { name, date, is_national, state, is_recurring: !!data.is_recurring, all_departments, all_properties },
+    department_ids,
+    property_ids,
+  };
+}
+
+/**
+ * Replace a holiday's audience rows.
+ *
+ * Unknown ids are REJECTED rather than dropped. `setDepartments` above can afford to drop them
+ * because that list is opt-out and dropping one only widens access; here it is opt-in, so a
+ * silently dropped id narrows the audience without telling anyone who did it.
+ */
+async function writeHolidayScope(
+  trx: Knex.Transaction, holidayId: number, n: NormalizedHoliday,
+): Promise<void> {
+  await trx('holiday_departments').where('holiday_id', holidayId).del();
+  await trx('holiday_properties').where('holiday_id', holidayId).del();
+
+  if (n.department_ids.length) {
+    const valid: number[] = await trx('departments').whereIn('id', n.department_ids).pluck('id');
+    if (valid.length !== n.department_ids.length) {
+      throw new ValidationError('One of the selected departments no longer exists.');
+    }
+    await trx('holiday_departments')
+      .insert(valid.map((department_id) => ({ holiday_id: holidayId, department_id })))
+      .onConflict(['holiday_id', 'department_id']).ignore();
+  }
+  if (n.property_ids.length) {
+    const valid: number[] = await trx('properties').whereIn('id', n.property_ids).pluck('id');
+    if (valid.length !== n.property_ids.length) {
+      throw new ValidationError('One of the selected properties no longer exists.');
+    }
+    await trx('holiday_properties')
+      .insert(valid.map((property_id) => ({ holiday_id: holidayId, property_id })))
+      .onConflict(['holiday_id', 'property_id']).ignore();
+  }
+}
+
+/** One holiday with its audience attached, the shape the admin screen renders. */
+export async function getHolidayWithScope(id: number) {
+  const row = await holidayBase().where('h.id', id).first();
+  if (!row) return null;
+  const [departments, properties] = await Promise.all([
+    db('holiday_departments as hd').join('departments as d', 'd.id', 'hd.department_id')
+      .where('hd.holiday_id', id).select('d.id', 'd.name').orderBy('d.name'),
+    db('holiday_properties as hp').join('properties as p', 'p.id', 'hp.property_id')
+      .where('hp.holiday_id', id).select('p.id', 'p.name').orderBy('p.name'),
+  ]);
+  return {
+    ...row,
+    departments,
+    properties,
+    department_ids: departments.map((d: any) => d.id),
+    property_ids: properties.map((p: any) => p.id),
+  };
 }
 
 export async function createHoliday(data: any) {
-  const payload = normalizeHolidayInput(data);
-  const [{ id }] = await db('holidays').insert(payload).returning('id');
-  return holidayBase().where('h.id', id).first();
+  const n = normalizeHolidayInput(data);
+  const id = await db.transaction(async (trx) => {
+    const [{ id: newId }] = await trx('holidays').insert(n.row).returning('id');
+    await writeHolidayScope(trx, newId, n);
+    return newId as number;
+  });
+  return getHolidayWithScope(id);
 }
 
 export async function updateHoliday(id: number, data: any) {
   const existing = await db('holidays').where('id', id).first();
   if (!existing) throw new NotFoundError('Holiday');
-  const payload = normalizeHolidayInput(data);
-  await db('holidays').where('id', id).update({ ...payload, updated_at: db.fn.now() });
-  return holidayBase().where('h.id', id).first();
+  const n = normalizeHolidayInput(data);
+  await db.transaction(async (trx) => {
+    await trx('holidays').where('id', id).update({ ...n.row, updated_at: trx.fn.now() });
+    await writeHolidayScope(trx, id, n);
+  });
+  return getHolidayWithScope(id);
 }
 
 /**
- * Bulk import from CSV (columns: Holiday Name, Date). Targets one scope — national
- * or one state — and REPLACES only that scope's holidays (never a global wipe).
+ * A holiday's audience as one comparable string, so "same audience" is a cheap equality check.
+ * Pure, so it can be unit-tested without a database.
  */
-export async function uploadHolidaysCSV(csvText: string, scope: { is_national?: boolean; state?: string }) {
+export function holidayAudienceKey(
+  row: { all_departments: boolean; all_properties: boolean },
+  departmentIds: number[], propertyIds: number[],
+): string {
+  const d = row.all_departments ? 'D:*' : `D:${[...departmentIds].sort((a, b) => a - b).join(',')}`;
+  const p = row.all_properties ? 'P:*' : `P:${[...propertyIds].sort((a, b) => a - b).join(',')}`;
+  return `${d}|${p}`;
+}
+
+export interface HolidayCsvScope {
+  is_national?: boolean;
+  state?: string;
+  all_departments?: boolean;
+  department_ids?: number[];
+  all_properties?: boolean;
+  property_ids?: number[];
+  /** 'append' (default) adds rows and deletes nothing. 'replace' clears the same audience first. */
+  mode?: 'append' | 'replace';
+}
+
+/**
+ * Bulk import from CSV (columns: Holiday Name, Date), stamping one audience on every row.
+ *
+ * TWO changes from the version this replaces, both about not destroying work:
+ *
+ *  • It defaults to APPENDING. The old behaviour deleted a whole scope every time, with no
+ *    confirmation, which is a lot of authority for a file picker.
+ *  • "Replace" now deletes only rows with the SAME audience as the upload. The old predicate was
+ *    `where state = 'Karnataka'` with no other qualifier, so re-uploading the Karnataka list
+ *    would take out the Karnataka-for-Management holiday somebody set up by hand last week.
+ */
+export async function uploadHolidaysCSV(csvText: string, scope: HolidayCsvScope) {
   const is_national = !!scope.is_national;
   let state: string | null = null;
   if (!is_national) {
     state = scope.state ? String(scope.state).trim() : null;
-    if (!state) throw Object.assign(new Error('Choose a target: National or a specific state.'), { status: 400 });
-    if (!INDIAN_STATES.includes(state)) throw Object.assign(new Error('Unknown state.'), { status: 400 });
+    if (!state) throw new ValidationError('Choose a target: National or a specific state.');
+    if (!INDIAN_STATES.includes(state)) throw new ValidationError('Unknown state.');
   }
 
-  const lines = csvText.split(/\r?\n/).filter(l => l.trim());
-  if (lines.length < 2) throw Object.assign(new Error('CSV must have a header row and at least one data row'), { status: 400 });
+  // Same opt-in rules as the single-holiday form — an import that reaches nobody is the worst
+  // version of this mistake, because it is 20 holidays at once.
+  const audience = normalizeHolidayInput({
+    name: 'csv', date: '2000-01-01', is_national, state,
+    all_departments: scope.all_departments, department_ids: scope.department_ids,
+    all_properties: scope.all_properties, property_ids: scope.property_ids,
+  });
 
-  const rows: { name: string; date: string; is_national: boolean; state: string | null }[] = [];
+  const lines = csvText.split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 2) throw new ValidationError('CSV must have a header row and at least one data row.');
+
+  const parsed: { name: string; date: string }[] = [];
   for (let i = 1; i < lines.length; i++) {
     const cols = lines[i].split(',').map(c => c.trim().replace(/^"|"$/g, ''));
     if (cols.length < 2 || !cols[0] || !cols[1]) continue;
     const date = normalizeDateStr(cols[1]);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
-    rows.push({ name: cols[0], date, is_national, state });
+    parsed.push({ name: cols[0], date });
   }
-  if (rows.length === 0) throw Object.assign(new Error('No valid holiday rows found in CSV'), { status: 400 });
+  if (parsed.length === 0) throw new ValidationError('No valid holiday rows found in the CSV.');
 
+  const mode = scope.mode === 'replace' ? 'replace' : 'append';
+  const uploadKey = holidayAudienceKey(
+    { all_departments: audience.row.all_departments, all_properties: audience.row.all_properties },
+    audience.department_ids, audience.property_ids,
+  );
+
+  let replaced = 0;
   await db.transaction(async (trx) => {
-    if (is_national) await trx('holidays').where('is_national', true).del();
-    else await trx('holidays').where('state', state).del();
-    await trx('holidays').insert(rows);
+    if (mode === 'replace') {
+      // Candidates by region, then keep only those whose audience matches this upload's.
+      const candidates = await trx('holidays')
+        .modify((q) => { if (is_national) q.where('is_national', true); else q.where('state', state); })
+        .select('id', 'all_departments', 'all_properties');
+      const ids = candidates.map((c: any) => c.id);
+      const [dLinks, pLinks] = ids.length
+        ? await Promise.all([
+          trx('holiday_departments').whereIn('holiday_id', ids).select('holiday_id', 'department_id'),
+          trx('holiday_properties').whereIn('holiday_id', ids).select('holiday_id', 'property_id'),
+        ])
+        : [[], []];
+      const group = (rows: any[], key: string) => {
+        const m = new Map<number, number[]>();
+        for (const r of rows) {
+          if (!m.has(r.holiday_id)) m.set(r.holiday_id, []);
+          m.get(r.holiday_id)!.push(r[key]);
+        }
+        return m;
+      };
+      const dMap = group(dLinks, 'department_id');
+      const pMap = group(pLinks, 'property_id');
+      const doomed = candidates
+        .filter((c: any) => holidayAudienceKey(
+          { all_departments: !!c.all_departments, all_properties: !!c.all_properties },
+          dMap.get(c.id) ?? [], pMap.get(c.id) ?? [],
+        ) === uploadKey)
+        .map((c: any) => c.id);
+      if (doomed.length) {
+        replaced = await trx('holidays').whereIn('id', doomed).del();
+      }
+    }
+
+    for (const p of parsed) {
+      const [{ id }] = await trx('holidays').insert({
+        name: p.name, date: p.date,
+        is_national, state,
+        is_recurring: false,
+        all_departments: audience.row.all_departments,
+        all_properties: audience.row.all_properties,
+      }).returning('id');
+      await writeHolidayScope(trx, id, audience);
+    }
   });
 
-  return { inserted: rows.length, scope: is_national ? 'national' : state };
+  return {
+    inserted: parsed.length,
+    replaced,
+    mode,
+    scope: is_national ? 'national' : state,
+    reaches: await countHolidayReach({
+      is_national, state,
+      all_departments: audience.row.all_departments,
+      department_ids: audience.department_ids,
+      all_properties: audience.row.all_properties,
+      property_ids: audience.property_ids,
+    }),
+  };
 }
 
 export async function deleteHoliday(id: number) {

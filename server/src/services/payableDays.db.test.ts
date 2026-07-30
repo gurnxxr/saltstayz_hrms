@@ -278,7 +278,13 @@ describe.skipIf(!ON_THROWAWAY)('payable days — what each attendance code does 
     // rest day became a PAID HOLIDAY and entered the salary divisor, a day nobody was rostered
     // for. That silently changed the price of every lost day in the month. It yields 27 here.
     await onWorkWeek('PDT Hotel Ops', SUNDAY_OFF);
-    await db('holidays').insert({ name: 'PDT Rest-day Holiday', date: d(14), is_national: true });
+    // all_departments/all_properties are as load-bearing as is_national: a holiday reaches
+    // nobody until it says who it is for (migration 025). Left off, this holiday would simply
+    // not exist for anyone and the assertion below would be testing nothing.
+    await db('holidays').insert({
+      name: 'PDT Rest-day Holiday', date: d(14), is_national: true,
+      all_departments: true, all_properties: true,
+    });
 
     const res = await computePayableDays(employeeId, MONTH, YEAR);
     expect(res.working_days).toBe(26);
@@ -292,7 +298,10 @@ describe.skipIf(!ON_THROWAWAY)('payable days — what each attendance code does 
   it('a holiday on a working day still counts as one, and is paid', async () => {
     // The control for the case above: same pattern, holiday moved to the Monday.
     await onWorkWeek('PDT Hotel Ops', SUNDAY_OFF);
-    await db('holidays').insert({ name: 'PDT Working-day Holiday', date: d(15), is_national: true });
+    await db('holidays').insert({
+      name: 'PDT Working-day Holiday', date: d(15), is_national: true,
+      all_departments: true, all_properties: true,
+    });
 
     const res = await computePayableDays(employeeId, MONTH, YEAR);
     expect(res.working_days).toBe(26);

@@ -99,6 +99,14 @@ export async function deleteProperty(id: number) {
       + 'deleting it would leave them with no work location, and no state for their statutory rates.',
     );
   }
+  // Same reasoning as deleteDepartment: holidays scoped to this property alone would cascade
+  // away and stop reaching anyone, with nothing on screen saying why.
+  const holidayCount = await db('holiday_properties').where('property_id', id).count('* as c').first();
+  if (holidayCount && Number(holidayCount.c) > 0) {
+    throw new ValidationError(
+      `Cannot delete: ${holidayCount.c} holiday(s) are given specifically to this property. Change who those holidays are for first.`,
+    );
+  }
   await db('properties').where('id', id).delete();
 }
 
@@ -204,6 +212,14 @@ export async function deleteDepartment(id: number) {
   // Employees reference departments by free-text dept_name — block so none is orphaned.
   const empCount = await db('employees').where('dept_name', row.name).count('* as c').first();
   if (empCount && Number(empCount.c) > 0) throw new ValidationError('Cannot delete department with employees assigned. Reassign them to another department first.');
+  // Holidays given specifically to this department would cascade away with it and silently stop
+  // reaching anyone — a paid day off disappearing with no trace of why.
+  const holidayCount = await db('holiday_departments').where('department_id', id).count('* as c').first();
+  if (holidayCount && Number(holidayCount.c) > 0) {
+    throw new ValidationError(
+      `Cannot delete: ${holidayCount.c} holiday(s) are given specifically to this department. Change who those holidays are for first.`,
+    );
+  }
   await db('departments').where('id', id).delete();
 }
 

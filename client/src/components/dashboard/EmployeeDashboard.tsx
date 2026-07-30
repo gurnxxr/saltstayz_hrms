@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
 import DashboardGreeting from '@/components/dashboard/DashboardGreeting';
+import UpcomingHolidaysCard from '@/components/leaves/UpcomingHolidaysCard';
 import { CalendarCheck, CalendarOff, Clock, Wallet, CalendarPlus, FileText, User, BarChart3 } from 'lucide-react';
 
 const fmt = (t?: string) => (t ? t.slice(0, 5) : '');
@@ -92,6 +93,9 @@ export default function EmployeeDashboard() {
           </div>
         </div>
       </div>
+
+      {/* Holidays — sits beside My Shift because both answer "when am I not working". */}
+      <UpcomingHolidaysCard />
 
       {/* My Shift */}
       <div className="bg-card rounded-xl border border-border p-6">

@@ -98,6 +98,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
     form.aadhaar_number !== (emp.aadhaar_number || '') ||
     form.dept_name !== (emp.dept_name || '') ||
     form.branch_name !== (emp.branch_name || '') ||
+    form.branch_unit !== (emp.branch_unit || '') ||
     String(form.job_title_id) !== String(emp.job_title_id || '')
   );
   useUnsavedChangesWarning(dirty);
@@ -115,6 +116,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       aadhaar_number: emp.aadhaar_number || '',
       dept_name: emp.dept_name || '',
       branch_name: emp.branch_name || '',
+      branch_unit: emp.branch_unit || '',
       job_title_id: emp.job_title_id || '',
       is_active: emp.is_active ? 1 : 0,
     });
@@ -167,8 +169,20 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   // silently drops a value the record already holds.
   const deptNames: string[] = departments.map((d: any) => d.name as string);
   const currentDept = (form.dept_name ?? '').trim();
-  if (currentDept && !deptNames.includes(currentDept)) deptNames.push(currentDept);
-  const deptOptions = deptNames.map((n) => ({ value: n, label: n }));
+  // Holidays are given department by department, so an off-catalog department is no longer
+  // merely untidy — it costs this person every holiday that is limited to particular
+  // departments, silently. Keep the value, label it, and say what it costs.
+  const deptOffCatalog = !!currentDept && !deptNames.includes(currentDept);
+  if (deptOffCatalog) deptNames.push(currentDept);
+  const deptOptions = deptNames.map((n) => ({
+    value: n,
+    label: deptOffCatalog && n === currentDept ? `${n} — not a department` : n,
+  }));
+  const deptHint = deptOffCatalog
+    ? `"${currentDept}" isn't in the department list. Until it's corrected, this employee won't see any holiday that's limited to particular departments.`
+    : !currentDept
+      ? "Without a department, this employee won't see any holiday that's limited to particular departments."
+      : undefined;
 
   // Same treatment for branch, with one addition: a value that matches no property is kept but
   // LABELLED, because it is not merely off-catalog — it is the state of an employee whose
@@ -276,7 +290,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
               <FormField label="Email Address" value={form.email} onChange={(v) => setForm((p: any) => ({ ...p, email: v }))} type="email" />
               <FormField label="Phone Number" value={form.phone} onChange={(v) => setForm((p: any) => ({ ...p, phone: v }))} />
               <FormField label="Aadhaar Card No" value={form.aadhaar_number} onChange={(v) => setForm((p: any) => ({ ...p, aadhaar_number: v.replace(/\D/g, '') }))} maxLength={12} />
-              <SelectField label="Dept Name" value={form.dept_name} onChange={(v) => setForm((p: any) => ({ ...p, dept_name: v }))} options={deptOptions} />
+              <SelectField label="Dept Name" value={form.dept_name} onChange={(v) => setForm((p: any) => ({ ...p, dept_name: v }))} options={deptOptions} hint={deptHint} />
               <SelectField label="Designation Name" value={form.job_title_id} onChange={(v) => setForm((p: any) => ({ ...p, job_title_id: v ? Number(v) : null }))} options={jobTitles.map((j: any) => ({ value: j.id, label: j.title || j.name }))} />
               <SelectField label="Property Name" value={form.branch_name} onChange={(v) => setForm((p: any) => ({ ...p, branch_name: v }))} options={branchOptions} />
               <SelectField label="Branch Name" value={form.branch_unit} onChange={(v) => setForm((p: any) => ({ ...p, branch_unit: v }))} options={unitOptions} />
@@ -395,9 +409,11 @@ function FormField({ label, value, onChange, type = 'text', maxLength }: {
   );
 }
 
-function SelectField({ label, value, onChange, options }: {
+function SelectField({ label, value, onChange, options, hint }: {
   label: string; value: string | number; onChange: (v: string) => void;
   options: { value: number | string; label: string }[];
+  /** Shown in amber under the field. For a value that saves fine but costs the employee something. */
+  hint?: string;
 }) {
   return (
     <div>
@@ -412,6 +428,7 @@ function SelectField({ label, value, onChange, options }: {
           <option key={o.value} value={o.value}>{o.label}</option>
         ))}
       </select>
+      {hint && <p className="mt-1 text-xs text-amber-700">{hint}</p>}
     </div>
   );
 }

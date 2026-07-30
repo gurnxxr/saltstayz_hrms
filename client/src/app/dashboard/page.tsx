@@ -8,6 +8,7 @@ import { usePermissions } from '@/hooks/usePermissions';
 import api from '@/lib/api';
 import EmployeeDashboard from '@/components/dashboard/EmployeeDashboard';
 import DashboardGreeting from '@/components/dashboard/DashboardGreeting';
+import UpcomingHolidaysCard from '@/components/leaves/UpcomingHolidaysCard';
 import { CalendarCheck, CalendarOff, Users, Clock, Briefcase, UserPlus } from 'lucide-react';
 
 export default function DashboardPage() {
@@ -80,6 +81,9 @@ function OrgDashboard() {
             color="bg-cyan-50 text-cyan-600"
           />
         </div>
+
+        {/* The viewer's OWN holidays — staff take the same days off as everyone else. */}
+        <UpcomingHolidaysCard />
 
         {/* Quick Actions */}
         {quickActions.length > 0 && (

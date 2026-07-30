@@ -354,7 +354,15 @@ export async function bulkUploadEmployees(csvContent: string) {
   const jobTitles = await db('job_titles').select('id', 'title');
   const jtMap = new Map<string, number>(jobTitles.map((j: any) => [String(j.title).trim().toLowerCase(), j.id]));
 
-  const results = { total: 0, created: 0, updated: 0, skipped: 0, errors: [] as string[] };
+  // `warnings` is separate from `errors` on purpose: these rows DID import. Listing them under
+  // "N row errors", beside a skipped count they did not contribute to, reads as a failure.
+  const results = {
+    total: 0, created: 0, updated: 0, skipped: 0,
+    errors: [] as string[], warnings: [] as string[],
+  };
+  const knownDepartments = new Set<string>(
+    (await db('departments').pluck('name')).map((n: string) => String(n).toLowerCase()),
+  );
 
   for (let i = 1; i < lines.length; i++) {
     const cols = lines[i].split(',').map(c => c.trim());
@@ -376,7 +384,19 @@ export async function bulkUploadEmployees(csvContent: string) {
     if (row.last_name !== undefined) data.last_name = row.last_name?.trim() || '';
     if (row.email) data.email = row.email.trim();
     if (row.phone) data.phone = row.phone.trim();
-    if (row.dept_name) data.dept_name = row.dept_name.trim();
+    if (row.dept_name) {
+      data.dept_name = row.dept_name.trim();
+      // Accepted, not rejected — the import is the bulk-CORRECTION tool, and refusing a 400-row
+      // file over one misspelling makes it useless for exactly the job it exists to do. But it
+      // is not silent either: an unmatched department costs this person every holiday that is
+      // limited to particular departments, and silence is what produced the wrong-state backlog.
+      if (!knownDepartments.has(data.dept_name.toLowerCase())) {
+        results.warnings.push(
+          `Row ${rowNo}: department "${data.dept_name}" isn't in the department list — imported as-is. `
+          + "This employee won't receive department-specific holidays until it's corrected.",
+        );
+      }
+    }
     if (row.branch_name) data.branch_name = row.branch_name.trim();
     if (row.branch_unit) data.branch_unit = row.branch_unit.trim();
     if (row.father_name) data.father_name = row.father_name.trim();

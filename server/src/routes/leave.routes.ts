@@ -78,6 +78,10 @@ const ADMIN_ONLY = authorizeRoles('admin');
 router.post('/holidays', authorize('leave', 'create'), LEAVE_ADMIN, ctrl.createHoliday);
 router.put('/holidays/:id', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.updateHoliday);
 router.post('/holidays/upload-csv', authorize('leave', 'create'), LEAVE_ADMIN, upload.single('file'), ctrl.uploadHolidaysCSV);
+// How many people a holiday actually reaches. The one thing that can catch a valid-looking
+// audience — "Front Desk at Gurgaon" — that happens to match nobody.
+router.post('/holidays/reach-preview', authorize('leave', 'read'), LEAVE_ADMIN, ctrl.previewHolidayReach);
+router.get('/holidays/:id/reach', authorize('leave', 'read'), LEAVE_ADMIN, ctrl.getHolidayReach);
 router.delete('/holidays/:id', authorize('leave', 'delete'), LEAVE_ADMIN, ctrl.deleteHoliday);
 
 router.post('/regions', ADMIN_ONLY, ctrl.createRegion);

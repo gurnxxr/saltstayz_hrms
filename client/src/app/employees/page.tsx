@@ -346,6 +346,22 @@ export default function EmployeeDetailsPage() {
                       </div>
                     </div>
                   )}
+                  {/* Warnings are amber and separate: these rows DID import. Mixed in with the
+                      errors above, next to a skipped count they did not contribute to, they
+                      would read as failures. */}
+                  {bulkResult.warnings?.length > 0 && (
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-secondary">{bulkResult.warnings.length} row(s) imported with a warning</span>
+                        <button onClick={() => copyErrors(bulkResult.warnings)} className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"><Copy size={12} /> Copy</button>
+                      </div>
+                      <div className="max-h-40 overflow-y-auto rounded bg-amber-50 border border-amber-200 p-2">
+                        {bulkResult.warnings.map((w: string, i: number) => (
+                          <p key={i} className="text-xs text-amber-800">{w}</p>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

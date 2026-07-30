@@ -2,7 +2,8 @@ import db from '../config/database';
 import { ValidationError } from '../utils/errors';
 import { JwtPayload } from '../types';
 import { notify } from './notification.service';
-import { getEmployeeRegion } from './leave.service';
+import { resolveHolidayScope } from './leave.service';
+import { audienceOf, scopeHolidaysTo } from './holidayScope';
 import { getPaySchedule } from './paySchedule.service';
 import { overnightHours, judgeDay } from './attendance.calc';
 import { pickAssignmentFor } from './shiftPattern';
@@ -124,16 +125,13 @@ export async function getMyCalendar(employeeId: number, month: string) {
     .where('lr.end_date', '>=', startDate)
     .select('lr.start_date', 'lr.end_date', 'lt.name as leave_type');
 
-  // Fetch holidays for this month — national + the employee's region only.
-  const region = await getEmployeeRegion(employeeId);
-  const holidays = await db('holidays')
-    .whereBetween('date', [startDate, endDate])
-    .where(function () {
-      this.where('is_national', true);
-      if (region?.state) this.orWhere('state', region.state);
-    })
-    .select('date', 'name')
-    .orderBy('date', 'asc');
+  // The holidays that reach THIS person this month — region, department and property.
+  // Same shared definition the holiday screen and the payroll calendar use (holidayScope.ts).
+  const audience = audienceOf(await resolveHolidayScope(employeeId));
+  const holidays = await scopeHolidaysTo(
+    db('holidays').whereBetween('date', [startDate, endDate]),
+    audience,
+  ).select('date', 'name').orderBy('date', 'asc');
 
   // Which days this person was actually scheduled to work, and what said so.
   //

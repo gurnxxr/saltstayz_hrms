@@ -2,7 +2,8 @@ import db from '../config/database';
 import { ValidationError } from '../utils/errors';
 import { getPaySchedule } from './paySchedule.service';
 import { getAttendancePayRules } from './attendancePayRules.service';
-import { getEmployeeRegion } from './leave.service';
+import { resolveHolidayScope } from './leave.service';
+import { audienceOf, scopeHolidaysTo } from './holidayScope';
 import { getEmployeeLeaveRules, getEmployeeWorkWeek } from './leaveTemplate.service';
 import {
   isOffDay, parseOffDayRules, pickAssignmentFor, rulesInForceOn, shiftLengthHours, type OffDayRule,
@@ -178,14 +179,14 @@ export async function buildWorkCalendar(
   /** The shift in effect on a date — same rule as everywhere else. */
   const shiftOn = (date: string) => pickAssignmentFor(prepared, date, today);
 
-  const region = await getEmployeeRegion(employeeId);
-  const holidayRows = await db('holidays')
-    .whereBetween('date', [startDate, endDate])
-    .where(function (this: any) {
-      this.where('is_national', true);
-      if (region?.state) this.orWhere('state', region.state);
-    })
-    .select('date', 'name');
+  // One definition of who a holiday reaches, shared with the holiday screen and the attendance
+  // calendar. It is pure query-building and reads nothing of its own — see holidayScope.ts for
+  // why this is one function rather than three copies.
+  const audience = audienceOf(await resolveHolidayScope(employeeId));
+  const holidayRows = await scopeHolidaysTo(
+    db('holidays').whereBetween('date', [startDate, endDate]),
+    audience,
+  ).select('date', 'name');
   const holidayByDate = new Map<string, string>(holidayRows.map((h: any) => [String(h.date).slice(0, 10), h.name]));
 
   /**

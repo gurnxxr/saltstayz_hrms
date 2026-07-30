@@ -103,9 +103,23 @@ export async function seed(knex: Knex): Promise<void> {
     idx += 1;
   }
 
-  // 4. Holidays
+  // 4. Holidays.
+  //
+  // `is_national` is NOT optional here. An employee only ever sees a holiday that is either
+  // national or carries their own state (leave.service.getMyHolidays, and the same predicate in
+  // the payroll and attendance calendars). A row with neither matches nobody — it sits in the
+  // table looking published while every employee's holiday list stays empty, and the payroll
+  // calendar never treats it as a holiday either.
+  // `all_departments` / `all_properties` are as load-bearing as `is_national`: a holiday reaches
+  // nobody until it says who it is for (migration 025). Left off, these demo holidays would
+  // exist in the table and appear on no calendar.
   for (const h of HOLIDAYS_2026) {
     const exists = await knex('holidays').where({ name: h.name, date: h.date }).first();
-    if (!exists) await knex('holidays').insert({ name: h.name, date: h.date, is_recurring: false });
+    if (!exists) {
+      await knex('holidays').insert({
+        name: h.name, date: h.date, is_national: true, state: null, is_recurring: false,
+        all_departments: true, all_properties: true,
+      });
+    }
   }
 }
