@@ -6,10 +6,11 @@ import { toast } from 'sonner';
 import api from '@/lib/api';
 import AppShell from '@/components/layout/AppShell';
 import {
-  Upload, FileSpreadsheet, ChevronDown, ChevronRight,
+  Upload, FileSpreadsheet, ChevronDown, ChevronRight, Download,
   Users, CheckCircle, XCircle, Clock, ArrowLeft, History, Wand2,
 } from 'lucide-react';
 import Breadcrumb from '@/components/ui/Breadcrumb';
+import { errorFromBlob } from '@/lib/utils';
 
 const fmtDateTime = (s?: string) => {
   if (!s) return '—';
@@ -28,6 +29,32 @@ export default function AdminAttendancePage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('');
   const [uploadResult, setUploadResult] = useState<any>(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [showTemplates, setShowTemplates] = useState(false);
+
+  /**
+   * Fetch a blank template and save it.
+   *
+   * Goes through `api` rather than a plain link so the session cookie and the API base URL are
+   * applied — a bare href would hit the Next.js origin unauthenticated and download the login page.
+   */
+  async function downloadTemplate(kind: 'marked-grid' | 'punch-csv') {
+    try {
+      const url = kind === 'marked-grid'
+        ? `/attendance/admin/template/marked-grid?month=${selectedDate.slice(0, 7)}`
+        : '/attendance/admin/template/punch-csv';
+      const res = await api.get(url, { responseType: 'blob' });
+      const href = URL.createObjectURL(res.data as Blob);
+      const a = document.createElement('a');
+      a.href = href;
+      a.download = kind === 'marked-grid'
+        ? `attendance_grid_${selectedDate.slice(0, 7)}.csv`
+        : 'attendance_punch_template.csv';
+      a.click();
+      URL.revokeObjectURL(href);
+    } catch (err: any) {
+      toast.error((await errorFromBlob(err)) || 'Could not download the template');
+    }
+  }
 
   const { data: uploadLogs = [] } = useQuery({
     queryKey: ['attendance-upload-logs'],
@@ -165,6 +192,41 @@ export default function AdminAttendancePage() {
                 <Wand2 size={15} />
                 {autoMarkMutation.isPending ? 'Marking…' : 'Auto-mark'}
               </button>
+              <div className="relative">
+                <button
+                  onClick={() => setShowTemplates((v) => !v)}
+                  title="Download a blank file in the shape each importer expects"
+                  className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted transition-colors"
+                >
+                  <Download size={15} /> Template
+                </button>
+                {showTemplates && (
+                  <>
+                    {/* Click-away layer — a menu that only closes via its own items strands the page. */}
+                    <div className="fixed inset-0 z-10" onClick={() => setShowTemplates(false)} />
+                    <div className="absolute right-0 mt-1 z-20 w-72 bg-card border border-border rounded-lg shadow-lg overflow-hidden">
+                      <button
+                        onClick={() => { downloadTemplate('marked-grid'); setShowTemplates(false); }}
+                        className="w-full text-left px-4 py-2.5 hover:bg-muted transition-colors"
+                      >
+                        <p className="text-sm font-medium text-foreground">Marked grid — {selectedDate.slice(0, 7)}</p>
+                        <p className="text-xs text-secondary mt-0.5">
+                          Every active employee as a row, each day of the month as a column. Fill the cells with codes.
+                        </p>
+                      </button>
+                      <button
+                        onClick={() => { downloadTemplate('punch-csv'); setShowTemplates(false); }}
+                        className="w-full text-left px-4 py-2.5 border-t border-border hover:bg-muted transition-colors"
+                      >
+                        <p className="text-sm font-medium text-foreground">Punch CSV</p>
+                        <p className="text-xs text-secondary mt-0.5">
+                          Headers plus one worked example, for a biometric export you assemble yourself.
+                        </p>
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
               <input ref={fileRef} type="file" accept=".csv" onChange={handleFileUpload} className="hidden" />
               <button
                 onClick={() => fileRef.current?.click()}

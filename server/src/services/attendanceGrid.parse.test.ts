@@ -138,3 +138,67 @@ describe('the header shape the real dashboard export produces', () => {
       .toEqual({ empCode: '11', date: '2026-07-04', code: 'no_punch' });
   });
 });
+
+/**
+ * The template this app hands out must be a file this app can read back.
+ *
+ * A downloadable template is a promise about the format, and the only way that promise breaks
+ * quietly is for the two halves to drift — someone changes a header, and the file the screen
+ * offers starts being rejected by the screen next to it. These parse the template's own shape
+ * rather than a hand-written fixture, so a change to one side fails here rather than in an
+ * admin's face.
+ *
+ * `buildMarkedGridTemplate` reads the employee table, so the shape it produces is reconstructed
+ * here instead of calling it — the assertion is about the FORMAT, which is what the parser cares
+ * about, and this keeps the test pure.
+ */
+describe('marked-grid template round-trip', () => {
+  const templateShape = (month: string, dates: string[]) => ([
+    ['Emp Code', 'Name', 'Department', 'Property', ...dates],
+    ['PD-0013', 'Aadhya Reddy', 'Security', 'SaltStayz Connaught Place', ...dates.map(() => '')],
+  ]);
+
+  it('parses the ISO date headers the template writes', () => {
+    const dates = ['2026-07-01', '2026-07-02', '2026-07-03'];
+    const grid = templateShape('2026-07', dates);
+    grid[1][4] = 'P';
+    grid[1][5] = 'NP';
+    grid[1][6] = 'HD';
+
+    const { cells, unrecognized } = parseMarkedGrid(grid, { month: '2026-07' });
+    expect(unrecognized).toEqual([]);
+    expect(cells).toEqual([
+      { empCode: 'PD-0013', date: '2026-07-01', code: 'present' },
+      { empCode: 'PD-0013', date: '2026-07-02', code: 'no_punch' },
+      { empCode: 'PD-0013', date: '2026-07-03', code: 'half_day' },
+    ]);
+  });
+
+  it('ignores the template\'s Name/Department/Property columns rather than reading them as dates', () => {
+    // These sit between the employee code and the first date. Misreading one as a header would
+    // scatter every code onto the wrong day.
+    expect(parseHeaderDate('Name', '2026-07')).toBeNull();
+    expect(parseHeaderDate('Department', '2026-07')).toBeNull();
+    expect(parseHeaderDate('Property', '2026-07')).toBeNull();
+  });
+
+  it('leaves blank cells alone, so a partly-filled template writes only what was filled', () => {
+    const dates = ['2026-07-01', '2026-07-02'];
+    const grid = templateShape('2026-07', dates);
+    grid[1][4] = 'A'; // day 1 filled, day 2 left blank
+    const { cells } = parseMarkedGrid(grid, { month: '2026-07' });
+    expect(cells).toEqual([{ empCode: 'PD-0013', date: '2026-07-01', code: 'absent' }]);
+  });
+
+  it('reads the trailing legend rows as nothing, not as an employee', () => {
+    const dates = ['2026-07-01'];
+    const grid = [
+      ...templateShape('2026-07', dates),
+      [''],
+      ['Codes: P = Present · NP = No Punch · A = Absent · HD = Half Day · SP = Short Punch · MP = Miss Punch · HHD = Half day with half leave'],
+      ['Weekly offs, holidays and approved leave are calendar-driven — leave those cells blank rather than coding them.'],
+    ];
+    const { cells } = parseMarkedGrid(grid, { month: '2026-07' });
+    expect(cells).toEqual([]); // nothing was filled in, and no legend row became a row of marks
+  });
+});

@@ -106,6 +106,32 @@ export async function getUploadLogs(req: AuthRequest, res: Response, next: NextF
   } catch (err) { next(err); }
 }
 
+/**
+ * Blank upload templates, in the exact shape each importer parses.
+ *
+ * Sent as a download rather than JSON the client assembles: the marked grid needs the live
+ * roster and the month's dates, and rebuilding that in the browser would be a second definition
+ * of the file format to keep in step with the parser.
+ */
+export async function downloadMarkedGridTemplate(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const month = String(req.query.month || new Date().toISOString().slice(0, 7));
+    const csv = await gridService.buildMarkedGridTemplate(month);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="attendance_grid_${month}.csv"`);
+    res.send(csv);
+  } catch (err) { next(err); }
+}
+
+export async function downloadPunchCsvTemplate(_req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const csv = await gridService.buildPunchCsvTemplate();
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="attendance_punch_template.csv"');
+    res.send(csv);
+  } catch (err) { next(err); }
+}
+
 /** Apply Shift Type auto-attendance thresholds to a date (default: yesterday). */
 export async function autoMark(req: AuthRequest, res: Response, next: NextFunction) {
   try {
