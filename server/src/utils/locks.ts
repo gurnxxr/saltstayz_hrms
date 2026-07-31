@@ -22,6 +22,13 @@ export const LOCK = {
   LEAVE_APPLY: 811004,
   /** Adding an applicant to one vacancy (duplicate check then insert). */
   CANDIDATE_APPLY: 811005,
+  /**
+   * One payroll month, keyed by `monthKeyOf(month, year)`. Serialises the three things that can
+   * disagree about whether a month is still open: approving a regularisation (which changes
+   * attendance), re-pricing one payslip, and locking the run. Without it the lock re-checks sit
+   * outside their own transactions and a lock can land between check and write.
+   */
+  PAYROLL_MONTH: 811006,
 } as const;
 
 /**

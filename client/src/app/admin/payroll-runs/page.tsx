@@ -89,14 +89,22 @@ export default function PayrollRunsPage() {
       toast.success(vars.lock ? 'Payroll locked' : 'Payroll unlocked');
     },
     onError: (err: any, vars) => {
+      const message = err.response?.data?.error || 'Action failed';
+      // Out-of-date payslips are NOT confirm-through. Unlike thin attendance — where the data may
+      // be all there is — the fix here is one click away, so confirming would mean knowingly paying
+      // a figure the system has just said is wrong, and locking freezes it for good.
+      if (err.response?.status === 409 && vars.lock && /out of date/i.test(message)) {
+        toast.error(message, { duration: 10000 });
+        return;
+      }
       // Attendance-coverage gate (409): let the user lock anyway after confirming.
       if (err.response?.status === 409 && vars.lock && !vars.confirm) {
-        if (window.confirm(`${err.response?.data?.error}\n\nLock anyway?`)) {
+        if (window.confirm(`${message}\n\nLock anyway?`)) {
           lockMutation.mutate({ ...vars, confirm: true });
         }
         return;
       }
-      toast.error(err.response?.data?.error || 'Action failed');
+      toast.error(message);
     },
   });
 
@@ -240,6 +248,21 @@ export default function PayrollRunsPage() {
               </button>
             </div>
 
+            {/* Payslips priced before the attendance they are meant to reflect. Loud, because the
+                money is wrong until somebody re-runs, and locking would freeze it that way. */}
+            {details.staleness?.count > 0 && currentRun.status !== 'locked' && (
+              <div className="px-6 py-3 border-b border-border bg-amber-50 text-amber-900 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                <AlertTriangle size={14} className="text-amber-600 shrink-0" />
+                <span className="font-medium">
+                  {details.staleness.count} payslip{details.staleness.count === 1 ? ' is' : 's are'} out of date
+                </span>
+                <span>
+                  — attendance changed after this run was generated. Re-run payroll to bring them up to date;
+                  locking is blocked until you do.
+                </span>
+              </div>
+            )}
+
             {/* Attendance-coverage gate (Phase 3) */}
             {details.coverage && details.coverage.working_days > 0 && (
               <div className={`px-6 py-3 border-b border-border flex flex-wrap items-center gap-x-6 gap-y-2 text-xs ${
@@ -249,14 +272,19 @@ export default function PayrollRunsPage() {
                   {details.coverage.over_gate
                     ? <AlertTriangle size={14} className="text-amber-600" />
                     : <CheckCircle2 size={14} className="text-green-600" />}
-                  Attendance coverage: {(100 - details.coverage.unmarked_pct).toFixed(1)}% marked
+                  {/* The gate judges days paid with no evidence of work — no record at all, plus
+                      No Punch, which pays a full day. Naming both keeps the banner and the 409
+                      that blocks the lock telling the same story. */}
+                  Attendance evidence: {(100 - details.coverage.unevidenced_pct).toFixed(1)}% complete
                   <span className="text-secondary font-normal">
-                    ({details.coverage.unmarked_days} of {details.coverage.working_days} working days unmarked · gate {details.coverage.gate_pct}%)
+                    ({details.coverage.unevidenced_days} of {details.coverage.working_days} working days paid without it
+                    {details.coverage.no_punch_days > 0 && ` — ${details.coverage.unmarked_days} unmarked, ${details.coverage.no_punch_days} No Punch`}
+                    {' '}· gate {details.coverage.gate_pct}%)
                   </span>
                 </span>
-                {details.coverage.by_property.filter((p: any) => p.unmarked_pct > 0).slice(0, 4).map((p: any) => (
+                {details.coverage.by_property.filter((p: any) => p.unevidenced_pct > 0).slice(0, 4).map((p: any) => (
                   <span key={p.branch} className="text-secondary">
-                    {p.branch}: <span className={p.unmarked_pct > details.coverage.gate_pct ? 'text-amber-700 font-medium' : 'text-foreground'}>{p.unmarked_pct}% unmarked</span>
+                    {p.branch}: <span className={p.unevidenced_pct > details.coverage.gate_pct ? 'text-amber-700 font-medium' : 'text-foreground'}>{p.unevidenced_pct}% unevidenced</span>
                   </span>
                 ))}
                 {details.coverage.over_gate && currentRun.status !== 'locked' && (
@@ -270,7 +298,10 @@ export default function PayrollRunsPage() {
                 <thead className="sticky top-0 bg-card">
                   <tr className="border-b border-border text-left text-secondary">
                     <th className="px-4 py-2.5 font-medium">Employee</th>
-                    <th className="px-3 py-2.5 font-medium text-right">Working</th>
+                    {/* The column is the salary divisor; under calendar_days that is the whole month. */}
+                    <th className="px-3 py-2.5 font-medium text-right">
+                      {reviewSlips.some((s: any) => s.days?.method === 'calendar_days') ? 'Month days' : 'Working'}
+                    </th>
                     <th className="px-3 py-2.5 font-medium text-right">LOP</th>
                     <th className="px-3 py-2.5 font-medium text-right">Paid Days</th>
                     <th className="px-3 py-2.5 font-medium text-right">Gross</th>
@@ -453,7 +484,14 @@ export default function PayrollRunsPage() {
               <div>
                 <h3 className="text-base font-semibold text-foreground">Correct — {adjusting.name}</h3>
                 <p className="text-xs text-secondary mt-0.5">
-                  Computed: {adjusting.days?.working_days ?? '—'} working · {(adjusting.days?.not_employed_days ?? 0) > 0 ? `${adjusting.days.not_employed_days} not-employed · ` : ''}{adjusting.days?.lop_days ?? '—'} LOP · {adjusting.days?.payment_days ?? '—'} paid
+                  {/* Show the divisor and the not-employed figure that actually reduces THIS method's
+                      pay, so the line reads as arithmetic that adds up. */}
+                  Computed: {adjusting.days?.working_days ?? '—'} {adjusting.days?.method === 'calendar_days' ? 'in month' : 'working'} · {(() => {
+                    const ne = adjusting.days?.method === 'calendar_days'
+                      ? (adjusting.days?.not_employed_calendar_days ?? 0)
+                      : (adjusting.days?.not_employed_days ?? 0);
+                    return ne > 0 ? `${ne} not-employed · ` : '';
+                  })()}{adjusting.days?.lop_days ?? '—'} LOP · {adjusting.days?.payment_days ?? '—'} paid
                   {adjusting.days?.counts ? ` (${adjusting.days.counts.absent} absent, ${adjusting.days.counts.half_day} half-day, ${adjusting.days.counts.short_punch ?? 0} short-punch, ${adjusting.days.counts.miss_punch ?? 0} miss-punch, ${adjusting.days.counts.unpaid_leave} unpaid leave, ${adjusting.days.counts.unmarked} unmarked)` : ''}
                 </p>
               </div>
