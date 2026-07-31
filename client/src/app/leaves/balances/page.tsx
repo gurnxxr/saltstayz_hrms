@@ -55,7 +55,10 @@ export default function LeaveBalancesPage() {
     }).then(r => r.data),
   });
 
-  const leaveTypes = data?.leave_types ?? [];
+  // Unpaid types (Loss of Pay) allocate 365 days to mean "no limit", so a column reading 365/365
+  // for every employee reports nothing. Filtering here also drops them from the CSV, which walks
+  // this same list. The types themselves are untouched — see Leaves → Control Panel.
+  const leaveTypes = (data?.leave_types ?? []).filter((lt: any) => lt.is_paid);
   const employees = data?.employees ?? [];        // full filtered set (all pages) — CSV/summary read this
   const balanceOf = (emp: any, typeId: number) => emp.balances.find((b: any) => b.leave_type_id === typeId);
 

@@ -32,6 +32,16 @@ export default function EmployeeDashboard() {
   const att = data?.attendance ?? { present: 0, total: 0, present_pct: 0, avg_working_hours: 0, on_leave: 0, absent: 0, half_day: 0 };
   const leave = data?.leave ?? { balances: [], remaining: 0, used_days: 0, total_days: 0, pending_count: 0 };
 
+  // Unpaid leave (Loss of Pay) is allocated 365 days to mean "no limit", not as an entitlement —
+  // nobody can run out of the right to take a day without pay. Counting it made the headline read
+  // 404 days a year. So the card and the headline both show paid leave only, and the headline is
+  // re-summed here rather than taken from the response, which totals every type server-side.
+  // The leave type itself is untouched: it is still applied for from /leaves/apply.
+  const paidBalances = (leave.balances as any[]).filter((b) => b.is_paid);
+  const leaveTotal = paidBalances.reduce((a, b) => a + Number(b.total_days || 0), 0);
+  const leaveUsed = paidBalances.reduce((a, b) => a + Number(b.used_days || 0), 0);
+  const leaveRemaining = Math.max(0, leaveTotal - leaveUsed);
+
   const monthLabel = data?.month
     ? new Date(`${data.month}-01`).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })
     : 'This month';
@@ -49,7 +59,7 @@ export default function EmployeeDashboard() {
           value={isLoading ? '--' : (att.avg_working_hours || 0)} sub="per marked day"
           color="bg-blue-50 text-blue-600" />
         <Card icon={<Wallet className="w-6 h-6" />} label="Leave remaining"
-          value={isLoading ? '--' : leave.remaining} sub={`${leave.used_days} used of ${leave.total_days}`}
+          value={isLoading ? '--' : leaveRemaining} sub={`${leaveUsed} used of ${leaveTotal}`}
           color="bg-amber-50 text-amber-600" />
         <Card icon={<CalendarOff className="w-6 h-6" />} label="Pending requests"
           value={isLoading ? '--' : leave.pending_count} sub="awaiting approval"
@@ -60,11 +70,11 @@ export default function EmployeeDashboard() {
         {/* Leave balances */}
         <div className="bg-card rounded-xl border border-border p-6">
           <h2 className="text-lg font-semibold text-foreground mb-4">My Leave Balance</h2>
-          {leave.balances.length === 0 ? (
+          {paidBalances.length === 0 ? (
             <p className="text-sm text-secondary py-6 text-center">No leave balances configured.</p>
           ) : (
             <div className="space-y-4">
-              {leave.balances.map((b: any) => {
+              {paidBalances.map((b: any) => {
                 const pct = b.total_days > 0 ? Math.round((b.used_days / b.total_days) * 100) : 0;
                 return (
                   <div key={b.leave_type}>
