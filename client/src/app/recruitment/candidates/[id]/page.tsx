@@ -15,6 +15,7 @@ import { LinesEditor, LineDraft, toLineDrafts, linesPayload } from '@/components
 import {
   User, Clock, ChevronRight, Check, CheckCheck, Circle, Plus, Trash2, Upload, Paperclip, Download,
   Loader2, FileText, Percent, IndianRupee, AlertTriangle, Eye, ArrowRight, ArrowLeft, RotateCcw, ShieldCheck,
+  PauseCircle, PlayCircle,
 } from 'lucide-react';
 
 // ─── Stage vocabulary ───
@@ -64,6 +65,8 @@ export default function CandidateDetailPage({ params }: { params: Promise<{ id: 
   const [removeDoc, setRemoveDoc] = useState<{ id: number; name: string } | null>(null);
   const [acceptDate, setAcceptDate] = useState('');
   const [declineReason, setDeclineReason] = useState('');
+  const [holdReason, setHoldReason] = useState('');
+  const [showHoldForm, setShowHoldForm] = useState(false);
 
   const invalidateCandidate = () => {
     queryClient.invalidateQueries({ queryKey: ['candidate', id] });
@@ -147,6 +150,21 @@ export default function CandidateDetailPage({ params }: { params: Promise<{ id: 
     mutationFn: () => api.post(`/recruitment/candidates/${id}/transfer`, { notes: moveNotes || undefined }),
     onSuccess: () => { invalidateCandidate(); toast.success('Employee transferred to reporting manager'); setMoveNotes(''); },
     onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to transfer'),
+  });
+
+  // Park a candidate at whatever stage they are on, or resume them. The server refuses a hold at
+  // a terminal stage and requires a reason, and blocks stage moves while held — the UI mirrors all
+  // three rather than letting someone click into an error.
+  const holdMutation = useMutation({
+    mutationFn: ({ on_hold, reason }: { on_hold: boolean; reason?: string }) =>
+      api.put(`/recruitment/candidates/${id}/hold`, { on_hold, reason }),
+    onSuccess: (_d, v) => {
+      invalidateCandidate();
+      setHoldReason('');
+      setShowHoldForm(false);
+      toast.success(v.on_hold ? 'Candidate put on hold' : 'Candidate resumed');
+    },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to update hold'),
   });
 
   // ─── Checklist item mutations ───
@@ -282,6 +300,12 @@ export default function CandidateDetailPage({ params }: { params: Promise<{ id: 
   const employeeLinked = candidate.employee_id
     && ['offer_accepted', 'pre_joining', 'joining', 'transferred'].includes(candidate.stage);
 
+  // Hold is available at every live stage. It is refused once the application has finished —
+  // transferred, rejected, declined or no-show — where there is no longer anything to pause.
+  const onHold = !!candidate.on_hold;
+  const stageIsTerminal = candidate.stage === 'transferred' || offRamps.includes(candidate.stage);
+  const canHold = !stageIsTerminal;
+
   return (
     <AppShell>
       <div className="space-y-6 max-w-4xl">
@@ -302,9 +326,16 @@ export default function CandidateDetailPage({ params }: { params: Promise<{ id: 
                 </p>
               </div>
             </div>
-            <span className={`px-3 py-1.5 rounded-full text-xs font-medium border ${stageClasses(candidate.stage, offRamps)}`}>
-              {labelFor(candidate.stage, labels)}
-            </span>
+            <div className="flex items-center gap-2 shrink-0">
+              {onHold && (
+                <span className="px-3 py-1.5 rounded-full text-xs font-medium border bg-amber-100 text-amber-800 border-amber-200 flex items-center gap-1">
+                  <PauseCircle size={12} /> On hold
+                </span>
+              )}
+              <span className={`px-3 py-1.5 rounded-full text-xs font-medium border ${stageClasses(candidate.stage, offRamps)}`}>
+                {labelFor(candidate.stage, labels)}
+              </span>
+            </div>
           </div>
 
           <div className="grid grid-cols-3 gap-4 mt-6 pt-4 border-t border-border">
@@ -691,16 +722,100 @@ export default function CandidateDetailPage({ params }: { params: Promise<{ id: 
           )
         )}
 
+        {/* On Hold — park the application at whatever stage it has reached, without advancing
+            or rejecting. Available at every live stage, which is the point: a candidate can go
+            quiet, or a role can be frozen, anywhere in the funnel. */}
+        {canHold && (
+          <div className={`rounded-xl border p-6 ${onHold ? 'bg-amber-50 border-amber-200' : 'bg-card border-border'}`}>
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h2 className={`text-lg font-semibold flex items-center gap-2 ${onHold ? 'text-amber-900' : 'text-foreground'}`}>
+                  <PauseCircle size={18} /> {onHold ? 'On Hold' : 'Put on Hold'}
+                </h2>
+                {onHold ? (
+                  <>
+                    <p className="text-sm text-amber-900 mt-1">
+                      Parked at <span className="font-medium">{labelFor(candidate.stage, labels)}</span>. Stage changes are
+                      blocked until this is resumed.
+                    </p>
+                    {candidate.hold_reason && (
+                      <p className="text-sm text-amber-900 mt-2">
+                        <span className="text-amber-700">Reason:</span> {candidate.hold_reason}
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-sm text-secondary mt-1">
+                    Pause this application at its current stage without rejecting it — for a candidate who has gone
+                    quiet, or a role that is frozen. Nothing is archived and it can be resumed at any time.
+                  </p>
+                )}
+              </div>
+              {onHold ? (
+                <button
+                  onClick={() => holdMutation.mutate({ on_hold: false })}
+                  disabled={holdMutation.isPending}
+                  className="flex items-center gap-2 px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700 disabled:opacity-50 shrink-0 transition-colors"
+                >
+                  {holdMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <PlayCircle size={15} />}
+                  Resume
+                </button>
+              ) : !showHoldForm && (
+                <button
+                  onClick={() => setShowHoldForm(true)}
+                  className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted shrink-0 transition-colors"
+                >
+                  <PauseCircle size={15} /> Put on hold
+                </button>
+              )}
+            </div>
+
+            {!onHold && showHoldForm && (
+              <div className="mt-4 space-y-3">
+                <textarea
+                  value={holdReason}
+                  onChange={(e) => setHoldReason(e.target.value)}
+                  placeholder="Why is this being held? (required) — e.g. Candidate asked for two weeks; role frozen pending budget"
+                  rows={2}
+                  className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none"
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => holdMutation.mutate({ on_hold: true, reason: holdReason })}
+                    disabled={!holdReason.trim() || holdMutation.isPending}
+                    className="flex items-center gap-2 px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700 disabled:opacity-50 transition-colors"
+                  >
+                    {holdMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <PauseCircle size={15} />}
+                    Confirm hold
+                  </button>
+                  <button
+                    onClick={() => { setShowHoldForm(false); setHoldReason(''); }}
+                    className="px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Move to Stage — plain forward moves + off-ramps */}
         {moveOptions.length > 0 && (
-          <div className="bg-card rounded-xl border border-border p-6">
+          <div className={`bg-card rounded-xl border border-border p-6 ${onHold ? 'opacity-60' : ''}`}>
             <h2 className="text-lg font-semibold text-foreground mb-4">Move to Stage</h2>
+            {/* The server refuses a stage change while held, so say so here rather than letting
+                someone pick a stage and be told no after the fact. */}
+            {onHold && (
+              <p className="text-sm text-amber-700 mb-4">Resume this candidate before changing their stage.</p>
+            )}
             <div className="flex flex-wrap gap-2 mb-4">
               {moveOptions.map((stage) => (
                 <button
                   key={stage}
                   onClick={() => setSelectedStage(stage)}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium capitalize border transition-colors ${
+                  disabled={onHold}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium capitalize border transition-colors disabled:cursor-not-allowed ${
                     selectedStage === stage
                       ? `${stageClasses(stage, offRamps)} border-current`
                       : 'border-border hover:bg-muted'
