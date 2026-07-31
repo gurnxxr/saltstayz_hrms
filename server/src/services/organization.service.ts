@@ -191,14 +191,32 @@ export async function updateDepartment(id: number, data: Partial<{ name: string;
   const patch: any = { name, updated_at: db.fn.now() };
   if ('working_hours_per_day' in data) patch.working_hours_per_day = validWorkingHours(data.working_hours_per_day);
 
-  // The department table is the single source of truth. Employees carry a free-text
-  // dept_name (property convention — employees.department_id was dropped in mig 011),
-  // so cascade the rename to every employee that referenced the old name, keeping the
-  // Manpower console, analytics and every other module in sync.
+  // The department table is the single source of truth. Two other tables store a department by
+  // NAME rather than by id, so a rename has to reach both or they silently detach:
+  //
+  //   • employees.dept_name — the property convention (employees.department_id was dropped in
+  //     migration 011); and
+  //   • property_department_workers.department — the per-property sanctioned headcount behind
+  //     Admin → Budget Control and Property Configuration.
+  //
+  // Missing the second one is what made a rename look like it had not applied at all. Budget
+  // Control seeds its rows from the departments catalogue and then adds any name found only in
+  // property_department_workers, so a rename produced TWO rows: the new name carrying the staff
+  // but a sanctioned count of zero, and a ghost of the old name still holding the real number.
+  // The department appeared unchanged, or worse, duplicated.
   await db.transaction(async (trx) => {
     await trx('departments').where('id', id).update(patch);
     if (row.name !== name) {
       await trx('employees').where('dept_name', row.name).update({ dept_name: name, updated_at: trx.fn.now() });
+      // Guarded against a collision: if the target name already has a sanctioned row at this
+      // property, renaming into it would violate the (property_id, department) unique. Drop the
+      // stale row in that case — the destination's own figure is the one the admin can see.
+      const targetRows = await trx('property_department_workers').where('department', name).pluck('property_id');
+      if (targetRows.length) {
+        await trx('property_department_workers')
+          .where('department', row.name).whereIn('property_id', targetRows).del();
+      }
+      await trx('property_department_workers').where('department', row.name).update({ department: name });
     }
   });
   return db('departments').where('id', id).first();
@@ -220,7 +238,14 @@ export async function deleteDepartment(id: number) {
       `Cannot delete: ${holidayCount.c} holiday(s) are given specifically to this department. Change who those holidays are for first.`,
     );
   }
-  await db('departments').where('id', id).delete();
+  // Same name-keyed table the rename has to chase (see updateDepartment). Left behind, a
+  // sanctioned-headcount row keeps the deleted department alive on Budget Control forever — the
+  // console lists any name it finds here even when the catalogue no longer has it. No employees
+  // remain by this point (blocked above), so the count refers to nothing and is safe to drop.
+  await db.transaction(async (trx) => {
+    await trx('property_department_workers').where('department', row.name).del();
+    await trx('departments').where('id', id).delete();
+  });
 }
 
 // ─── Property Categories (managed pick-list for the property "Category" field) ───
