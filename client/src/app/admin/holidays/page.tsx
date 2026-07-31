@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useMemo } from 'react';
+import { useState, useRef, useMemo, Fragment } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
@@ -328,8 +328,9 @@ export default function AdminHolidaysPage() {
                     const aud = audienceLabel(h, departments.length);
                     const open = openId === h.id;
                     return (
-                      <>
-                        <tr key={h.id} className="hover:bg-muted/30">
+                      // The key belongs on the list child — the fragment — not on the rows inside it.
+                      <Fragment key={h.id}>
+                        <tr className="hover:bg-muted/30">
                           <td className="px-4 py-3">
                             <button
                               onClick={() => openRow(h)}
@@ -367,7 +368,7 @@ export default function AdminHolidaysPage() {
                         </tr>
 
                         {open && (
-                          <tr key={`${h.id}-panel`} className="bg-muted/20">
+                          <tr className="bg-muted/20">
                             <td colSpan={5} className="px-4 py-4" id={`hol-panel-${h.id}`}>
                               <h3 className="sr-only">Who gets {h.name}</h3>
                               <HolidayAudienceEditor
@@ -404,7 +405,7 @@ export default function AdminHolidaysPage() {
                             </td>
                           </tr>
                         )}
-                      </>
+                      </Fragment>
                     );
                   })}
                 </tbody>
