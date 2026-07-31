@@ -202,12 +202,14 @@ export async function buildWorkCalendar(
   const assignments = await db('employee_shift_assignments as a')
     .join('shift_types as st', 'st.id', 'a.shift_type_id')
     .where('a.employee_id', employeeId)
-    .select('a.effective_from', 'st.start_time', 'st.end_time', 'st.ends_next_day',
+    .select('a.effective_from', 'a.effective_to', 'st.start_time', 'st.end_time', 'st.ends_next_day',
       'st.allow_overtime', 'st.overtime_after_hours', 'st.weekly_off_days', 'st.name')
     .orderBy('a.effective_from');
 
   const prepared = assignments.map((a: any) => ({
     effective_from: String(a.effective_from).slice(0, 10),
+    // Null stays null — pickAssignmentFor reads that as open-ended.
+    effective_to: a.effective_to ? String(a.effective_to).slice(0, 10) : null,
     name: a.name,
     hours: shiftLengthHours(a.start_time, a.end_time),
     allowOt: !!a.allow_overtime,

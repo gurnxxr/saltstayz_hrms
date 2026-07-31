@@ -323,7 +323,7 @@ export async function resolveShiftForEmployee(employeeId: number, date: string) 
   const rows = await db('employee_shift_assignments as a')
     .join('shift_types as st', 'st.id', 'a.shift_type_id')
     .where('a.employee_id', employeeId)
-    .select('st.*', 'a.effective_from', 'a.id as assignment_id')
+    .select('st.*', 'a.effective_from', 'a.effective_to', 'a.id as assignment_id')
     .orderBy('a.effective_from');
   const chosen = pickAssignmentFor(rows as any[], isoDate(date) || todayIso(), todayIso());
   return chosen ? mapShiftType(chosen) : null;
@@ -458,8 +458,9 @@ export async function getEmployeeShiftHistory(employeeId: number) {
     .join('shift_types as st', 'st.id', 'a.shift_type_id')
     .leftJoin('users as u', 'u.id', 'a.assigned_by')
     .where('a.employee_id', employeeId)
-    .select('a.id', 'a.effective_from', 'a.created_at', 'st.id as shift_type_id', 'st.name as shift_name',
-      'st.start_time', 'st.end_time', 'st.ends_next_day', 'u.email as assigned_by_email')
+    .select('a.id', 'a.effective_from', 'a.effective_to', 'a.created_at', 'st.id as shift_type_id',
+      'st.name as shift_name', 'st.start_time', 'st.end_time', 'st.ends_next_day',
+      'u.email as assigned_by_email')
     .orderBy('a.effective_from', 'desc');
 }
 
@@ -468,7 +469,7 @@ export async function getEmployeeShiftHistory(employeeId: number) {
  * entry rather than stacking a second one.
  */
 export async function assignShift(
-  input: { employee_id: number; shift_type_id: number; effective_from?: string },
+  input: { employee_id: number; shift_type_id: number; effective_from?: string; effective_to?: string | null },
   userId?: number | null,
 ) {
   const employeeId = Number(input.employee_id);
@@ -490,17 +491,41 @@ export async function assignShift(
     throw new ValidationError(`${shiftType.name} only takes effect from ${isoDate(shiftType.effective_from)}`);
   }
 
-  // An assignment applies from its date FORWARD, indefinitely — so checking only the month it
-  // starts in would let a backdated assignment silently rewrite every locked month after it.
-  // (The common case: someone joined before payroll runs began, so their joining month has no
-  // run row at all, and a "harmless" backdate reaches straight through the paid months.)
+  // Optional, and blank means open-ended — the shift runs until something replaces it, which is
+  // how every assignment behaved before this existed. Inclusive: an assignment ending on the 14th
+  // still governs the 14th.
+  const rawTo = input.effective_to == null ? '' : String(input.effective_to).trim();
+  const effectiveTo = rawTo ? isoDate(rawTo) : null;
+  if (rawTo && !/^\d{4}-\d{2}-\d{2}$/.test(effectiveTo || '')) {
+    throw new ValidationError('End date must be a date like 2026-08-31');
+  }
+  if (effectiveTo && effectiveTo < effectiveFrom) {
+    throw new ValidationError('The end date cannot be before the start date');
+  }
+
+  // An assignment applies from its date FORWARD — indefinitely when open-ended — so checking only
+  // the month it starts in would let a backdated assignment silently rewrite every locked month
+  // after it. (The common case: someone joined before payroll runs began, so their joining month
+  // has no run row at all, and a "harmless" backdate reaches straight through the paid months.)
+  //
+  // The guard still runs from the START date even when an end date is given. Ending an assignment
+  // does not narrow what it can disturb — it changes which shift governs the days AFTER the end
+  // too, by handing them back to whatever comes next, so every month from the start onwards is
+  // still in play.
   await assertNoLockedRunFrom(effectiveFrom);
 
   const existing = await db('employee_shift_assignments')
     .where({ employee_id: employeeId, effective_from: effectiveFrom }).first();
   if (existing) {
-    await db('employee_shift_assignments').where('id', existing.id)
-      .update({ shift_type_id: shiftTypeId, assigned_by: userId ?? null, updated_at: db.fn.now() });
+    // effective_to is written unconditionally, including back to null: re-saving the same start
+    // date is how an admin CLEARS an end date, and treating a blank field as "leave it alone"
+    // would make the end date impossible to remove.
+    await db('employee_shift_assignments').where('id', existing.id).update({
+      shift_type_id: shiftTypeId,
+      effective_to: effectiveTo,
+      assigned_by: userId ?? null,
+      updated_at: db.fn.now(),
+    });
     return getEmployeeShiftHistory(employeeId);
   }
 
@@ -508,6 +533,7 @@ export async function assignShift(
     employee_id: employeeId,
     shift_type_id: shiftTypeId,
     effective_from: effectiveFrom,
+    effective_to: effectiveTo,
     assigned_by: userId ?? null,
   });
   return getEmployeeShiftHistory(employeeId);

@@ -68,6 +68,8 @@ function AssignDialog({ employee, onClose }: { employee: any; onClose: () => voi
   const qc = useQueryClient();
   const [shiftTypeId, setShiftTypeId] = useState(employee.current?.shift_type_id ? String(employee.current.shift_type_id) : '');
   const [effectiveFrom, setEffectiveFrom] = useState(todayStr());
+  // Blank = open-ended, which is the normal case and the behaviour every assignment had before.
+  const [effectiveTo, setEffectiveTo] = useState('');
   const [confirmDel, setConfirmDel] = useState<any | null>(null);
 
   const { data: shiftTypes = [] } = useQuery({
@@ -92,6 +94,9 @@ function AssignDialog({ employee, onClose }: { employee: any; onClose: () => voi
       employee_id: employee.id,
       shift_type_id: Number(shiftTypeId),
       effective_from: effectiveFrom,
+      // Sent even when blank: re-saving the same start date with the field cleared is how an
+      // end date gets REMOVED, so omitting it would make an open-ended assignment unreachable.
+      effective_to: effectiveTo || null,
     }).then((r) => r.data),
     onSuccess: () => { invalidate(); toast.success('Shift assigned'); },
     onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to assign the shift'),
@@ -143,6 +148,28 @@ function AssignDialog({ employee, onClose }: { employee: any; onClose: () => voi
             </div>
           </div>
 
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-sm font-medium text-foreground">
+                To <span className="text-xs font-normal text-secondary">(optional)</span>
+              </label>
+              {effectiveTo && (
+                <button type="button" onClick={() => setEffectiveTo('')} className="text-xs text-secondary hover:text-foreground">
+                  Clear
+                </button>
+              )}
+            </div>
+            <input
+              type="date" className={inputCls} value={effectiveTo} min={effectiveFrom || undefined}
+              onChange={(e) => setEffectiveTo(e.target.value)}
+            />
+            <p className="text-xs text-secondary mt-1">
+              {effectiveTo
+                ? <>On this shift up to and including <span className="text-foreground font-medium">{effectiveTo}</span>. After that they fall back to whichever assignment covers the date, or to their leave plan&apos;s work week if none does.</>
+                : <>Leave blank to stay on this shift until another assignment replaces it.</>}
+            </p>
+          </div>
+
           {selected && (
             <div className="rounded-lg bg-muted/40 px-3 py-2.5 text-sm space-y-1">
               <p className="text-secondary">
@@ -174,12 +201,20 @@ function AssignDialog({ employee, onClose }: { employee: any; onClose: () => voi
               <ul className="space-y-1.5">
                 {history.map((h: any) => (
                   <li key={h.id} className="flex items-center justify-between gap-2 text-sm">
-                    <span className="flex items-center gap-2">
-                      <span className="text-secondary tabular-nums">{String(h.effective_from).slice(0, 10)}</span>
+                    <span className="flex items-center gap-2 flex-wrap">
+                      <span className="text-secondary tabular-nums">
+                        {String(h.effective_from).slice(0, 10)}
+                        {/* An end date that only appeared in the form would be invisible the moment
+                            it was saved, so the window is spelled out here too. */}
+                        {h.effective_to ? ` → ${String(h.effective_to).slice(0, 10)}` : ' →'}
+                      </span>
                       <span className="font-medium text-foreground">{h.shift_name}</span>
                       <span className="text-xs text-secondary">
                         {(h.start_time ?? '').slice(0, 5)}–{(h.end_time ?? '').slice(0, 5)}
                       </span>
+                      {h.effective_to && (
+                        <span className="text-[11px] px-1.5 py-0.5 rounded bg-muted text-secondary">Ends</span>
+                      )}
                     </span>
                     <button
                       onClick={() => setConfirmDel(h)}
