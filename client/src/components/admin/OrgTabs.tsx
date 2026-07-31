@@ -6,7 +6,7 @@ import { toast } from 'sonner';
 import api from '@/lib/api';
 import { formatINR } from '@/lib/utils';
 import { INDIAN_STATES } from '@/lib/constants';
-import { Plus, Pencil, Trash2, X, Upload } from 'lucide-react';
+import { Plus, Pencil, Trash2, X, Upload, Download } from 'lucide-react';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import Pagination, { pageSlice } from '@/components/ui/Pagination';
 
@@ -75,6 +75,20 @@ export function PropertiesTab() {
     if (fileRef.current) fileRef.current.value = '';
   }
 
+  // Blank template so a bulk upload can't arrive in the wrong shape. These are exactly the
+  // headers the importer reads (organization.controller.ts bulkUploadProperties, which matches
+  // them case/space-insensitively); Name is the only required one. Header row only — no sample
+  // rows, so nothing has to be deleted before filling it in.
+  const PROPERTY_CSV_HEADERS = 'Name,Hotel ID,City,Address,Category';
+
+  function downloadTemplate() {
+    const blob = new Blob([`${PROPERTY_CSV_HEADERS}\n`], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'properties-upload-format.csv'; a.click();
+    URL.revokeObjectURL(url);
+  }
+
   // Options for the Category dropdown: the managed list, plus the property's current
   // category if it's an off-list value (older data), so editing never drops it.
   const catOptions: string[] = categories.map((c: any) => c.name as string);
@@ -91,6 +105,9 @@ export function PropertiesTab() {
     <div className="space-y-4">
       <div className="flex justify-between">
         <div className="flex items-center gap-2">
+          <button onClick={downloadTemplate} title="Download a blank CSV with the required column headers" className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted">
+            <Download size={16} /> Download Format
+          </button>
           <input ref={fileRef} type="file" accept=".csv" onChange={handleFileUpload} className="hidden" />
           <button onClick={() => fileRef.current?.click()} disabled={uploadMutation.isPending} className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted disabled:opacity-50">
             <Upload size={16} /> {uploadMutation.isPending ? 'Uploading...' : 'Upload CSV'}
@@ -399,6 +416,166 @@ export function DepartmentsTab() {
   );
 }
 
+// ─── Job Titles Tab ───
+// Like SimpleListTab, but each title carries an (optional) owning department. That department
+// scopes the Job Title dropdown on the Create-Vacancy form, so mismatched roles can't be posted.
+
+export function JobTitlesTab() {
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState<any>(null);
+  const [form, setForm] = useState({ title: '', department_id: '', pay_grade_id: '' });
+  const [showForm, setShowForm] = useState(false);
+  const [delTarget, setDelTarget] = useState<any>(null);
+  const [page, setPage] = useState(1);
+
+  const { data: items = [] } = useQuery({
+    queryKey: ['org-job-titles'],
+    queryFn: () => api.get('/admin/job-titles').then(r => r.data),
+  });
+  const { data: departments = [] } = useQuery({
+    queryKey: ['departments'],
+    queryFn: () => api.get('/admin/departments').then(r => r.data),
+  });
+  const { data: payGrades = [] } = useQuery({
+    queryKey: ['org-pay-grades'],
+    queryFn: () => api.get('/admin/pay-grades').then(r => r.data),
+  });
+
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['org-job-titles'] });
+    qc.invalidateQueries({ queryKey: ['postable-job-titles'] }); // the Create-Vacancy form
+  };
+
+  const saveMutation = useMutation({
+    mutationFn: (data: typeof form) => {
+      const body = {
+        title: data.title,
+        department_id: data.department_id === '' ? null : Number(data.department_id),
+        pay_grade_id: data.pay_grade_id === '' ? null : Number(data.pay_grade_id),
+      };
+      return editing ? api.put(`/admin/job-titles/${editing.id}`, body) : api.post('/admin/job-titles', body);
+    },
+    onSuccess: () => { invalidate(); toast.success('Saved'); closeForm(); },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed'),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => api.delete(`/admin/job-titles/${id}`),
+    onSuccess: () => { invalidate(); toast.success('Deleted'); setDelTarget(null); },
+    onError: (e: any) => { toast.error(e.response?.data?.error || 'Cannot delete'); setDelTarget(null); },
+  });
+
+  function openEdit(item: any) {
+    setEditing(item);
+    setForm({
+      title: item.title,
+      department_id: item.department_id != null ? String(item.department_id) : '',
+      pay_grade_id: item.pay_grade_id != null ? String(item.pay_grade_id) : '',
+    });
+    setShowForm(true);
+  }
+  function closeForm() { setShowForm(false); setEditing(null); setForm({ title: '', department_id: '', pay_grade_id: '' }); }
+
+  // ── Pagination: 10 job titles per page ──
+  const PAGE_SIZE = 10;
+  const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+  useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
+  const visible = pageSlice(items, Math.min(page, totalPages), PAGE_SIZE);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        <button onClick={() => { closeForm(); setShowForm(true); }} className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium">
+          <Plus size={16} /> Add Job Title
+        </button>
+      </div>
+
+      {showForm && (
+        <div className="bg-card rounded-xl border border-border p-5">
+          <div className="flex justify-between mb-3">
+            <h3 className="font-semibold text-foreground">{editing ? 'Edit Job Title' : 'New Job Title'}</h3>
+            <button onClick={closeForm}><X size={16} className="text-secondary" /></button>
+          </div>
+          <form onSubmit={(e) => { e.preventDefault(); saveMutation.mutate(form); }} className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium mb-1">Title *</label>
+              <input required value={form.title} onChange={e => setForm(p => ({ ...p, title: e.target.value }))} className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium mb-1">Department</label>
+              <select value={form.department_id} onChange={e => setForm(p => ({ ...p, department_id: e.target.value }))} className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm">
+                <option value="">Unassigned</option>
+                {departments.map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+              <p className="mt-1 text-[11px] text-secondary">Scopes this title on the Create-Vacancy form. Leave unassigned to allow it in any department.</p>
+            </div>
+            <div>
+              <label className="block text-xs font-medium mb-1">Pay Grade</label>
+              <select value={form.pay_grade_id} onChange={e => setForm(p => ({ ...p, pay_grade_id: e.target.value }))} className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm">
+                <option value="">Unassigned</option>
+                {payGrades.map((g: any) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name}{g.min_salary != null && g.max_salary != null ? ` (${formatINR(g.min_salary)}–${formatINR(g.max_salary)})` : ''}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-[11px] text-secondary">Sets the salary band for everyone in this role. An offer above the grade&apos;s maximum needs admin approval.</p>
+            </div>
+            <div className="col-span-2 flex gap-2">
+              <button type="submit" disabled={saveMutation.isPending} className="px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium disabled:opacity-50">{editing ? 'Update' : 'Create'}</button>
+              <button type="button" onClick={closeForm} className="px-4 py-2 border border-border rounded-lg text-sm">Cancel</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      <div className="bg-card rounded-xl border border-border overflow-hidden">
+        <table className="w-full">
+          <thead><tr className="border-b border-border bg-muted/50">
+            <th className="text-left px-4 py-3 text-xs font-medium text-secondary uppercase">Job Title</th>
+            <th className="text-left px-4 py-3 text-xs font-medium text-secondary uppercase">Department</th>
+            <th className="text-left px-4 py-3 text-xs font-medium text-secondary uppercase">Pay Grade</th>
+            <th className="text-left px-4 py-3 text-xs font-medium text-secondary uppercase">Salary Band</th>
+            <th className="text-right px-4 py-3 text-xs font-medium text-secondary uppercase">Actions</th>
+          </tr></thead>
+          <tbody className="divide-y divide-border">
+            {visible.map((item: any) => (
+              <tr key={item.id} className="hover:bg-muted/30">
+                <td className="px-4 py-3 text-sm font-medium text-foreground">{item.title}</td>
+                <td className="px-4 py-3 text-sm text-secondary">{item.department_name || <span className="text-amber-600">Unassigned</span>}</td>
+                <td className="px-4 py-3 text-sm text-secondary">
+                  {item.pay_grade_name || <span className="text-amber-600">Not set</span>}
+                </td>
+                <td className="px-4 py-3 text-sm text-secondary">
+                  {item.pay_grade_min != null && item.pay_grade_max != null
+                    ? `${formatINR(item.pay_grade_min)} – ${formatINR(item.pay_grade_max)}`
+                    : <span className="text-secondary/60">—</span>}
+                </td>
+                <td className="px-4 py-3 text-right">
+                  <button onClick={() => openEdit(item)} className="p-1.5 text-secondary hover:text-foreground"><Pencil size={14} /></button>
+                  <button onClick={() => setDelTarget(item)} className="p-1.5 text-secondary hover:text-red-600"><Trash2 size={14} /></button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {items.length === 0 && <p className="text-center py-8 text-secondary text-sm">No job titles found</p>}
+        <Pagination total={items.length} page={page} pageSize={PAGE_SIZE} onPageChange={setPage} shown={visible.length} itemLabel="job titles" />
+      </div>
+
+      <ConfirmDialog
+        open={!!delTarget}
+        title="Delete job title?"
+        message={<>This permanently deletes <strong className="text-foreground">{delTarget?.title}</strong>. This action cannot be undone.</>}
+        confirmLabel="Delete job title"
+        loading={deleteMutation.isPending}
+        onConfirm={() => delTarget && deleteMutation.mutate(delTarget.id)}
+        onCancel={() => setDelTarget(null)}
+      />
+    </div>
+  );
+}
+
 // ─── Pay Grades Tab ───
 
 export function PayGradesTab() {
@@ -477,6 +654,7 @@ export function PayGradesTab() {
             <th className="text-left px-4 py-3 text-xs font-medium text-secondary uppercase">Grade</th>
             <th className="text-left px-4 py-3 text-xs font-medium text-secondary uppercase">Min Salary</th>
             <th className="text-left px-4 py-3 text-xs font-medium text-secondary uppercase">Max Salary</th>
+            <th className="text-left px-4 py-3 text-xs font-medium text-secondary uppercase">Roles</th>
             <th className="text-right px-4 py-3 text-xs font-medium text-secondary uppercase">Actions</th>
           </tr></thead>
           <tbody className="divide-y divide-border">
@@ -485,6 +663,11 @@ export function PayGradesTab() {
                 <td className="px-4 py-3 text-sm font-medium text-foreground">{item.name}</td>
                 <td className="px-4 py-3 text-sm text-secondary">{formatINR(item.min_salary)}</td>
                 <td className="px-4 py-3 text-sm text-secondary">{formatINR(item.max_salary)}</td>
+                <td className="px-4 py-3 text-sm text-secondary">
+                  {Number(item.role_count) > 0
+                    ? `${item.role_count} ${Number(item.role_count) === 1 ? 'role' : 'roles'}`
+                    : <span className="text-secondary/60">None yet</span>}
+                </td>
                 <td className="px-4 py-3 text-right">
                   <button onClick={() => openEdit(item)} className="p-1.5 text-secondary hover:text-foreground"><Pencil size={14} /></button>
                   <button onClick={() => setDelTarget(item)} className="p-1.5 text-secondary hover:text-red-600"><Trash2 size={14} /></button>

@@ -30,12 +30,30 @@ const NATIONAL_HOLIDAYS = [
   { name: 'Diwali', date: '2026-11-08' },
 ];
 
-// Region-specific examples (only inserted for regions that exist).
-const REGIONAL_HOLIDAYS: Record<string, { name: string; date: string }[]> = {
-  North: [{ name: 'Lohri', date: '2026-01-13' }, { name: 'Baisakhi', date: '2026-04-14' }],
-  South: [{ name: 'Pongal', date: '2026-01-15' }, { name: 'Onam', date: '2026-08-26' }],
-  West: [{ name: 'Gudi Padwa', date: '2026-03-19' }, { name: 'Ganesh Chaturthi', date: '2026-09-14' }],
-  East: [{ name: 'Durga Puja', date: '2026-10-19' }, { name: 'Poila Boishakh', date: '2026-04-15' }],
+// Region-specific examples.
+//
+// Each one carries the STATES it applies in, not just a region. Holidays are matched to an
+// employee by `is_national OR state = <their property's state>` — `region_id` is shown on the
+// admin Regions screen but is never consulted when deciding whose holiday this is. A regional
+// row with no state therefore reaches nobody, which is how these came to be invisible.
+// One row is written per state so each can be edited or removed independently.
+const REGIONAL_HOLIDAYS: Record<string, { name: string; date: string; states: string[] }[]> = {
+  North: [
+    { name: 'Lohri', date: '2026-01-13', states: ['Punjab', 'Haryana', 'Delhi', 'Himachal Pradesh'] },
+    { name: 'Baisakhi', date: '2026-04-14', states: ['Punjab', 'Haryana', 'Delhi'] },
+  ],
+  South: [
+    { name: 'Pongal', date: '2026-01-15', states: ['Tamil Nadu'] },
+    { name: 'Onam', date: '2026-08-26', states: ['Kerala'] },
+  ],
+  West: [
+    { name: 'Gudi Padwa', date: '2026-03-19', states: ['Maharashtra', 'Goa'] },
+    { name: 'Ganesh Chaturthi', date: '2026-09-14', states: ['Maharashtra', 'Goa'] },
+  ],
+  East: [
+    { name: 'Durga Puja', date: '2026-10-19', states: ['West Bengal', 'Odisha', 'Jharkhand'] },
+    { name: 'Poila Boishakh', date: '2026-04-15', states: ['West Bengal'] },
+  ],
 };
 
 export async function seed(knex: Knex): Promise<void> {
@@ -58,19 +76,35 @@ export async function seed(knex: Knex): Promise<void> {
     }
   }
 
-  // 3) National holidays (insert missing by name+date)
+  // 3) National holidays (insert missing by name+date).
+  // `all_departments` / `all_properties` are required for the row to reach anyone — see
+  // migration 025. These examples go to everyone; narrow them on the Admin → Holidays screen.
   for (const h of NATIONAL_HOLIDAYS) {
     const exists = await knex('holidays').where({ name: h.name, date: h.date }).first();
-    if (!exists) await knex('holidays').insert({ ...h, is_national: true, region_id: null, is_recurring: false });
+    if (!exists) {
+      await knex('holidays').insert({
+        ...h, is_national: true, region_id: null, is_recurring: false,
+        all_departments: true, all_properties: true,
+      });
+    }
   }
 
-  // 4) Regional holidays for regions that exist (insert missing by name+date+region)
+  // 4) Regional holidays, one row per state (insert missing by name+date+state)
   for (const [regionName, list] of Object.entries(REGIONAL_HOLIDAYS)) {
     const rid = regionId(regionName);
     if (!rid) continue;
     for (const h of list) {
-      const exists = await knex('holidays').where({ name: h.name, date: h.date, region_id: rid }).first();
-      if (!exists) await knex('holidays').insert({ ...h, is_national: false, region_id: rid, is_recurring: false });
+      for (const state of h.states) {
+        const exists = await knex('holidays')
+          .where({ name: h.name, date: h.date, state }).first();
+        if (!exists) {
+          await knex('holidays').insert({
+            name: h.name, date: h.date, state,
+            is_national: false, region_id: rid, is_recurring: false,
+            all_departments: true, all_properties: true,
+          });
+        }
+      }
     }
   }
 }

@@ -2,6 +2,7 @@ import db from '../config/database';
 import { NotFoundError, ValidationError, AppError } from '../utils/errors';
 import { getMonthlyBreakdown } from './payslip.service';
 import { getCurrentPeriod } from './leave.service';
+import { getEmployeeLeaveRules } from './leaveTemplate.service';
 import { notifyEmployee } from './notification.service';
 import { notifyReplacementNeeded } from './manpower.service';
 
@@ -203,13 +204,16 @@ async function remainingLeaveBalance(employeeId: number): Promise<number> {
     // leave type across every year — including non-encashable casual/sick and prior-year
     // rows — materially overpaid the settlement.
     const period = await getCurrentPeriod();
-    const row = await db('leave_entitlements as le')
-      .join('leave_types as lt', 'lt.id', 'le.leave_type_id')
-      .where('le.employee_id', employeeId)
-      .where('le.leave_period_id', period.id)
-      .where('lt.is_encashable', true)
-      .sum({ total: 'le.total_days' })
-      .sum({ used: 'le.used_days' })
+    // Encashable leave types are now per the employee's assigned template, not the global type.
+    const rules = await getEmployeeLeaveRules(employeeId);
+    const encashableTypeIds = [...rules.values()].filter((r) => r.is_encashable).map((r) => r.leave_type_id);
+    if (!encashableTypeIds.length) return 0;
+    const row = await db('leave_entitlements')
+      .where('employee_id', employeeId)
+      .where('leave_period_id', period.id)
+      .whereIn('leave_type_id', encashableTypeIds)
+      .sum({ total: 'total_days' })
+      .sum({ used: 'used_days' })
       .first();
     const bal = Number((row as any)?.total ?? 0) - Number((row as any)?.used ?? 0);
     return Math.max(0, bal);

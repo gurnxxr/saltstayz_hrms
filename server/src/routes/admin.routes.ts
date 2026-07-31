@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import { authenticate } from '../middleware/auth';
 import { authorize } from '../middleware/rbac';
@@ -6,10 +6,31 @@ import * as userCtrl from '../controllers/user.controller';
 import * as orgCtrl from '../controllers/organization.controller';
 import * as accessCtrl from '../controllers/moduleAccess.controller';
 import * as salaryStructureCtrl from '../controllers/salaryStructure.controller';
+import * as employmentTypeCtrl from '../controllers/employmentType.controller';
 import * as auditCtrl from '../controllers/audit.controller';
 import * as backupCtrl from '../controllers/backup.controller';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } });
+
+// CSV-only upload for the Employment Types import — reject a non-CSV and turn multer's
+// size/type rejections into a clean 400 (a bare MulterError becomes a generic 500 otherwise).
+const csvUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: (_req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+    if (/\.csv$/i.test(file.originalname) || ['text/csv', 'application/csv', 'application/vnd.ms-excel'].includes(file.mimetype)) cb(null, true);
+    else cb(new Error('Please upload a .csv file'));
+  },
+});
+function uploadCsv(req: Request, res: Response, next: NextFunction) {
+  csvUpload.single('file')(req, res, (err: any) => {
+    if (err) {
+      const msg = err.code === 'LIMIT_FILE_SIZE' ? 'CSV file is too large (max 2 MB)' : (err.message || 'Upload failed');
+      return res.status(400).json({ error: msg });
+    }
+    next();
+  });
+}
 
 const router = Router();
 router.use(authenticate);
@@ -20,9 +41,13 @@ router.use(authenticate);
 router.get('/properties', orgCtrl.listProperties);
 router.get('/departments', orgCtrl.listDepartments);
 router.get('/property-categories', orgCtrl.listPropertyCategories);
+router.get('/branches', orgCtrl.listBranches);
 router.get('/job-titles', orgCtrl.listJobTitles);
 router.get('/employee-categories', orgCtrl.listCategories);
-router.get('/pay-grades', orgCtrl.listPayGrades);
+// NOT a general lookup: pay grades carry the company's salary bands, so this is the whole pay
+// ladder. It sat in the block above and was readable by every signed-in employee. Only the
+// Admin -> Organization screens consume it, so gating it costs nothing.
+router.get('/pay-grades', authorize('admin', 'read'), orgCtrl.listPayGrades);
 router.get('/employment-statuses', orgCtrl.listStatuses);
 
 // ─── Organization CRUD (admin only) ───
@@ -39,6 +64,9 @@ router.delete('/departments/:id', authorize('admin', 'delete'), orgCtrl.deleteDe
 router.post('/property-categories', authorize('admin', 'create'), orgCtrl.createPropertyCategory);
 router.put('/property-categories/:id', authorize('admin', 'update'), orgCtrl.updatePropertyCategory);
 router.delete('/property-categories/:id', authorize('admin', 'delete'), orgCtrl.deletePropertyCategory);
+router.post('/branches', authorize('admin', 'create'), orgCtrl.createBranch);
+router.put('/branches/:id', authorize('admin', 'update'), orgCtrl.updateBranch);
+router.delete('/branches/:id', authorize('admin', 'delete'), orgCtrl.deleteBranch);
 
 router.post('/job-titles', authorize('admin', 'create'), orgCtrl.createJobTitle);
 router.put('/job-titles/:id', authorize('admin', 'update'), orgCtrl.updateJobTitle);
@@ -55,6 +83,16 @@ router.delete('/pay-grades/:id', authorize('admin', 'delete'), orgCtrl.deletePay
 router.post('/employment-statuses', authorize('admin', 'create'), orgCtrl.createStatus);
 router.put('/employment-statuses/:id', authorize('admin', 'update'), orgCtrl.updateStatus);
 router.delete('/employment-statuses/:id', authorize('admin', 'delete'), orgCtrl.deleteStatus);
+
+// ─── Employment Types master (admin config; catalog-only) ───
+// Static sub-paths before the :id routes, or Express reads "export"/"import" as an :id.
+router.get('/employment-types', authorize('admin', 'read'), employmentTypeCtrl.list);
+router.get('/employment-types/export', authorize('admin', 'read'), employmentTypeCtrl.exportCsv);
+router.post('/employment-types/import', authorize('admin', 'create'), uploadCsv, employmentTypeCtrl.importCsv);
+router.get('/employment-types/:id', authorize('admin', 'read'), employmentTypeCtrl.get);
+router.post('/employment-types', authorize('admin', 'create'), employmentTypeCtrl.create);
+router.put('/employment-types/:id', authorize('admin', 'update'), employmentTypeCtrl.update);
+router.delete('/employment-types/:id', authorize('admin', 'delete'), employmentTypeCtrl.remove);
 
 // ─── User Management (admin only) ───
 
@@ -83,7 +121,6 @@ router.delete('/salary-structures/:id', authorize('admin', 'delete'), salaryStru
 
 // ─── Per-employee salary structures (admin only) ───
 router.get('/employee-salary', authorize('admin', 'read'), salaryStructureCtrl.listEmployeeSalary);
-router.get('/employee-salary-register', authorize('admin', 'read'), salaryStructureCtrl.getCtcRegister);
 router.get('/salary-overview', authorize('admin', 'read'), salaryStructureCtrl.getSalaryOverview);
 router.get('/employee-salary/:employeeId', authorize('admin', 'read'), salaryStructureCtrl.getEmployeeSalary);
 router.put('/employee-salary/:employeeId', authorize('admin', 'update'), salaryStructureCtrl.saveEmployeeSalary);

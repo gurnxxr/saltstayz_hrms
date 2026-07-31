@@ -14,6 +14,20 @@ export async function listEmployees(req: AuthRequest, res: Response, next: NextF
   } catch (err) { next(err); }
 }
 
+export async function exportEmployees(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const csv = await employeeService.exportEmployeesCsv({
+      search: req.query.search as string,
+      status: req.query.status as string,
+      branch: req.query.branch as string,
+    });
+    const stamp = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="Employees_${stamp}.csv"`);
+    res.send(csv);
+  } catch (err) { next(err); }
+}
+
 export async function getEmployee(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     res.json(await employeeService.getEmployee(Number(req.params.id)));
@@ -26,6 +40,14 @@ export async function getMyProfile(req: AuthRequest, res: Response, next: NextFu
       return res.status(400).json({ error: 'No employee profile linked to this account' });
     }
     res.json(await employeeService.getEmployee(req.user.employeeId));
+  } catch (err) { next(err); }
+}
+
+/** The signed-in user's direct reports. An account with no employee record simply has none. */
+export async function getMyReportees(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    if (!req.user?.employeeId) return res.json([]);
+    res.json(await employeeService.getMyReportees(req.user.employeeId));
   } catch (err) { next(err); }
 }
 

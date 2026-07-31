@@ -2,59 +2,113 @@ import db from '../config/database';
 import { ValidationError } from '../utils/errors';
 import { JwtPayload } from '../types';
 import { notify } from './notification.service';
-import { getEmployeeRegion } from './leave.service';
+import { resolveHolidayScope } from './leave.service';
+import { audienceOf, scopeHolidaysTo } from './holidayScope';
 import { getPaySchedule } from './paySchedule.service';
-import { overnightHours, deriveAttendanceStatus } from './attendance.calc';
+import { overnightHours, judgeDay } from './attendance.calc';
+import { pickAssignmentFor } from './shiftPattern';
+import { buildWorkCalendar } from './payableDays.service';
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
 /**
- * Auto attendance (Shift Type thresholds): re-derives the status of attendance
- * records from their working hours for employees whose assigned shift type has
- * auto attendance enabled — hours below the absent threshold mark Absent, below
- * the half-day threshold mark Half Day, otherwise Present. A zero threshold
- * disables that rule (per the Shift Type spec); on_leave records and dates
- * before the shift's "Process Attendance After" are never touched. Runs daily
- * for yesterday, plus on demand from Admin → Attendance for any date.
+ * The shift whose hour thresholds are allowed to judge a date — or null when none are.
+ *
+ * Both attendance paths call this, so they cannot apply different gates to the same day. That
+ * was the whole point of collapsing the two engines: previously the upload applied a shift's
+ * absent/half-day hours with neither gate, while the daily catch-up pass applied both — so the
+ * pass that exists to correct the upload would skip exactly the days the upload got wrong.
+ *
+ * Two gates, and they are the reason this is a function rather than a lookup:
+ *  - a shift's rules do not exist before its own effective date;
+ *  - a shift with auto-attendance switched off does not judge anyone by hours at all.
+ */
+function applicableRules(list: any[] | undefined, date: string, today: string) {
+  const chosen = pickAssignmentFor(list ?? [], date, today);
+  if (!chosen) return null;
+  if (!chosen.enable_auto_attendance) return null;
+  if (chosen.shift_effective_from && String(chosen.shift_effective_from).slice(0, 10) > date) return null;
+  return chosen;
+}
+
+/**
+ * Re-checks a day's attendance against the shift's hour thresholds.
+ *
+ * The upload already applies these when it writes a day, so this is a catch-up pass: it fixes
+ * days whose shift rules changed after the file was loaded, and days that arrived by some
+ * other route. It resolves the shift exactly the way the upload and the payroll calendar do —
+ * the dated assignment in effect on that date — so all three agree.
+ *
+ * Leave, an approved regularisation, and punch-based verdicts (a short or missed punch) are
+ * never overwritten. Neither is a day whose shift has no hours configured: treating "not
+ * configured" as "present" is how correctly-identified half-days and absences used to be
+ * wiped. Runs daily for yesterday, plus on demand from Admin → Attendance for any date.
  */
 export async function autoMarkAttendance(date?: string) {
   const target = date || new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
   const rows = await db('attendance_records as ar')
-    .join('employee_shift_assignments as esa', 'esa.employee_id', 'ar.employee_id')
-    .join('shift_types as st', 'st.id', 'esa.shift_type_id')
     .where('ar.date', target)
-    .where('st.enable_auto_attendance', true)
     .whereNotNull('ar.working_hours')
-    // Leave + punch-derived statuses are authoritative — the threshold job never overwrites them.
+    // Leave + punch-derived verdicts are authoritative — this pass never overwrites them.
     .whereNotIn('ar.status', ['on_leave', 'miss_punch', 'short_punch'])
     // An HR/manager-approved regularisation is authoritative too — never re-derive it.
     .whereRaw('COALESCE(ar.is_regularised, false) = false')
-    .where(function (this: any) {
-      this.whereNull('st.process_attendance_after').orWhere('st.process_attendance_after', '<=', target);
-    })
-    .select('ar.id', 'ar.status', 'ar.working_hours', 'st.half_day_threshold', 'st.absent_threshold');
+    .select('ar.id', 'ar.employee_id', 'ar.status', 'ar.working_hours');
+  if (!rows.length) return { date: target, scanned: 0, updated: 0 };
+
+  // One query for every assignment in play, resolved per employee in memory. A plain join
+  // would now multiply rows, since an employee can have several dated assignments.
+  const empIds = [...new Set(rows.map((r: any) => r.employee_id))];
+  // Deliberately NOT filtered by enable_auto_attendance. That flag belongs to the shift the
+  // employee turns out to be on, and filtering here would remove rows from the timeline before
+  // it is resolved — leaving the fallback to land on a superseded or not-yet-started shift and
+  // judge the day by rules that don't apply to it. Resolve first, then decide.
+  const assignRows = await db('employee_shift_assignments as a')
+    .join('shift_types as st', 'st.id', 'a.shift_type_id')
+    .whereIn('a.employee_id', empIds)
+    .select('a.employee_id', 'a.effective_from', 'st.absent_hours', 'st.half_day_hours',
+      'st.enable_auto_attendance', 'st.effective_from as shift_effective_from')
+    .orderBy(['a.employee_id', 'a.effective_from']);
+
+  const byEmp = new Map<number, any[]>();
+  for (const a of assignRows) {
+    if (!byEmp.has(a.employee_id)) byEmp.set(a.employee_id, []);
+    byEmp.get(a.employee_id)!.push(a);
+  }
+  const shiftFor = (employeeId: number) => applicableRules(byEmp.get(employeeId), target, todayStr());
 
   let updated = 0;
+  let scanned = 0;
   for (const r of rows) {
-    const hours = Number(r.working_hours) || 0;
-    const absentT = Number(r.absent_threshold) || 0;
-    const halfT = Number(r.half_day_threshold) || 0;
-    let status = 'present';
-    if (absentT > 0 && hours < absentT) status = 'absent';
-    else if (halfT > 0 && hours < halfT) status = 'half_day';
+    const shift = shiftFor(r.employee_id);
+    if (!shift) continue; // no shift, or auto-attendance off for it
+    const absent = Number(shift.absent_hours) || 0;
+    const half = Number(shift.half_day_hours) || 0;
+    if (absent <= 0 && half <= 0) continue; // nothing to judge against
+    scanned += 1;
+
+    // Same judgement the upload used. These rows already have both punches (working_hours is
+    // set and the punch-based verdicts are excluded above), so only the ladder can apply.
+    const status = judgeDay({
+      hasIn: true, hasOut: true,
+      workedHours: Number(r.working_hours) || 0,
+      shiftHours: 0, graceMinutes: 0,
+      absentHours: absent, halfDayHours: half,
+    });
     if (status !== r.status) {
       await db('attendance_records').where('id', r.id).update({ status, updated_at: db.fn.now() });
       updated += 1;
     }
   }
-  return { date: target, scanned: rows.length, updated };
+  return { date: target, scanned, updated };
 }
 
 export async function getMyCalendar(employeeId: number, month: string) {
   // month format: "2026-06"
   const startDate = `${month}-01`;
-  const endDate = `${month}-31`;
+  const lastDay = new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate();
+  const endDate = `${month}-${String(lastDay).padStart(2, '0')}`;
 
   const records = await db('attendance_records')
     .where('employee_id', employeeId)
@@ -71,18 +125,33 @@ export async function getMyCalendar(employeeId: number, month: string) {
     .where('lr.end_date', '>=', startDate)
     .select('lr.start_date', 'lr.end_date', 'lt.name as leave_type');
 
-  // Fetch holidays for this month — national + the employee's region only.
-  const region = await getEmployeeRegion(employeeId);
-  const holidays = await db('holidays')
-    .whereBetween('date', [startDate, endDate])
-    .where(function () {
-      this.where('is_national', true);
-      if (region?.state) this.orWhere('state', region.state);
-    })
-    .select('date', 'name')
-    .orderBy('date', 'asc');
+  // The holidays that reach THIS person this month — region, department and property.
+  // Same shared definition the holiday screen and the payroll calendar use (holidayScope.ts).
+  const audience = audienceOf(await resolveHolidayScope(employeeId));
+  const holidays = await scopeHolidaysTo(
+    db('holidays').whereBetween('date', [startDate, endDate]),
+    audience,
+  ).select('date', 'name').orderBy('date', 'asc');
 
-  return { records, leaves, holidays };
+  // Which days this person was actually scheduled to work, and what said so.
+  //
+  // Without this the calendar cannot tell a rest day from a day HR forgot to mark, so a "no
+  // punch" appears on somebody's Sunday with nothing explaining why it did not cost them
+  // anything — and the screen had to guess, hard-coding Saturday and Sunday for everyone.
+  const cal = await buildWorkCalendar(employeeId, startDate, endDate);
+  const days = [];
+  for (let d = 1; d <= lastDay; d++) {
+    const date = `${month}-${String(d).padStart(2, '0')}`;
+    const info = cal.classify(date);
+    days.push({
+      date,
+      kind: info.employed ? info.base : 'not_employed',
+      decided_by_name: info.base === 'holiday' ? (info.holidayName ?? 'Holiday') : info.sourceName,
+      ...(info.holidayName ? { holiday_name: info.holidayName } : {}),
+    });
+  }
+
+  return { records, leaves, holidays, days };
 }
 
 export async function getMonthSummary(employeeId: number, month: string) {
@@ -97,8 +166,10 @@ export async function getMonthSummary(employeeId: number, month: string) {
       db.raw("SUM(CASE WHEN status = 'present' THEN 1 ELSE 0 END) as present"),
       db.raw("SUM(CASE WHEN status = 'absent' THEN 1 ELSE 0 END) as absent"),
       db.raw("SUM(CASE WHEN status = 'half_day' THEN 1 ELSE 0 END) as half_day"),
+      db.raw("SUM(CASE WHEN status = 'hhd' THEN 1 ELSE 0 END) as hhd"),
       db.raw("SUM(CASE WHEN status = 'miss_punch' THEN 1 ELSE 0 END) as miss_punch"),
       db.raw("SUM(CASE WHEN status = 'short_punch' THEN 1 ELSE 0 END) as short_punch"),
+      db.raw("SUM(CASE WHEN status = 'no_punch' THEN 1 ELSE 0 END) as no_punch"),
       db.raw("SUM(CASE WHEN status = 'on_leave' THEN 1 ELSE 0 END) as on_leave"),
       // working_hours is a float column; Postgres only defines round(numeric, int), so cast.
       db.raw("ROUND(AVG(working_hours)::numeric, 1) as avg_working_hours")
@@ -116,6 +187,15 @@ interface AttendanceRow {
   checkIn: string;    // HH:mm
   checkOut: string;   // HH:mm
   location: string;   // property/location (optional in CSV)
+  explicitStatus?: 'hhd' | null; // an explicit day-type from the file, overriding the punch verdict
+}
+
+/** Recognised explicit day-type codes that can ride in on the CSV's status/remark column,
+ *  overriding the punch-derived verdict. Currently just HHD — a half-day holiday, paid ½. */
+function mapExplicitStatus(raw: string): 'hhd' | null {
+  const t = (raw || '').trim().toLowerCase().replace(/\s+/g, '_');
+  if (t === 'hhd' || t === 'half_day_holiday' || t === 'half-day_holiday') return 'hhd';
+  return null;
 }
 
 function parseDDMMYY(raw: string): string {
@@ -142,6 +222,9 @@ export async function uploadAttendanceCsv(csvContent: string) {
   const inIdx = header.findIndex(h => h === 'first_in_time' || h === 'first_in_time_(hh:mm)' || h === 'check_in' || h === 'in_time');
   const outIdx = header.findIndex(h => h === 'last_out_time' || h === 'last_out_time_(hh:mm)' || h === 'check_out' || h === 'out_time');
   const locIdx = header.findIndex(h => h === 'location' || h === 'property' || h === 'branch' || h === 'site');
+  // Optional explicit status/remark column — lets an admin day-type (e.g. HHD, a half-day
+  // holiday) ride in on the biometric file and override the punch-derived verdict.
+  const statusIdx = header.findIndex(h => h === 'status' || h === 'attendance_status' || h === 'day_status' || h === 'remark' || h === 'remarks');
 
   if (empIdx === -1) throw new ValidationError('CSV must have an "Emp Code" column');
   if (dateIdx === -1) throw new ValidationError('CSV must have an "Access Date" column');
@@ -157,10 +240,11 @@ export async function uploadAttendanceCsv(csvContent: string) {
     const rawDate = cols[dateIdx];
     const rawIn = cols[inIdx];
     const rawOut = cols[outIdx];
+    const explicitStatus = statusIdx !== -1 ? mapExplicitStatus(cols[statusIdx]) : null;
 
-    // A miss punch has only one time — require an employee, a date, and at
-    // least one punch (rows with neither punch carry no signal and are skipped).
-    if (!empCode || !rawDate || (!rawIn && !rawOut)) {
+    // A miss punch has only one time — require an employee, a date, and at least one
+    // punch OR a recognised explicit day-type (e.g. HHD, which needn't carry punches).
+    if (!empCode || !rawDate || (!rawIn && !rawOut && !explicitStatus)) {
       parseErrors.push(`Row ${i + 1}: missing employee, date, or any punch time`);
       continue;
     }
@@ -168,7 +252,7 @@ export async function uploadAttendanceCsv(csvContent: string) {
     try {
       const date = parseDDMMYY(rawDate);
       const location = locIdx !== -1 ? (cols[locIdx] || '').trim() : '';
-      rows.push({ empCode, date, checkIn: (rawIn || '').trim(), checkOut: (rawOut || '').trim(), location });
+      rows.push({ empCode, date, checkIn: (rawIn || '').trim(), checkOut: (rawOut || '').trim(), location, explicitStatus });
     } catch (e: any) {
       parseErrors.push(`Row ${i + 1}: ${e.message}`);
     }
@@ -200,18 +284,29 @@ export async function uploadAttendanceCsv(csvContent: string) {
   const standardDayHours = schedule.standard_day_hours;
 
   const empIds = [...new Set([...empMap.values()])];
-  // Dated roster wins; fall back to the employee's standing shift assignment.
-  const rosterRows = empIds.length ? await db('shift_rosters as r')
-    .join('shift_types as st', 'st.id', 'r.shift_type_id')
-    .whereIn('r.employee_id', empIds).whereIn('r.date', dates)
-    .select('r.employee_id', 'r.date', 'st.start_time', 'st.end_time') : [];
-  const shiftByKey = new Map<string, any>(
-    rosterRows.map((r: any) => [`${r.employee_id}|${String(r.date).slice(0, 10)}`, r]));
+  // Every dated assignment for everyone in the file, in one query. The shift in effect on a
+  // date is then resolved in memory — the same rule the payroll calendar uses, so attendance
+  // and pay can't disagree about which shift someone was on.
   const assignRows = empIds.length ? await db('employee_shift_assignments as a')
     .join('shift_types as st', 'st.id', 'a.shift_type_id')
     .whereIn('a.employee_id', empIds)
-    .select('a.employee_id', 'st.start_time', 'st.end_time') : [];
-  const shiftByEmp = new Map<number, any>(assignRows.map((r: any) => [r.employee_id, r]));
+    .select('a.employee_id', 'a.effective_from', 'st.start_time', 'st.end_time',
+      'st.ends_next_day', 'st.absent_hours', 'st.half_day_hours',
+      'st.enable_auto_attendance', 'st.effective_from as shift_effective_from')
+    .orderBy(['a.employee_id', 'a.effective_from']) : [];
+
+  const assignmentsByEmp = new Map<number, any[]>();
+  for (const a of assignRows) {
+    if (!assignmentsByEmp.has(a.employee_id)) assignmentsByEmp.set(a.employee_id, []);
+    assignmentsByEmp.get(a.employee_id)!.push(a);
+  }
+  const today = todayStr();
+  /** Which shift they were on — used for the punch window (start/end times). */
+  const shiftFor = (employeeId: number, date: string) =>
+    pickAssignmentFor(assignmentsByEmp.get(employeeId) ?? [], date, today);
+  /** Whether that shift's hour thresholds may judge the day — the same gates the daily pass uses. */
+  const rulesFor = (employeeId: number, date: string) =>
+    applicableRules(assignmentsByEmp.get(employeeId), date, today);
 
   for (const row of rows) {
     const employeeId = empMap.get(row.empCode);
@@ -231,13 +326,23 @@ export async function uploadAttendanceCsv(csvContent: string) {
     const hasOut = rawOut && !duplicatePunch;
 
     const worked = (hasIn && hasOut) ? overnightHours(row.checkIn, row.checkOut) : 0;
-    const shift = shiftByKey.get(`${employeeId}|${row.date}`) ?? shiftByEmp.get(employeeId);
+    const shift = shiftFor(employeeId, row.date);
     const shiftHours = shift ? overnightHours(shift.start_time, shift.end_time) : 0;
+    // The punch window comes from the shift regardless; the hour ladder only applies when the
+    // shift's rules are actually in force on this date. Without this the upload would judge by
+    // thresholds the daily catch-up pass skips, and nothing would ever reconcile the two.
+    const rules = rulesFor(employeeId, row.date);
 
-    const status = deriveAttendanceStatus({
+    // One verdict, from the shift's own rules: the punch-based judgement first, then the
+    // shift's hour thresholds. Previously a separate daily job applied those thresholds
+    // afterwards, using a different shift lookup. An explicit day-type from the file
+    // (e.g. HHD) overrides the punch-derived verdict entirely.
+    const status = row.explicitStatus || judgeDay({
       hasIn, hasOut, workedHours: worked,
       shiftHours: shiftHours || standardDayHours,
       graceMinutes,
+      absentHours: Number(rules?.absent_hours) || 0,
+      halfDayHours: Number(rules?.half_day_hours) || 0,
     });
 
     const checkInDatetime = hasIn ? `${row.date} ${row.checkIn}:00` : null;
@@ -384,8 +489,10 @@ export async function getPropertySummary(date: string) {
       db.raw("SUM(CASE WHEN ar.status = 'present' THEN 1 ELSE 0 END) as present"),
       db.raw("SUM(CASE WHEN ar.status = 'absent' THEN 1 ELSE 0 END) as absent"),
       db.raw("SUM(CASE WHEN ar.status = 'half_day' THEN 1 ELSE 0 END) as half_day"),
+      db.raw("SUM(CASE WHEN ar.status = 'hhd' THEN 1 ELSE 0 END) as hhd"),
       db.raw("SUM(CASE WHEN ar.status = 'miss_punch' THEN 1 ELSE 0 END) as miss_punch"),
       db.raw("SUM(CASE WHEN ar.status = 'short_punch' THEN 1 ELSE 0 END) as short_punch"),
+      db.raw("SUM(CASE WHEN ar.status = 'no_punch' THEN 1 ELSE 0 END) as no_punch"),
       db.raw("SUM(CASE WHEN ar.status = 'on_leave' THEN 1 ELSE 0 END) as on_leave"),
       // working_hours is a float column; Postgres only defines round(numeric, int), so cast.
       db.raw("ROUND(AVG(ar.working_hours)::numeric, 1) as avg_hours")

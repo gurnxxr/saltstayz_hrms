@@ -1,3 +1,24 @@
+/**
+ * Escapes one value for a CSV cell, quoting only when it has to.
+ *
+ * Shared by every CSV *writer* for the same reason `parseCsv` is shared by every reader: this
+ * escaping used to be copied per module, and a copy that quotes differently produces a file
+ * that re-imports as different data.
+ *
+ * Note it does not quote a lone `\r`. That matches the salary register this was lifted from,
+ * and changing it would alter a bank hand-off file — worth doing deliberately, not as a
+ * side effect.
+ */
+export function csvCell(v: unknown): string {
+  const s = v === null || v === undefined ? '' : String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/** Builds a whole CSV document from a header row and its data rows. */
+export function buildCsv(header: string[], rows: unknown[][]): string {
+  return [header, ...rows].map((r) => r.map(csvCell).join(',')).join('\n');
+}
+
 // Parse a whole CSV document (RFC-4180 style) into rows of trimmed cells. Double-quoted
 // fields may contain commas AND line breaks — a wrapped cell (entered with Alt+Enter) is
 // one field, not two rows — and "" is an escaped quote. Handles \n, \r\n and lone-\r line

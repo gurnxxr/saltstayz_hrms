@@ -1,5 +1,7 @@
 'use client';
 
+import OffDayPicker, { type OffDay } from '@/components/shifts/OffDayPicker';
+
 import { useState, type ReactNode } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
@@ -9,7 +11,7 @@ import LoadError from '@/components/ui/LoadError';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import api from '@/lib/api';
 import { useUnsavedChangesWarning } from '@/hooks/useUnsavedChangesWarning';
-import { Plus, Clock, Pencil, Trash2, ArrowLeft, Save, Loader2, Info } from 'lucide-react';
+import { Plus, Clock, Pencil, Trash2, ArrowLeft, Save, Loader2, Info, Moon } from 'lucide-react';
 
 const ROSTER_COLORS: { name: string; hex: string }[] = [
   { name: 'Blue', hex: '#3b82f6' },
@@ -25,34 +27,39 @@ const ROSTER_COLORS: { name: string; hex: string }[] = [
 ];
 const colorHex = (name: string) => ROSTER_COLORS.find((c) => c.name === name)?.hex ?? '#3b82f6';
 
-const OVERTIME_SUGGESTIONS = ['Standard', 'Weekend', 'Holiday', 'Night'];
+const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const DAYS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 const inputCls =
   'w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50';
 
+/** An off day, and optionally which occurrences of it in the month (null = every week). */
+
 interface ShiftTypeForm {
   name: string;
+  effective_from: string;
+  roster_color: string;
   start_time: string;
   end_time: string;
-  holiday_region_id: string;
-  roster_color: string;
+  ends_next_day: boolean;
+  office_hour_time: string;
+  weekly_off_days: OffDay[];
+  max_early_in_mins: string;
+  max_late_out_mins: string;
+  force_time_out: string;
+  grace_enabled: boolean;
+  late_in_grace_mins: string;
+  early_out_grace_mins: string;
+  grace_occurrences_per_month: string;
   enable_auto_attendance: boolean;
-  determine_checkin_checkout: string;
-  working_hours_calculation: string;
-  begin_checkin_before_mins: string;
-  allow_checkout_after_mins: string;
-  mark_auto_attendance_on_holidays: boolean;
-  half_day_threshold: string;
-  absent_threshold: string;
-  process_attendance_after: string;
-  last_sync_of_checkin: string;
-  auto_update_last_sync: boolean;
-  enable_late_entry_marking: boolean;
-  late_entry_grace_period: string;
-  enable_early_exit_marking: boolean;
-  early_exit_grace_period: string;
+  attendance_basis: string;
+  absent_hours: string;
+  half_day_hours: string;
+  full_day_hours: string;
+  consider_na: string;
   allow_overtime: boolean;
-  overtime_type: string;
+  overtime_after_hours: string;
+  monthly_adjustment: string;
 }
 
 const todayStr = () => {
@@ -63,53 +70,67 @@ const todayStr = () => {
 
 const emptyForm = (): ShiftTypeForm => ({
   name: '',
+  effective_from: todayStr(),
+  roster_color: 'Blue',
   start_time: '',
   end_time: '',
-  holiday_region_id: '',
-  roster_color: 'Blue',
+  ends_next_day: false,
+  office_hour_time: '',
+  weekly_off_days: [],
+  max_early_in_mins: '60',
+  max_late_out_mins: '60',
+  force_time_out: '',
+  grace_enabled: false,
+  late_in_grace_mins: '0',
+  early_out_grace_mins: '0',
+  grace_occurrences_per_month: '0',
   enable_auto_attendance: false,
-  determine_checkin_checkout: 'alternating',
-  working_hours_calculation: 'first_last',
-  begin_checkin_before_mins: '60',
-  allow_checkout_after_mins: '60',
-  mark_auto_attendance_on_holidays: false,
-  half_day_threshold: '0',
-  absent_threshold: '0',
-  process_attendance_after: todayStr(),
-  last_sync_of_checkin: '',
-  auto_update_last_sync: false,
-  enable_late_entry_marking: false,
-  late_entry_grace_period: '0',
-  enable_early_exit_marking: false,
-  early_exit_grace_period: '0',
+  attendance_basis: 'first_last',
+  absent_hours: '0',
+  half_day_hours: '0',
+  full_day_hours: '0',
+  consider_na: '',
   allow_overtime: false,
-  overtime_type: '',
+  overtime_after_hours: '0',
+  monthly_adjustment: '',
 });
 
 function hydrate(row: any): ShiftTypeForm {
+  const offs: OffDay[] = Array.isArray(row.weekly_off_days)
+    ? row.weekly_off_days.map((o: any) => ({
+        day: Number(o.day),
+        weeks: Array.isArray(o.weeks) && o.weeks.length ? o.weeks.map(Number) : null,
+      }))
+    : [];
   return {
     name: row.name ?? '',
+    // Deliberately NOT defaulted to today. Almost every existing shift has no effective date,
+    // and stamping one on open-and-save would silently make the shift start today — which then
+    // refuses any assignment backdated to cover the month being set up, the exact thing the
+    // rollout asks HR to do.
+    effective_from: (row.effective_from ?? '').slice(0, 10),
+    roster_color: row.roster_color ?? 'Blue',
     start_time: (row.start_time ?? '').slice(0, 5),
     end_time: (row.end_time ?? '').slice(0, 5),
-    holiday_region_id: row.holiday_region_id != null ? String(row.holiday_region_id) : '',
-    roster_color: row.roster_color ?? 'Blue',
+    ends_next_day: !!row.ends_next_day,
+    office_hour_time: (row.office_hour_time ?? '').slice(0, 5),
+    weekly_off_days: offs,
+    max_early_in_mins: String(row.max_early_in_mins ?? 60),
+    max_late_out_mins: String(row.max_late_out_mins ?? 60),
+    force_time_out: (row.force_time_out ?? '').slice(0, 5),
+    grace_enabled: !!row.grace_enabled,
+    late_in_grace_mins: String(row.late_in_grace_mins ?? 0),
+    early_out_grace_mins: String(row.early_out_grace_mins ?? 0),
+    grace_occurrences_per_month: String(row.grace_occurrences_per_month ?? 0),
     enable_auto_attendance: !!row.enable_auto_attendance,
-    determine_checkin_checkout: row.determine_checkin_checkout ?? 'alternating',
-    working_hours_calculation: row.working_hours_calculation ?? 'first_last',
-    begin_checkin_before_mins: String(row.begin_checkin_before_mins ?? 60),
-    allow_checkout_after_mins: String(row.allow_checkout_after_mins ?? 60),
-    mark_auto_attendance_on_holidays: !!row.mark_auto_attendance_on_holidays,
-    half_day_threshold: String(row.half_day_threshold ?? 0),
-    absent_threshold: String(row.absent_threshold ?? 0),
-    process_attendance_after: (row.process_attendance_after ?? '').slice(0, 10) || todayStr(),
-    last_sync_of_checkin: row.last_sync_of_checkin ? String(row.last_sync_of_checkin).replace(' ', 'T').slice(0, 16) : '',
-    auto_update_last_sync: !!row.auto_update_last_sync,
-    enable_late_entry_marking: !!row.enable_late_entry_marking,
-    late_entry_grace_period: String(row.late_entry_grace_period ?? 0),
-    enable_early_exit_marking: !!row.enable_early_exit_marking,
-    early_exit_grace_period: String(row.early_exit_grace_period ?? 0),
+    attendance_basis: row.attendance_basis ?? 'first_last',
+    absent_hours: String(row.absent_hours ?? 0),
+    half_day_hours: String(row.half_day_hours ?? 0),
+    full_day_hours: String(row.full_day_hours ?? 0),
+    consider_na: row.consider_na ?? '',
     allow_overtime: !!row.allow_overtime,
-    overtime_type: row.overtime_type ?? '',
+    overtime_after_hours: String(row.overtime_after_hours ?? 0),
+    monthly_adjustment: row.monthly_adjustment != null ? String(row.monthly_adjustment) : '',
   };
 }
 
@@ -144,13 +165,43 @@ function CheckboxField({ checked, onChange, label, help }: { checked: boolean; o
   );
 }
 
-function SectionCard({ title, children }: { title: string; children: ReactNode }) {
+function SectionCard({ title, subtitle, children }: { title: string; subtitle?: string; children: ReactNode }) {
   return (
     <div className="bg-card rounded-xl border border-border p-5 space-y-4">
-      <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+      <div>
+        <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+        {subtitle && <p className="text-xs text-secondary mt-0.5">{subtitle}</p>}
+      </div>
       {children}
     </div>
   );
+}
+
+/** Marks a field that is stored and shown but doesn't yet affect anyone's pay. */
+function NotYetApplied() {
+  return (
+    <span className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 align-middle">
+      <Info size={10} /> not applied yet
+    </span>
+  );
+}
+
+/**
+ * The off-day pattern. Tick a weekday to make it an off day; by default that's every week,
+ * but it can be narrowed to particular occurrences — the 2nd and 4th Saturday, say.
+ */
+
+/** Human summary of an off-day pattern, for the list table. */
+function offDaySummary(offs: any): string {
+  if (!Array.isArray(offs) || offs.length === 0) return '—';
+  return offs
+    .slice()
+    .sort((a: any, b: any) => a.day - b.day)
+    .map((o: any) => {
+      const d = DAYS_SHORT[Number(o.day)] ?? '?';
+      return Array.isArray(o.weeks) && o.weeks.length ? `${d} (${o.weeks.join(',')})` : d;
+    })
+    .join(', ');
 }
 
 export default function ShiftTypePage() {
@@ -159,21 +210,13 @@ export default function ShiftTypePage() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState<ShiftTypeForm>(emptyForm());
   const [dirty, setDirty] = useState(false);
-  const [otError, setOtError] = useState(false);
   const [confirmDel, setConfirmDel] = useState<any | null>(null);
 
   useUnsavedChangesWarning(mode === 'form' && dirty);
 
-  // Shared key with the Roster (both read /shifts/types) so a create/edit/delete
-  // here refreshes the roster's shift dropdown too.
   const { data: shiftTypes = [], isError, refetch } = useQuery({
     queryKey: ['shift-types'],
     queryFn: () => api.get('/shifts/types').then((r) => r.data),
-  });
-
-  const { data: holidayLists = [] } = useQuery({
-    queryKey: ['shift-holiday-lists'],
-    queryFn: () => api.get('/shifts/types/holiday-lists').then((r) => r.data),
   });
 
   const upd = (patch: Partial<ShiftTypeForm>) => {
@@ -181,26 +224,9 @@ export default function ShiftTypePage() {
     setDirty(true);
   };
 
-  const openNew = () => {
-    setForm(emptyForm());
-    setEditingId(null);
-    setDirty(false);
-    setOtError(false);
-    setMode('form');
-  };
-  const openEdit = (row: any) => {
-    setForm(hydrate(row));
-    setEditingId(row.id);
-    setDirty(false);
-    setOtError(false);
-    setMode('form');
-  };
-  const closeForm = () => {
-    setMode('list');
-    setEditingId(null);
-    setDirty(false);
-    setOtError(false);
-  };
+  const openNew = () => { setForm(emptyForm()); setEditingId(null); setDirty(false); setMode('form'); };
+  const openEdit = (row: any) => { setForm(hydrate(row)); setEditingId(row.id); setDirty(false); setMode('form'); };
+  const closeForm = () => { setMode('list'); setEditingId(null); setDirty(false); };
 
   const saveMutation = useMutation({
     mutationFn: (payload: any) =>
@@ -226,8 +252,8 @@ export default function ShiftTypePage() {
     },
   });
 
-  const toggleAuto = (v: boolean) =>
-    upd({ enable_auto_attendance: v, ...(v && !form.process_attendance_after ? { process_attendance_after: todayStr() } : {}) });
+  // An end at or before the start can only mean the shift runs past midnight.
+  const impliesNextDay = !!form.start_time && !!form.end_time && form.end_time <= form.start_time;
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -235,37 +261,47 @@ export default function ShiftTypePage() {
       toast.error('Name, start time and end time are required');
       return;
     }
-    if (form.allow_overtime && !form.overtime_type.trim()) {
-      setOtError(true);
-      toast.error('Overtime Type is required when overtime is allowed');
+    if (impliesNextDay && !form.ends_next_day) {
+      toast.error('This shift ends at or before it starts, so "ends next day" must be on');
       return;
     }
     const num = (s: string) => (Number.isFinite(Number(s)) ? Number(s) : 0);
-    const payload = {
+    const absent = num(form.absent_hours), half = num(form.half_day_hours), full = num(form.full_day_hours);
+    if (absent > 0 && half > 0 && absent >= half) {
+      toast.error('Absent hours must be less than half-day hours');
+      return;
+    }
+    if (half > 0 && full > 0 && half >= full) {
+      toast.error('Half-day hours must be less than full-day hours');
+      return;
+    }
+
+    saveMutation.mutate({
       name: form.name.trim(),
+      effective_from: form.effective_from || null,
+      roster_color: form.roster_color,
       start_time: form.start_time,
       end_time: form.end_time,
-      holiday_region_id: form.holiday_region_id || null,
-      roster_color: form.roster_color,
+      ends_next_day: form.ends_next_day,
+      office_hour_time: form.office_hour_time || null,
+      weekly_off_days: form.weekly_off_days,
+      max_early_in_mins: num(form.max_early_in_mins),
+      max_late_out_mins: num(form.max_late_out_mins),
+      force_time_out: form.force_time_out || null,
+      grace_enabled: form.grace_enabled,
+      late_in_grace_mins: form.grace_enabled ? num(form.late_in_grace_mins) : 0,
+      early_out_grace_mins: form.grace_enabled ? num(form.early_out_grace_mins) : 0,
+      grace_occurrences_per_month: form.grace_enabled ? num(form.grace_occurrences_per_month) : 0,
       enable_auto_attendance: form.enable_auto_attendance,
-      determine_checkin_checkout: form.determine_checkin_checkout,
-      working_hours_calculation: form.working_hours_calculation,
-      begin_checkin_before_mins: num(form.begin_checkin_before_mins),
-      allow_checkout_after_mins: num(form.allow_checkout_after_mins),
-      mark_auto_attendance_on_holidays: form.mark_auto_attendance_on_holidays,
-      half_day_threshold: num(form.half_day_threshold),
-      absent_threshold: num(form.absent_threshold),
-      process_attendance_after: form.enable_auto_attendance ? form.process_attendance_after || null : null,
-      last_sync_of_checkin: form.last_sync_of_checkin ? form.last_sync_of_checkin.replace('T', ' ') : null,
-      auto_update_last_sync: form.auto_update_last_sync,
-      enable_late_entry_marking: form.enable_late_entry_marking,
-      late_entry_grace_period: num(form.late_entry_grace_period),
-      enable_early_exit_marking: form.enable_early_exit_marking,
-      early_exit_grace_period: num(form.early_exit_grace_period),
+      attendance_basis: form.attendance_basis,
+      absent_hours: absent,
+      half_day_hours: half,
+      full_day_hours: full,
+      consider_na: form.consider_na || null,
       allow_overtime: form.allow_overtime,
-      overtime_type: form.allow_overtime ? form.overtime_type.trim() : null,
-    };
-    saveMutation.mutate(payload);
+      overtime_after_hours: form.allow_overtime ? num(form.overtime_after_hours) : 0,
+      monthly_adjustment: form.monthly_adjustment || null,
+    });
   };
 
   return (
@@ -278,7 +314,9 @@ export default function ShiftTypePage() {
             <div className="flex items-center justify-between gap-4">
               <div>
                 <h1 className="text-2xl font-bold text-foreground">Shift Type</h1>
-                <p className="text-secondary mt-1">Named work shifts with timing, attendance automation, and overtime rules.</p>
+                <p className="text-secondary mt-1">
+                  Each shift carries its own rules — timings, off days, grace and hour thresholds. Employees are then mapped to a shift.
+                </p>
               </div>
               <button
                 onClick={openNew}
@@ -312,8 +350,8 @@ export default function ShiftTypePage() {
                       <tr className="border-b border-border text-left text-secondary">
                         <th className="px-4 py-3 font-medium">Name</th>
                         <th className="px-4 py-3 font-medium">Timing</th>
-                        <th className="px-4 py-3 font-medium">Colour</th>
-                        <th className="px-4 py-3 font-medium">Auto Attendance</th>
+                        <th className="px-4 py-3 font-medium">Off days</th>
+                        <th className="px-4 py-3 font-medium">Hours (A/H/F)</th>
                         <th className="px-4 py-3 font-medium">Overtime</th>
                         <th className="px-4 py-3 font-medium text-right">Actions</th>
                       </tr>
@@ -321,25 +359,29 @@ export default function ShiftTypePage() {
                     <tbody className="divide-y divide-border">
                       {shiftTypes.map((s: any) => (
                         <tr key={s.id} className="hover:bg-muted/30">
-                          <td className="px-4 py-3 font-medium text-foreground">{s.name}</td>
-                          <td className="px-4 py-3 text-secondary">
-                            {(s.start_time ?? '').slice(0, 5)} – {(s.end_time ?? '').slice(0, 5)}
-                          </td>
                           <td className="px-4 py-3">
-                            <span className="inline-flex items-center gap-1.5">
-                              <span className="w-3 h-3 rounded-full" style={{ backgroundColor: colorHex(s.roster_color) }} />
-                              <span className="text-secondary">{s.roster_color || 'Blue'}</span>
+                            <span className="inline-flex items-center gap-2">
+                              <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: colorHex(s.roster_color) }} />
+                              <span className="font-medium text-foreground">{s.name}</span>
+                              {!s.is_active && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-secondary">inactive</span>
+                              )}
                             </span>
                           </td>
-                          <td className="px-4 py-3">
-                            {s.enable_auto_attendance ? (
-                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">On</span>
-                            ) : (
-                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-muted text-secondary">Off</span>
+                          <td className="px-4 py-3 text-secondary whitespace-nowrap">
+                            {(s.start_time ?? '').slice(0, 5)} – {(s.end_time ?? '').slice(0, 5)}
+                            {s.ends_next_day && (
+                              <span className="ml-1.5 inline-flex items-center gap-0.5 text-[11px] text-purple-600" title="Ends the next day">
+                                <Moon size={11} /> +1
+                              </span>
                             )}
                           </td>
+                          <td className="px-4 py-3 text-secondary">{offDaySummary(s.weekly_off_days)}</td>
+                          <td className="px-4 py-3 text-secondary whitespace-nowrap">
+                            {Number(s.absent_hours) || 0} / {Number(s.half_day_hours) || 0} / {Number(s.full_day_hours) || 0}
+                          </td>
                           <td className="px-4 py-3 text-secondary">
-                            {s.allow_overtime ? s.overtime_type || 'Yes' : '—'}
+                            {s.allow_overtime ? `after ${Number(s.overtime_after_hours) || 0}h` : '—'}
                           </td>
                           <td className="px-4 py-3">
                             <div className="flex items-center justify-end gap-1">
@@ -373,167 +415,182 @@ export default function ShiftTypePage() {
               <button
                 type="button"
                 onClick={closeForm}
-                className="p-2 rounded-lg text-secondary hover:text-foreground hover:bg-muted transition-colors"
-                title="Back"
+                className="p-1.5 rounded-lg text-secondary hover:text-foreground hover:bg-muted transition-colors"
               >
                 <ArrowLeft size={18} />
               </button>
-              <h1 className="text-2xl font-bold text-foreground">{editingId ? 'Edit Shift Type' : 'New Shift Type'}</h1>
+              <h1 className="text-2xl font-bold text-foreground">
+                {editingId ? 'Edit Shift Type' : 'New Shift Type'}
+              </h1>
             </div>
 
-            {/* Main */}
             <SectionCard title="Shift">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <Field label="Name" required>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <Field label="Shift name" required>
                   <input className={inputCls} value={form.name} onChange={(e) => upd({ name: e.target.value })} placeholder="e.g. Morning" />
                 </Field>
-                <Field label="Start Time" required>
-                  <input type="time" className={inputCls} value={form.start_time} onChange={(e) => upd({ start_time: e.target.value })} />
+                <Field label="Effective date" help="Attendance is judged by these rules from this date on.">
+                  <input type="date" className={inputCls} value={form.effective_from} onChange={(e) => upd({ effective_from: e.target.value })} />
                 </Field>
-                <Field label="End Time" required>
-                  <input type="time" className={inputCls} value={form.end_time} onChange={(e) => upd({ end_time: e.target.value })} />
-                </Field>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <Field label="Holiday List" help="Region whose holidays this shift observes.">
-                  <select className={inputCls} value={form.holiday_region_id} onChange={(e) => upd({ holiday_region_id: e.target.value })}>
-                    <option value="">— None —</option>
-                    {holidayLists.map((h: any) => (
-                      <option key={h.id} value={h.id}>{h.name}</option>
-                    ))}
+                <Field label="Colour">
+                  <select className={inputCls} value={form.roster_color} onChange={(e) => upd({ roster_color: e.target.value })}>
+                    {ROSTER_COLORS.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
                   </select>
                 </Field>
-                <Field label="Roster Color">
-                  <div className="flex items-center gap-2">
-                    <span className="w-8 h-9 rounded-lg border border-border shrink-0" style={{ backgroundColor: colorHex(form.roster_color) }} />
-                    <select className={inputCls} value={form.roster_color} onChange={(e) => upd({ roster_color: e.target.value })}>
-                      {ROSTER_COLORS.map((c) => (
-                        <option key={c.name} value={c.name}>{c.name}</option>
-                      ))}
-                    </select>
-                  </div>
+              </div>
+            </SectionCard>
+
+            <SectionCard title="Timing">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <Field label="Start time" required>
+                  <input type="time" className={inputCls} value={form.start_time} onChange={(e) => upd({ start_time: e.target.value })} />
+                </Field>
+                <Field label="End time" required>
+                  <input type="time" className={inputCls} value={form.end_time} onChange={(e) => upd({ end_time: e.target.value })} />
+                </Field>
+                <Field label="Office hour time" help="Expected paid hours in a normal day, if breaks make it shorter than start to end.">
+                  <input type="time" className={inputCls} value={form.office_hour_time} onChange={(e) => upd({ office_hour_time: e.target.value })} />
+                </Field>
+              </div>
+              <CheckboxField
+                checked={form.ends_next_day}
+                onChange={(v) => upd({ ends_next_day: v })}
+                label="Ends the next day"
+                help="For a shift running past midnight, like 22:00 to 06:00. This decides which day the hours count towards."
+              />
+              {impliesNextDay && !form.ends_next_day && (
+                <p className="flex items-start gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  <Info size={13} className="mt-0.5 shrink-0" />
+                  This shift ends at or before it starts, so it must end the next day.
+                </p>
+              )}
+            </SectionCard>
+
+            <SectionCard
+              title="Weekly adjustment — off days"
+              subtitle="Which days employees on this shift don't work. Replaces filling in a weekly roster."
+            >
+              <OffDayPicker value={form.weekly_off_days} onChange={(v) => upd({ weekly_off_days: v })} />
+            </SectionCard>
+
+            <SectionCard title="Punch limits" subtitle="How far outside the shift a punch still counts towards the day.">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <Field label="Maximum early-in punch" help="Minutes before the start time.">
+                  <input type="number" min={0} className={inputCls} value={form.max_early_in_mins} onChange={(e) => upd({ max_early_in_mins: e.target.value })} />
+                </Field>
+                <Field label="Maximum late-out punch" help="Minutes after the end time.">
+                  <input type="number" min={0} className={inputCls} value={form.max_late_out_mins} onChange={(e) => upd({ max_late_out_mins: e.target.value })} />
+                </Field>
+                <Field label="Force time out" help="Close off a day with no punch-out at this time.">
+                  <input type="time" className={inputCls} value={form.force_time_out} onChange={(e) => upd({ force_time_out: e.target.value })} />
+                </Field>
+              </div>
+              <p className="text-xs text-secondary">
+                Force time out is stored and shown but does not affect pay yet.<NotYetApplied />
+              </p>
+            </SectionCard>
+
+            <SectionCard title="Grace">
+              <CheckboxField
+                checked={form.grace_enabled}
+                onChange={(v) => upd({ grace_enabled: v })}
+                label="Allow a grace period"
+                help="Lets someone arrive late or leave early by a few minutes without it counting against them."
+              />
+              {form.grace_enabled && (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <Field label="Late-in grace" help="Minutes.">
+                    <input type="number" min={0} className={inputCls} value={form.late_in_grace_mins} onChange={(e) => upd({ late_in_grace_mins: e.target.value })} />
+                  </Field>
+                  <Field label="Early-out grace" help="Minutes.">
+                    <input type="number" min={0} className={inputCls} value={form.early_out_grace_mins} onChange={(e) => upd({ early_out_grace_mins: e.target.value })} />
+                  </Field>
+                  <Field label="Allowed occurrences per month" help="0 means unlimited.">
+                    <input type="number" min={0} className={inputCls} value={form.grace_occurrences_per_month} onChange={(e) => upd({ grace_occurrences_per_month: e.target.value })} />
+                  </Field>
+                </div>
+              )}
+            </SectionCard>
+
+            <SectionCard title="Attendance">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Field label="Attendance based on" help="How the day's in and out are picked from the punches.">
+                  <select className={inputCls} value={form.attendance_basis} onChange={(e) => upd({ attendance_basis: e.target.value })}>
+                    <option value="first_last">First and last punch of the day</option>
+                    <option value="every_valid">Every valid in/out pair</option>
+                  </select>
+                </Field>
+                <Field label="Consider NA" help="A day with no attendance record at all. Leave blank to use the company setting.">
+                  <select className={inputCls} value={form.consider_na} onChange={(e) => upd({ consider_na: e.target.value })}>
+                    <option value="">Use the company setting</option>
+                    <option value="present">Count as present</option>
+                    <option value="absent">Count as absent</option>
+                  </select>
+                </Field>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <Field label="Absent hours" help="Below this, the day doesn't count.">
+                  <input type="number" min={0} step="0.5" className={inputCls} value={form.absent_hours} onChange={(e) => upd({ absent_hours: e.target.value })} />
+                </Field>
+                <Field label="Half-day hours" help="Below this, half a day.">
+                  <input type="number" min={0} step="0.5" className={inputCls} value={form.half_day_hours} onChange={(e) => upd({ half_day_hours: e.target.value })} />
+                </Field>
+                <Field label="Full-day hours" help="At or above this, a full day.">
+                  <input type="number" min={0} step="0.5" className={inputCls} value={form.full_day_hours} onChange={(e) => upd({ full_day_hours: e.target.value })} />
                 </Field>
               </div>
               <CheckboxField
                 checked={form.enable_auto_attendance}
-                onChange={toggleAuto}
-                label="Enable Auto Attendance"
-                help="Attendance is marked automatically based on Employee Check-in for employees assigned to this shift."
+                onChange={(v) => upd({ enable_auto_attendance: v })}
+                label="Judge attendance automatically"
+                help="Uses the hours above to decide full, half or absent once the day's attendance is uploaded."
               />
+              {form.enable_auto_attendance && Number(form.absent_hours) === 0 && Number(form.half_day_hours) === 0 && (
+                <p className="flex items-start gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  <Info size={13} className="mt-0.5 shrink-0" />
+                  Set absent and half-day hours, otherwise there is nothing to judge against and days are left as they were uploaded.
+                </p>
+              )}
             </SectionCard>
 
-            {/* Auto Attendance Settings */}
-            {form.enable_auto_attendance && (
-              <SectionCard title="Auto Attendance Settings">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <Field label="Determine Check-in and Check-out">
-                    <select className={inputCls} value={form.determine_checkin_checkout} onChange={(e) => upd({ determine_checkin_checkout: e.target.value })}>
-                      <option value="alternating">Alternating entries as IN and OUT during the same shift</option>
-                      <option value="log_type">Strictly based on Log Type in Employee Checkin</option>
-                    </select>
-                  </Field>
-                  <Field label="Working Hours Calculation Based On">
-                    <select className={inputCls} value={form.working_hours_calculation} onChange={(e) => upd({ working_hours_calculation: e.target.value })}>
-                      <option value="first_last">First Check-in and Last Check-out</option>
-                      <option value="every_valid">Every Valid Check-in and Check-out</option>
-                    </select>
-                  </Field>
-                  <Field label="Begin check-in before shift start time (in minutes)" help="The time before the shift start time during which check-in is considered for attendance.">
-                    <input type="number" min={0} className={inputCls} value={form.begin_checkin_before_mins} onChange={(e) => upd({ begin_checkin_before_mins: e.target.value })} />
-                  </Field>
-                  <Field label="Allow check-out after shift end time (in minutes)" help="The time after the shift end time during which check-out is considered for attendance.">
-                    <input type="number" min={0} className={inputCls} value={form.allow_checkout_after_mins} onChange={(e) => upd({ allow_checkout_after_mins: e.target.value })} />
-                  </Field>
-                  <Field label="Working Hours Threshold for Half Day" help="Working hours below which Half Day is marked. Zero disables.">
-                    <input type="number" min={0} step="0.5" className={inputCls} value={form.half_day_threshold} onChange={(e) => upd({ half_day_threshold: e.target.value })} />
-                  </Field>
-                  <Field label="Working Hours Threshold for Absent" help="Working hours below which Absent is marked. Zero disables.">
-                    <input type="number" min={0} step="0.5" className={inputCls} value={form.absent_threshold} onChange={(e) => upd({ absent_threshold: e.target.value })} />
-                  </Field>
-                  <Field label="Process Attendance After" required help="Attendance is automatically marked only for dates after this day.">
-                    <input type="date" className={inputCls} value={form.process_attendance_after} onChange={(e) => upd({ process_attendance_after: e.target.value })} />
-                  </Field>
-                  <Field label="Last Sync of Checkin (Asia/Kolkata)" help="Last known check-in that was processed. Changing this affects which check-ins are re-processed — edit with care.">
-                    <input type="datetime-local" className={inputCls} value={form.last_sync_of_checkin} onChange={(e) => upd({ last_sync_of_checkin: e.target.value })} />
-                  </Field>
-                </div>
-                <CheckboxField
-                  checked={form.mark_auto_attendance_on_holidays}
-                  onChange={(v) => upd({ mark_auto_attendance_on_holidays: v })}
-                  label="Mark Auto Attendance on Holidays"
-                />
-                <CheckboxField
-                  checked={form.auto_update_last_sync}
-                  onChange={(v) => upd({ auto_update_last_sync: v })}
-                  label="Automatically update Last Sync of Checkin"
-                  help="Recommended when a single biometric device or mobile app feeds check-ins."
-                />
-
-                {/* Late Entry & Early Exit */}
-                <div className="pt-2 border-t border-border space-y-4">
-                  <h3 className="text-sm font-semibold text-foreground">Late Entry & Early Exit Settings for Auto Attendance</h3>
-                  <CheckboxField
-                    checked={form.enable_late_entry_marking}
-                    onChange={(v) => upd({ enable_late_entry_marking: v })}
-                    label="Enable Late Entry Marking"
-                  />
-                  {form.enable_late_entry_marking && (
-                    <Field label="Late Entry Grace Period (in minutes)" help="Check-ins after the shift start plus this grace period are marked as a late entry.">
-                      <input type="number" min={0} className={inputCls} value={form.late_entry_grace_period} onChange={(e) => upd({ late_entry_grace_period: e.target.value })} />
-                    </Field>
-                  )}
-                  <CheckboxField
-                    checked={form.enable_early_exit_marking}
-                    onChange={(v) => upd({ enable_early_exit_marking: v })}
-                    label="Enable Early Exit Marking"
-                  />
-                  {form.enable_early_exit_marking && (
-                    <Field label="Early Exit Grace Period (in minutes)" help="Check-outs before the shift end minus this grace period are marked as an early exit.">
-                      <input type="number" min={0} className={inputCls} value={form.early_exit_grace_period} onChange={(e) => upd({ early_exit_grace_period: e.target.value })} />
-                    </Field>
-                  )}
-                </div>
-              </SectionCard>
-            )}
-
-            {/* Overtime */}
             <SectionCard title="Overtime">
-              <CheckboxField checked={form.allow_overtime} onChange={(v) => { upd({ allow_overtime: v }); if (!v) setOtError(false); }} label="Allow Overtime" />
+              <CheckboxField
+                checked={form.allow_overtime}
+                onChange={(v) => upd({ allow_overtime: v })}
+                label="Allow overtime on this shift"
+              />
               {form.allow_overtime && (
-                <Field label="Overtime Type" required>
-                  <input
-                    className={`${inputCls} ${otError ? 'border-red-500 ring-1 ring-red-500' : ''}`}
-                    value={form.overtime_type}
-                    onChange={(e) => { upd({ overtime_type: e.target.value }); if (e.target.value.trim()) setOtError(false); }}
-                    list="overtime-type-suggestions"
-                    placeholder="e.g. Standard"
-                  />
-                  <datalist id="overtime-type-suggestions">
-                    {OVERTIME_SUGGESTIONS.map((o) => <option key={o} value={o} />)}
-                  </datalist>
-                </Field>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <Field label="Overtime after hours" help="Hours worked beyond this count as overtime.">
+                    <input type="number" min={0} step="0.5" className={inputCls} value={form.overtime_after_hours} onChange={(e) => upd({ overtime_after_hours: e.target.value })} />
+                  </Field>
+                </div>
               )}
+            </SectionCard>
+
+            <SectionCard title="Monthly adjustment">
+              <Field label={'Monthly adjustment'} help="Stored and shown, but not applied to pay — confirm what this should mean first.">
+                <input className={inputCls} value={form.monthly_adjustment} onChange={(e) => upd({ monthly_adjustment: e.target.value })} placeholder="e.g. 0" />
+              </Field>
+              <p className="text-xs text-secondary"><NotYetApplied /></p>
             </SectionCard>
 
             <div className="flex items-center gap-3">
               <button
                 type="submit"
                 disabled={saveMutation.isPending}
-                className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
               >
-                {saveMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-                {editingId ? 'Save Changes' : 'Create Shift Type'}
+                {saveMutation.isPending ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
+                {editingId ? 'Save changes' : 'Create shift type'}
               </button>
               <button
                 type="button"
                 onClick={closeForm}
-                className="px-5 py-2.5 border border-border rounded-lg text-sm font-medium hover:bg-muted transition-colors"
+                className="px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted transition-colors"
               >
                 Cancel
               </button>
-              <span className="flex items-center gap-1.5 text-xs text-secondary ml-auto">
-                <Info size={13} /> Fields marked <span className="text-red-600">*</span> are required.
-              </span>
             </div>
           </form>
         )}
@@ -542,8 +599,9 @@ export default function ShiftTypePage() {
       <ConfirmDialog
         open={!!confirmDel}
         title="Delete shift type?"
-        message={confirmDel ? <>This permanently removes <span className="font-medium text-foreground">{confirmDel.name}</span>. Shift types in use by the roster or assignments can't be deleted.</> : undefined}
+        message={confirmDel ? <>Delete <span className="font-medium text-foreground">{confirmDel.name}</span>? This can&apos;t be undone.</> : undefined}
         confirmLabel="Delete"
+        danger
         loading={deleteMutation.isPending}
         onConfirm={() => confirmDel && deleteMutation.mutate(confirmDel.id)}
         onCancel={() => setConfirmDel(null)}

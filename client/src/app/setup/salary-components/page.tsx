@@ -82,12 +82,12 @@ export default function SalaryComponentsPage() {
   const { data, isLoading, isError, refetch } = useQuery({ queryKey: ['salary-components'], queryFn: () => api.get('/salary-components').then((r) => r.data) });
   // Refresh this page AND every Salary Structure view that reads the component
   // catalog — chiefly the editor's "Add component" picker (`['structure-components']`),
-  // plus the CTC register, per-employee editor and the Salary Details table whose
-  // columns are the active components. Each is a distinct query key, so editing a
-  // component here must invalidate them or they serve a 5-minute-stale list.
+  // plus the per-employee editor and the Salary Details table whose columns are the
+  // active components. Each is a distinct query key, so editing a component here must
+  // invalidate them or they serve a 5-minute-stale list.
   const invalidate = () => {
     for (const key of [
-      ['salary-components'], ['structure-components'], ['ctc-register'],
+      ['salary-components'], ['structure-components'],
       ['employee-salary'], ['salary-overview'],
     ]) {
       qc.invalidateQueries({ queryKey: key });

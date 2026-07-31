@@ -52,6 +52,12 @@ export const createPropertyCategory = async (req: AuthRequest, res: Response, ne
 export const updatePropertyCategory = async (req: AuthRequest, res: Response, next: NextFunction) => { try { res.json(await orgService.updatePropertyCategory(Number(req.params.id), req.body)); } catch (e) { next(e); } };
 export const deletePropertyCategory = async (req: AuthRequest, res: Response, next: NextFunction) => { try { await orgService.deletePropertyCategory(Number(req.params.id)); res.json({ message: 'Deleted' }); } catch (e) { next(e); } };
 
+// Branches — the business unit an employee reports into (not a place; see organization.service).
+export const listBranches = async (_r: AuthRequest, res: Response, next: NextFunction) => { try { res.json(await orgService.listBranches()); } catch (e) { next(e); } };
+export const createBranch = async (req: AuthRequest, res: Response, next: NextFunction) => { try { res.status(201).json(await orgService.createBranch(req.body)); } catch (e) { next(e); } };
+export const updateBranch = async (req: AuthRequest, res: Response, next: NextFunction) => { try { res.json(await orgService.updateBranch(Number(req.params.id), req.body)); } catch (e) { next(e); } };
+export const deleteBranch = async (req: AuthRequest, res: Response, next: NextFunction) => { try { await orgService.deleteBranch(Number(req.params.id)); res.json({ message: 'Deleted' }); } catch (e) { next(e); } };
+
 // Job Titles
 export const listJobTitles = async (_r: AuthRequest, res: Response, next: NextFunction) => { try { res.json(await orgService.listJobTitles()); } catch (e) { next(e); } };
 export const createJobTitle = async (req: AuthRequest, res: Response, next: NextFunction) => { try { res.status(201).json(await orgService.createJobTitle(req.body)); } catch (e) { next(e); } };

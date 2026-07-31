@@ -27,3 +27,4 @@ uploads/
 .neon
 skills-lock.json
 .claude/skills/
+.gstack/

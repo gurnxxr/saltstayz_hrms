@@ -57,6 +57,15 @@ export async function seed(knex: Knex): Promise<void> {
   };
   Object.keys(NAV_MODULE_ROLES).forEach(mod => permRows.push({ module: mod, action: 'read' }));
 
+  // `payroll_setup` gates the org-wide payroll configuration screens (Statutory
+  // Components, Pay Schedule, Attendance Pay Rules, Salary Component catalog). Those
+  // routes pair authorize('payroll_setup', …) with the authorizeRoles('admin','finance')
+  // gate they already had — BOTH must pass — so the grant list below is deliberately
+  // identical to that role gate: admin and finance, nobody else. Mirrored idempotently
+  // in migration 024_payroll_setup_module.ts so a migrated DB matches a seeded one.
+  const PAYROLL_SETUP_ROLES = ['admin', 'finance'];
+  ['create', 'read', 'update', 'delete'].forEach(act => permRows.push({ module: 'payroll_setup', action: act }));
+
   const perms = await knex('permissions').insert(permRows).returning('*');
   const permMap: Record<string, number> = {};
   perms.forEach((p: any) => { permMap[`${p.module}:${p.action}`] = p.id; });
@@ -78,14 +87,17 @@ export async function seed(knex: Knex): Promise<void> {
   // Admin: everything
   modules.forEach(mod => grant('admin', mod, crudApprove));
 
-  // CHRO: everything except admin.users and permissions
+  // CHRO: everything except admin.users and permissions.
+  // manpower:approve is deliberately withheld — an over-limit hiring exception can be approved
+  // ONLY by Admin (and never by its own requester: maker≠checker), enforced at the route with
+  // authorizeRoles('admin'). Granting approve here would be dead, misleading config.
   modules.filter(m => m !== 'admin.users' && m !== 'permissions').forEach(mod => {
-    grant('chro', mod, crudApprove);
+    grant('chro', mod, mod === 'manpower' ? crud : crudApprove);
   });
 
-  // HR: everything except permissions and admin.users
+  // HR: everything except permissions and admin.users (manpower:approve withheld — see CHRO note).
   modules.filter(m => m !== 'permissions' && m !== 'admin.users').forEach(mod => {
-    grant('hr', mod, crudApprove);
+    grant('hr', mod, mod === 'manpower' ? crud : crudApprove);
   });
 
   // HR Manager
@@ -129,6 +141,9 @@ export async function seed(knex: Knex): Promise<void> {
   for (const [mod, rolesForMod] of Object.entries(NAV_MODULE_ROLES)) {
     rolesForMod.forEach(role => grant(role, mod, ['read']));
   }
+
+  // Payroll configuration — admin + finance only (see PAYROLL_SETUP_ROLES note above).
+  PAYROLL_SETUP_ROLES.forEach(role => grant(role, 'payroll_setup', crud));
 
   await knex('role_permissions').insert(rpRows);
 }

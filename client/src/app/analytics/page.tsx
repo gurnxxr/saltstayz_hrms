@@ -326,7 +326,7 @@ function OrgAnalytics() {
     { label: 'Headcount', value: kpi?.totalHeadcount ?? '—', icon: Users, color: '#3b82f6', tab: 'workforce' as TabKey },
     { label: 'Attrition MTD', value: kpi ? `${kpi.attritionMtd}%` : '—', sub: kpi ? `${kpi.attritionExitsMtd} exits` : '', icon: TrendingDown, color: '#ef4444', tab: 'attrition' as TabKey },
     { label: 'Attendance Today', value: kpi ? `${kpi.attendanceRateToday}%` : '—', sub: kpi ? `${kpi.presentToday} present` : '', icon: CalendarCheck, color: '#10b981', tab: 'attendance' as TabKey },
-    { label: 'Open Positions', value: kpi?.openPositions ?? '—', icon: Briefcase, color: '#8b5cf6', tab: 'workforce' as TabKey },
+    { label: 'Open Positions', value: kpi?.openPositions ?? '—', sub: kpi ? 'openings across open vacancies' : '', icon: Briefcase, color: '#8b5cf6', tab: 'workforce' as TabKey },
     { label: 'Absenteeism MTD', value: kpi ? `${kpi.absenteeismRateMtd}%` : '—', icon: AlertTriangle, color: '#f59e0b', tab: 'attendance' as TabKey },
     { label: 'Late Arrivals MTD', value: kpi ? `${kpi.lateArrivalRateMtd}%` : '—', sub: kpi ? `${kpi.lateCountMtd}/${kpi.totalCheckinsMtd}` : '', icon: Clock, color: '#f97316', tab: 'attendance' as TabKey },
   ];
@@ -336,7 +336,6 @@ function OrgAnalytics() {
       <div className="space-y-5">
         <div>
           <h1 className="text-2xl font-bold text-foreground">HR Analytics</h1>
-          <p className="text-secondary mt-1">Organization-wide insights — click a metric or chart to drill in</p>
         </div>
 
         {/* KPI strip */}

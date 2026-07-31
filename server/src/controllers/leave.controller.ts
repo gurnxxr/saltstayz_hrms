@@ -1,7 +1,49 @@
 import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../types';
+import { ValidationError } from '../utils/errors';
 import * as leaveService from '../services/leave.service';
 import * as encashmentService from '../services/leaveEncashment.service';
+import * as templateService from '../services/leaveTemplate.service';
+
+/**
+ * The signed-in user's own employee record, or a 400.
+ *
+ * Admin and finance logins are not always linked to an employee, and passing that null through
+ * to a self-service query matches no rows — which used to look like an empty result rather than
+ * a missing profile. Mirrors `requireEmployeeId` in payroll.controller.ts.
+ */
+function requireEmployeeId(req: AuthRequest): number {
+  if (!req.user?.employeeId) {
+    throw new ValidationError('No employee profile is linked to this account.');
+  }
+  return req.user.employeeId;
+}
+
+// ─── Leave Templates (Control Panel → Templates / By Employee) ───
+export async function listLeaveTemplates(_req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await templateService.listTemplates()); } catch (err) { next(err); }
+}
+export async function getLeaveTemplate(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await templateService.getTemplate(Number(req.params.id))); } catch (err) { next(err); }
+}
+export async function createLeaveTemplate(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.status(201).json(await templateService.createTemplate(req.body)); } catch (err) { next(err); }
+}
+export async function updateLeaveTemplate(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await templateService.updateTemplate(Number(req.params.id), req.body)); } catch (err) { next(err); }
+}
+export async function deleteLeaveTemplate(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await templateService.deleteTemplate(Number(req.params.id))); } catch (err) { next(err); }
+}
+export async function listLeaveTemplateAssignments(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await templateService.listTemplateAssignments({ search: req.query.search ? String(req.query.search) : undefined })); } catch (err) { next(err); }
+}
+export async function setEmployeeLeaveTemplate(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await templateService.setEmployeeTemplate(Number(req.params.employeeId), Number(req.body.template_id))); } catch (err) { next(err); }
+}
+export async function bulkAssignLeaveTemplate(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await templateService.bulkAssignTemplate(req.body.employee_ids, Number(req.body.template_id))); } catch (err) { next(err); }
+}
 
 // Scoped to the caller: types their department can't take are hidden from the
 // apply screen's dropdown. Users without an employee record see the full list.
@@ -197,11 +239,35 @@ export async function getHolidays(req: AuthRequest, res: Response, next: NextFun
 }
 
 export async function getMyHolidays(req: AuthRequest, res: Response, next: NextFunction) {
-  try { res.json(await leaveService.getMyHolidays(req.user!.employeeId!, req.query.year as string)); } catch (err) { next(err); }
+  try {
+    res.json(await leaveService.getMyHolidays(requireEmployeeId(req), req.query.year as string));
+  } catch (err) { next(err); }
 }
 
 export async function createHoliday(req: AuthRequest, res: Response, next: NextFunction) {
   try { res.status(201).json(await leaveService.createHoliday(req.body)); } catch (err) { next(err); }
+}
+
+/** How many active employees a SAVED holiday reaches. */
+export async function getHolidayReach(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json({ reaches_count: await leaveService.getHolidayReach(Number(req.params.id)) }); }
+  catch (err) { next(err); }
+}
+
+/** How many a scope WOULD reach — so the form can warn before anything is saved. */
+export async function previewHolidayReach(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json({
+      reaches_count: await leaveService.countHolidayReach({
+        is_national: !!req.body.is_national,
+        state: req.body.state ?? null,
+        all_departments: !!req.body.all_departments,
+        department_ids: Array.isArray(req.body.department_ids) ? req.body.department_ids.map(Number) : [],
+        all_properties: !!req.body.all_properties,
+        property_ids: Array.isArray(req.body.property_ids) ? req.body.property_ids.map(Number) : [],
+      }),
+    });
+  } catch (err) { next(err); }
 }
 
 export async function updateHoliday(req: AuthRequest, res: Response, next: NextFunction) {
@@ -214,9 +280,26 @@ export async function uploadHolidaysCSV(req: AuthRequest, res: Response, next: N
       return res.status(400).json({ error: 'No CSV file uploaded' });
     }
     const csvText = req.file.buffer.toString('utf-8');
+    // Multipart carries everything as strings, so the id arrays arrive JSON-encoded.
+    const idList = (raw: unknown): number[] => {
+      if (Array.isArray(raw)) return raw.map(Number);
+      if (typeof raw === 'string' && raw.trim()) {
+        try {
+          const parsed = JSON.parse(raw);
+          return Array.isArray(parsed) ? parsed.map(Number) : [];
+        } catch { return []; }
+      }
+      return [];
+    };
+    const isTrue = (v: unknown) => v === 'true' || v === true;
     const result = await leaveService.uploadHolidaysCSV(csvText, {
-      is_national: req.body.is_national === 'true' || req.body.is_national === true,
+      is_national: isTrue(req.body.is_national),
       state: req.body.state ? String(req.body.state) : undefined,
+      all_departments: isTrue(req.body.all_departments),
+      department_ids: idList(req.body.department_ids),
+      all_properties: isTrue(req.body.all_properties),
+      property_ids: idList(req.body.property_ids),
+      mode: req.body.mode === 'replace' ? 'replace' : 'append',
     });
     res.json(result);
   } catch (err) { next(err); }

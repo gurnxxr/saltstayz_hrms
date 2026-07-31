@@ -11,6 +11,9 @@ router.get('/properties', authorize('manpower', 'read'), ctrl.listScopedProperti
 router.get('/availability', authorize('manpower', 'read'), ctrl.getAvailability);
 router.get('/sanctions', authorize('manpower', 'read'), ctrl.listSanctions);
 router.get('/property-budgets', authorize('manpower', 'read'), ctrl.listPropertyBudgets);
+// Static path before the :id route, or Express reads "unassigned" as an :id.
+router.get('/property-budgets/unassigned', authorize('manpower', 'read'), ctrl.unassignedCommitment);
+router.get('/property-budgets/:id/committed', authorize('manpower', 'read'), ctrl.propertyCommittedBreakdown);
 router.get('/employees', authorize('manpower', 'read'), ctrl.listEmployees);
 router.get('/replacements', authorize('manpower', 'read'), ctrl.listReplacements);
 router.get('/employees/:id/history', authorize('manpower', 'read'), ctrl.getStatusHistory);
@@ -19,7 +22,6 @@ router.get('/clusters', authorize('manpower', 'read'), ctrl.listClusters);
 
 // ─── Sanctions + clusters: HQ Admin only ───
 router.post('/sanctions', authorizeRoles('admin'), ctrl.upsertSanction);
-router.put('/sanctions/band', authorizeRoles('admin'), ctrl.upsertSanctionBand);
 router.put('/sanctions/:id/lock', authorizeRoles('admin'), ctrl.setSanctionLock);
 router.post('/property-budgets/:id', authorizeRoles('admin'), ctrl.upsertPropertyBudget);
 router.post('/clusters', authorizeRoles('admin'), ctrl.upsertCluster);

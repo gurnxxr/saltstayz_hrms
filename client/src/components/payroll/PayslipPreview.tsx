@@ -37,7 +37,12 @@ export default function PayslipPreview({ result, downloadHref, download }: {
       {/* Attendance-driven days strip */}
       {b.days && (
         <div className="px-6 py-3 bg-muted/40 border-b border-border flex flex-wrap gap-x-6 gap-y-1 text-xs">
-          <span className="text-secondary">Working days <span className="font-semibold text-foreground">{b.days.working_days}</span></span>
+          {/* working_days IS the salary divisor, and under calendar_days that is the whole month —
+              calling 31 "working days" would be plainly wrong on a payslip. */}
+          <span className="text-secondary">
+            {b.days.method === 'calendar_days' ? 'Days in month' : 'Working days'}{' '}
+            <span className="font-semibold text-foreground">{b.days.working_days}</span>
+          </span>
           <span className="text-secondary">Loss of pay <span className={`font-semibold ${b.days.lop_days > 0 ? 'text-red-600' : 'text-foreground'}`}>{b.days.lop_days}</span></span>
           {b.days.hours != null
             ? <span className="text-secondary">Hours paid <span className="font-semibold text-foreground">{b.days.hours}</span></span>

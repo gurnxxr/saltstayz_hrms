@@ -12,6 +12,19 @@ export const NAVIGATION: NavItem[] = [
     moduleForEmployee: 'dashboard_employee',
   },
   {
+    // Grant-only entry: `roles: []` means it never shows by role, so it appears purely because
+    // an admin granted `dashboard_employee` in Admin → Module Access. That grant used to be a
+    // no-op for staff — the single Dashboard item above gates on `dashboard_admin` for every
+    // non-employee role, so nothing changed when it was switched on. This gives it something to
+    // do: staff keep the org dashboard AND get the self-service view. Employees are unaffected —
+    // the Dashboard item above already renders the employee view for them.
+    label: 'My Dashboard',
+    href: '/dashboard/me',
+    icon: 'UserCircle',
+    roles: [],
+    module: 'dashboard_employee',
+  },
+  {
     label: 'Analytics',
     href: '/analytics',
     icon: 'BarChart3',
@@ -33,16 +46,29 @@ export const NAVIGATION: NavItem[] = [
     ],
   },
   {
-    label: 'Leaves',
+    // Self-service: the signed-in user's own leave — apply, cancel, balances, holidays.
+    // Sits alongside My Shifts rather than inside the admin Leaves group, so an employee
+    // reaches it in one click instead of opening a group whose other tabs they can't see.
+    //
+    // Gated on `leave`, NOT a nav-only key of its own. Every endpoint this page calls is
+    // authorize('leave', …) (see server/src/routes/leave.routes.ts), so a visibility-only
+    // key would show the entry and then 403 on every request behind it. Granting `leave`
+    // in Admin → Module Access is what turns this on for one employee.
+    label: 'My Leaves',
     href: '/leaves/my',
+    icon: 'CalendarPlus',
+    roles: ['admin', 'chro', 'hr', 'hr_manager', 'cluster_hr', 'property_manager', 'employee', 'finance'],
+    module: 'leave',
+  },
+  {
+    // Leave ADMINISTRATION. Every child is admin/CHRO/HR only, so the Sidebar hides the
+    // whole group for anyone else (it drops a group with no visible children).
+    label: 'Leaves',
+    href: '/leaves/balances',
     icon: 'CalendarDays',
-    // Everyone gets the merged Leaves page (apply / approvals / holidays);
-    // admin/CHRO/HR also get Encashment + Control Panel. `leave` gates the whole
-    // group (deny hides it); the admin sub-tools below stay role-restricted.
-    roles: ['admin', 'chro', 'hr', 'property_manager', 'employee'],
+    roles: ['admin', 'chro', 'hr'],
     module: 'leave',
     children: [
-      { label: 'Leaves', href: '/leaves/my', icon: 'CalendarCheck', roles: ['admin', 'chro', 'hr', 'property_manager', 'employee'], module: 'leave' },
       { label: 'Balances', href: '/leaves/balances', icon: 'Scale', roles: ['admin', 'chro', 'hr'] },
       { label: 'Encashment', href: '/leaves/encashment', icon: 'Coins', roles: ['admin', 'chro', 'hr'] },
       { label: 'Control Panel', href: '/leaves/control-panel', icon: 'SlidersHorizontal', roles: ['admin', 'chro', 'hr'] },
@@ -64,10 +90,10 @@ export const NAVIGATION: NavItem[] = [
     roles: ['admin', 'chro', 'hr', 'hr_manager'],
     module: 'recruitment',
     children: [
-      { label: 'Pipeline', href: '/recruitment', icon: 'Workflow', roles: ['admin', 'chro', 'hr', 'hr_manager'], module: 'recruitment' },
+      { label: 'Candidates', href: '/recruitment', icon: 'Workflow', roles: ['admin', 'chro', 'hr', 'hr_manager'], module: 'recruitment' },
       { label: 'Vacancies', href: '/recruitment/vacancies', icon: 'Briefcase', roles: ['admin', 'chro', 'hr', 'hr_manager'], module: 'recruitment' },
-      { label: 'Joining Queue', href: '/recruitment/joining', icon: 'UserPlus', roles: ['admin', 'chro', 'hr'], module: 'recruitment' },
-      { label: 'Checklist Templates', href: '/recruitment/checklists', icon: 'ListChecks', roles: ['admin', 'chro', 'hr'], module: 'recruitment' },
+      { label: 'Onboarding', href: '/recruitment/joining', icon: 'UserPlus', roles: ['admin', 'chro', 'hr'], module: 'recruitment' },
+      { label: 'Checklist', href: '/recruitment/checklists', icon: 'ListChecks', roles: ['admin', 'chro', 'hr'], module: 'recruitment' },
     ],
   },
   {
@@ -103,19 +129,20 @@ export const NAVIGATION: NavItem[] = [
     children: [
       { label: 'Salary Structures', href: '/setup/salary-structure', icon: 'IndianRupee', roles: ['admin'], module: 'payroll' },
       { label: 'Pay Schedule', href: '/setup/pay-schedule', icon: 'CalendarClock', roles: ['admin', 'finance'], module: 'payroll' },
+      { label: 'Attendance Pay Rules', href: '/setup/attendance-pay-rules', icon: 'SlidersHorizontal', roles: ['admin', 'finance'], module: 'payroll' },
       { label: 'Statutory Components', href: '/setup/statutory-components', icon: 'Landmark', roles: ['admin', 'finance'], module: 'payroll' },
       { label: 'Salary Components', href: '/setup/salary-components', icon: 'Coins', roles: ['admin', 'finance'], module: 'payroll' },
     ],
   },
   {
     label: 'Shift Management',
-    href: '/shifts/roster',
+    href: '/shifts/assignments',
     icon: 'Clock',
     roles: ['admin', 'chro', 'hr', 'property_manager'],
     module: 'shifts',
     children: [
-      // Roster: build + publish the weekly plan. Property managers roster their own site.
-      { label: 'Roster', href: '/shifts/roster', icon: 'CalendarDays', roles: ['admin', 'chro', 'hr', 'property_manager'], module: 'shifts' },
+      // Put each employee on a shift; everything else follows from the shift's own rules.
+      { label: 'Shift Assignments', href: '/shifts/assignments', icon: 'UserCog', roles: ['admin', 'chro', 'hr', 'property_manager'], module: 'shifts' },
       // Approve/decline the shift-change requests employees raise from "My Shifts".
       { label: 'Change Requests', href: '/shifts/change-requests', icon: 'ClipboardList', roles: ['admin', 'chro', 'hr', 'property_manager'], module: 'shifts' },
       // Shift-type definitions (the old "Shift Setup", admin/CHRO/HR).

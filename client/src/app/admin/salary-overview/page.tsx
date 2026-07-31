@@ -9,7 +9,7 @@ import Pagination, { pageSlice } from '@/components/ui/Pagination';
 import api from '@/lib/api';
 import { formatINR } from '@/lib/utils';
 import { useAuth } from '@/lib/auth';
-import { Search, Download, Coins } from 'lucide-react';
+import { Search, Download, Coins, AlertTriangle } from 'lucide-react';
 
 const PAGE_SIZE = 20;
 
@@ -121,6 +121,16 @@ export default function SalaryOverviewPage() {
               <span className="text-secondary">Employees: <span className="font-semibold text-foreground">{data.total_employees}</span></span>
               <span className="text-secondary">With a salary structure: <span className="font-semibold text-foreground">{data.configured}</span></span>
               <span className="text-secondary">Total monthly CTC: <span className="font-semibold text-foreground">{formatINR(totals.ctc || 0)}</span></span>
+              {data.out_of_band > 0 && (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
+                  <AlertTriangle size={12} /> {data.out_of_band} outside their pay grade
+                </span>
+              )}
+              {data.ungraded > 0 && (
+                <span className="text-secondary/70 text-xs" title="Their role has no pay grade, so there is no band to check them against.">
+                  {data.ungraded} on a role with no pay grade
+                </span>
+              )}
             </div>
 
             <div className="relative max-w-sm">
@@ -151,12 +161,27 @@ export default function SalaryOverviewPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
-                    {visible.map((r: any) => (
-                      <tr key={r.employee_id} className="hover:bg-muted/20">
-                        <td className="sticky left-0 z-10 bg-card px-4 py-2.5">
+                    {visible.map((r: any) => {
+                      // Outside the band their role's pay grade allows — either direction.
+                      const outOfBand = r.band_status === 'above' || r.band_status === 'below';
+                      return (
+                      <tr key={r.employee_id} className={outOfBand ? 'bg-amber-50/60 hover:bg-amber-50' : 'hover:bg-muted/20'}>
+                        <td className={`sticky left-0 z-10 px-4 py-2.5 ${outOfBand ? 'bg-amber-50/60' : 'bg-card'}`}>
                           <p className="font-medium text-foreground whitespace-nowrap">{r.name}</p>
                           <p className="text-xs text-secondary whitespace-nowrap">{r.employee_code} · {r.dept_name || '—'}</p>
                           {!r.configured && <p className="text-[11px] text-amber-600 whitespace-nowrap">No salary structure</p>}
+                          {outOfBand && (
+                            <p className="mt-0.5 inline-flex items-center gap-1 text-[11px] font-medium text-amber-700 whitespace-nowrap"
+                              title={`${r.pay_grade_name}: ${formatINR(r.pay_grade_min)} – ${formatINR(r.pay_grade_max)}. The band comes from the role's pay grade — change it in Admin → Organization → Job Titles.`}>
+                              <AlertTriangle size={11} className="shrink-0" />
+                              {r.band_status === 'above' ? 'Above' : 'Below'} {r.pay_grade_name} by {formatINR(r.band_variance)}
+                            </p>
+                          )}
+                          {r.configured && r.band_status === 'ungraded' && (
+                            <p className="text-[11px] text-secondary/70 whitespace-nowrap" title="This role has no pay grade, so their salary can't be checked against a band. Assign one in Admin → Organization → Job Titles.">
+                              No pay grade on this role
+                            </p>
+                          )}
                         </td>
                         {columns.map((c) => (
                           <td key={c.key} className={`px-3 py-2.5 text-right whitespace-nowrap ${c.group === 'total' ? 'font-semibold text-foreground' : 'text-secondary'}`}>
@@ -164,7 +189,8 @@ export default function SalaryOverviewPage() {
                           </td>
                         ))}
                       </tr>
-                    ))}
+                      );
+                    })}
                     {filtered.length === 0 && (
                       <tr><td colSpan={columns.length + 1} className="text-center py-10 text-secondary">No employees match your search.</td></tr>
                     )}

@@ -10,7 +10,8 @@ import { useAuth } from '@/lib/auth';
 import Breadcrumb from '@/components/ui/Breadcrumb';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import LoadError from '@/components/ui/LoadError';
-import { Plus, Trash2, Megaphone } from 'lucide-react';
+import { formatDate } from '@/lib/utils';
+import { Plus, Trash2, Megaphone, CalendarClock } from 'lucide-react';
 
 // Steps 1-2 of the hiring process are states of a VACANCY. A new role is drafted
 // (`new_role`), then listed/published (`listed`); both are "live". `closed` ends it.
@@ -120,6 +121,11 @@ export default function VacanciesPage() {
                     <p className="text-sm text-secondary truncate">
                       {v.department_name} &middot; {v.property_name}
                     </p>
+                    {v.created_at && (
+                      <p className="text-xs text-secondary mt-0.5 inline-flex items-center gap-1">
+                        <CalendarClock size={12} /> Created {formatDate(v.created_at)}
+                      </p>
+                    )}
                   </div>
                   <div className="flex items-center gap-4 shrink-0">
                     <span className="text-sm text-secondary whitespace-nowrap">

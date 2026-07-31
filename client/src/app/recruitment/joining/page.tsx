@@ -106,8 +106,8 @@ export default function JoiningQueuePage() {
     <AppShell>
       <div className="space-y-6">
         <div>
-          <Breadcrumb className="mb-2" items={[{ label: 'Recruitment', href: '/recruitment' }, { label: 'Joining Queue' }]} />
-          <h1 className="text-2xl font-bold text-foreground">Joining Queue</h1>
+          <Breadcrumb className="mb-2" items={[{ label: 'Recruitment', href: '/recruitment' }, { label: 'Onboarding' }]} />
+          <h1 className="text-2xl font-bold text-foreground">Onboarding</h1>
           <p className="text-secondary mt-1">
             Accepted hires being brought on board — document collection, pre-joining formalities, then joining day.
             Complete each phase&apos;s checklist to unlock the next, and finish by transferring the new joiner to their manager.

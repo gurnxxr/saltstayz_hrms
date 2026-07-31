@@ -1,6 +1,7 @@
 import db from '../config/database';
 import { NotFoundError, ValidationError } from '../utils/errors';
 import { getCurrentPeriod } from './leave.service';
+import { getEmployeeLeaveRule } from './leaveTemplate.service';
 import { getMonthlyBreakdown } from './payslip.service';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -50,7 +51,9 @@ export async function createEncashment(
   if (!employee) throw new NotFoundError('Employee');
   const leaveType = await db('leave_types').where('id', leaveTypeId).first();
   if (!leaveType) throw new NotFoundError('Leave type');
-  if (!leaveType.is_encashable) throw new ValidationError(`${leaveType.name} is not encashable`);
+  // Encashability now comes from the employee's assigned template, not the global type.
+  const rule = await getEmployeeLeaveRule(employeeId, leaveTypeId);
+  if (!rule || !rule.is_encashable) throw new ValidationError(`${leaveType.name} is not encashable`);
   if (!Number.isFinite(days) || days <= 0 || days > 100) throw new ValidationError('Days must be a positive number');
 
   const period = await getCurrentPeriod();

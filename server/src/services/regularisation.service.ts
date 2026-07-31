@@ -1,6 +1,8 @@
 import db from '../config/database';
 import { NotFoundError, ValidationError, ForbiddenError } from '../utils/errors';
 import { notifyEmployee } from './notification.service';
+import { monthWriteState } from './payrollMonth.service';
+import { refreshPayslipAfterAttendanceChange, type RefreshResult } from './payslip.service';
 
 // ─── Attendance regularisation ───
 //
@@ -25,15 +27,23 @@ const MONTHLY_LIMIT = 3;
 const MAX_RANGE_DAYS = 31;
 
 // Regularisation types the employee may pick, and how each maps onto the attendance
-// status vocabulary the payable-days engine understands. "No Punch" (np) is paid as
-// a full-day LOP, exactly like Absent — so no new payroll status is needed.
-const REG_TYPES = ['np', 'mp', 'sp', 'absent', 'present'] as const;
+// status vocabulary the payable-days engine understands. "No Punch" (np) is its own
+// status (no_punch) — a biometric record was simply missing, which is distinct from a
+// genuine Absent and is priced by its own configurable rule. Note that an *approved*
+// regularisation is paid in full regardless of the stored status (payableDays reads
+// is_regularised first); the status below is what the calendar and reports record.
+//
+// "Absent" is deliberately NOT requestable. Asking to be marked absent is not a correction, and
+// since an approved regularisation pays the day in full (see payableDays.service), it was a route
+// to being paid for a day you yourself declared you did not work. Every remaining type describes a
+// day the employee says they DID work, which is what makes the full-pay-on-approval rule sound.
+const REG_TYPES = ['np', 'mp', 'sp', 'present'] as const;
 type RegType = typeof REG_TYPES[number];
 const TYPE_TO_STATUS: Record<RegType, string> = {
-  present: 'present', absent: 'absent', np: 'absent', mp: 'miss_punch', sp: 'short_punch',
+  present: 'present', np: 'no_punch', mp: 'miss_punch', sp: 'short_punch',
 };
 const TYPE_LABELS: Record<RegType, string> = {
-  present: 'Present', absent: 'Absent', np: 'No Punch', mp: 'Miss Punch', sp: 'Short Punch',
+  present: 'Present', np: 'No Punch', mp: 'Miss Punch', sp: 'Short Punch',
 };
 
 const isStaff = (roleName: string) => STAFF_ROLES.includes(roleName);
@@ -53,13 +63,27 @@ function eachDate(start: string, end: string): string[] {
   return out;
 }
 
-/** Blocks regularising a date whose payroll month is already locked. */
-async function assertMonthUnlocked(date: string) {
+/**
+ * Blocks regularising a date whose payroll month can no longer be re-priced.
+ *
+ * This used to test `run.status === 'locked'` and nothing else, which left a real trap: a month
+ * holding legacy payslips (calc_version 1) is frozen even when it was never locked, so a request
+ * could be filed and approved into it, the attendance would change, the employee would be told it
+ * was corrected — and every write path that could have paid it refuses. The correction could never
+ * reach money, and nobody was told. Payroll already had the wider test; regularisation had its own
+ * narrower one. They now share `monthWriteState`.
+ *
+ * Applied at REQUEST time as well as approval: failing in front of the person who can still do
+ * something about it, today, beats failing in front of an approver a week later.
+ */
+async function assertMonthCorrectable(date: string) {
   const [year, month] = date.split('-').map(Number);
-  const run = await db('payroll_runs').where({ month, year }).first();
-  if (run?.status === 'locked') {
-    throw new ValidationError(`Payroll for ${String(month).padStart(2, '0')}/${year} is locked. Ask HR to unlock it before regularising these dates.`);
-  }
+  const state = await monthWriteState(month, year);
+  if (state.writable) return;
+  const remedy = state.reason === 'locked'
+    ? 'Ask HR to unlock it before regularising these dates.'
+    : 'Its payslips cannot be re-priced, so this correction could never reach pay. Raise it with Finance as a manual correction instead.';
+  throw new ValidationError(`${state.message}. ${remedy}`);
 }
 
 /** A request's date range as a display string. */
@@ -105,8 +129,8 @@ export async function requestRegularisation(employeeId: number, data: Regularisa
   const dates = eachDate(start, end);
   if (dates.length > MAX_RANGE_DAYS) throw new ValidationError(`A single request can cover at most ${MAX_RANGE_DAYS} days`);
 
-  // Every date's payroll month must be unlocked.
-  for (const d of dates) await assertMonthUnlocked(d);
+  // Every date's payroll month must still be open to a re-price.
+  for (const d of dates) await assertMonthCorrectable(d);
 
   // No overlapping open request for any date in the range.
   const overlap = await db('attendance_regularisations')
@@ -229,7 +253,7 @@ export async function approveRegularisation(id: number, approverId: number, role
   const dates = eachDate(start, end);
 
   // Re-check the lock for every date at decision time (guards a race with a lock).
-  for (const d of dates) await assertMonthUnlocked(d);
+  for (const d of dates) await assertMonthCorrectable(d);
 
   const skipped: string[] = [];
   let applied = 0;
@@ -278,15 +302,61 @@ export async function approveRegularisation(id: number, approverId: number, role
     });
   });
 
+  // ── Make it reach the money ──
+  //
+  // The attendance transaction has COMMITTED by this point, and that ordering is the whole trick.
+  // computeForEmployee and everything under it use the shared connection pool, so a re-price called
+  // from inside the transaction above would read on a different connection, never see these rows,
+  // and write the PRE-regularisation figure back as though it were the correction — a failure that
+  // looks exactly like success. Committing first is what makes the recompute see the change.
+  //
+  // A request can span two months (max 31 days), so refresh each distinct month once.
+  const monthsTouched = [...new Set(dates.map((d) => d.slice(0, 7)))];
+  const pay: RefreshResult[] = [];
+  for (const ym of monthsTouched) {
+    const [y, m] = ym.split('-').map(Number);
+    try {
+      // No `generatedBy`, deliberately. `approverId` here is an EMPLOYEE id (the controller passes
+      // req.user.employeeId), while payslip_history.generated_by is a foreign key to users.id —
+      // passing it through would either violate the constraint or, worse, silently attribute the
+      // payslip to whichever unrelated user shares that number. The payslip was still generated by
+      // the payroll run; this only re-prices it. Who approved the correction is recorded on the
+      // regularisation row, which is where it belongs.
+      pay.push(await refreshPayslipAfterAttendanceChange(reg.employee_id, m, y));
+    } catch (err: any) {
+      // A failed re-price must not undo an approval the employee has been told about, and must not
+      // be silent either. Record it; the derived staleness check will also flag the month, and the
+      // lock gate will refuse until payroll is re-run.
+      pay.push({
+        outcome: 'blocked', month: m, year: y, reason: err?.message || 'could not be re-priced',
+      });
+    }
+  }
+
+  const worst = pay.find((p) => p.outcome === 'blocked')
+    ?? pay.find((p) => p.outcome === 'refreshed')
+    ?? pay[0];
+  await db('attendance_regularisations').where('id', id).update({
+    pay_refresh_status: worst?.outcome ?? null,
+    pay_refresh_note: worst?.reason ?? null,
+    updated_at: db.fn.now(),
+  });
+
   const skipNote = skipped.length ? ` (${skipped.length} day(s) on approved leave were left unchanged)` : '';
+  // Tell the employee what happened to their PAY, not just to the record. "Attendance regularised"
+  // on its own is the sentence that made this bug invisible for so long.
+  const payNote = worst?.outcome === 'refreshed' ? ' Your payslip for this month has been updated.'
+    : worst?.outcome === 'no_payslip' ? ' Payroll for this month has not been run yet — this will be included when it is.'
+      : worst?.outcome === 'blocked' ? ' Your payslip could NOT be updated — payroll has been notified.'
+        : '';
   await notifyEmployee(reg.employee_id, {
     type: 'regularisation_approved',
     title: 'Attendance regularised',
-    message: `Your attendance for ${rangeLabel(start, end)} was marked as ${TYPE_LABELS[type]}${skipNote}.`,
+    message: `Your attendance for ${rangeLabel(start, end)} was marked as ${TYPE_LABELS[type]}${skipNote}.${payNote}`,
     link: '/attendance/regularisation',
   });
 
-  return { message: 'Regularisation approved', status, applied, skipped };
+  return { message: 'Regularisation approved', status, applied, skipped, pay: worst ?? null };
 }
 
 /** Reject: record the mandatory reason and notify the employee. Attendance unchanged. */

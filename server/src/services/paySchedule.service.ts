@@ -5,7 +5,7 @@ import { ValidationError } from '../utils/errors';
 // work_week is stored as a JSON array of weekday indices (0=Sun … 6=Sat).
 
 const TABLE = 'pay_schedule_settings';
-const CALC_METHODS = ['actual_days', 'fixed_days'] as const;
+const CALC_METHODS = ['actual_days', 'fixed_days', 'calendar_days'] as const;
 const PAY_DATE_TYPES = ['last_day', 'fixed_day'] as const;
 
 export interface PaySchedule {
@@ -26,6 +26,10 @@ export interface PaySchedule {
   // Coverage gate (Phase 3): max % of working-day cells that may be unmarked
   // before locking a payroll month requires an explicit confirmation.
   attendance_gate_pct: number;
+  // The first date a work pattern may decide. Patterns are configured today but evaluated over
+  // history, so this stops one saved this morning re-pricing a month already paid. Set once, by
+  // migration 020, to the first month whose payroll had not started. NULL = nothing to protect.
+  work_pattern_effective_from: string | null;
 }
 
 const DEFAULTS: PaySchedule = {
@@ -43,6 +47,7 @@ const DEFAULTS: PaySchedule = {
   miss_punch_lop: 0.5,
   short_punch_lop: 0.5,
   attendance_gate_pct: 10,
+  work_pattern_effective_from: null,
 };
 
 function parseRow(row: any) {
@@ -70,6 +75,8 @@ function parseRow(row: any) {
     miss_punch_lop: row.miss_punch_lop == null ? DEFAULTS.miss_punch_lop : Number(row.miss_punch_lop),
     short_punch_lop: row.short_punch_lop == null ? DEFAULTS.short_punch_lop : Number(row.short_punch_lop),
     attendance_gate_pct: row.attendance_gate_pct == null ? DEFAULTS.attendance_gate_pct : Number(row.attendance_gate_pct),
+    work_pattern_effective_from: row.work_pattern_effective_from
+      ? String(row.work_pattern_effective_from).slice(0, 10) : null,
     updated_by: row.updated_by,
     updated_at: row.updated_at,
   };

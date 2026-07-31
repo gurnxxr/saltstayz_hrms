@@ -1,0 +1,6 @@
+Name,Hotel ID,City,State,Address,Category
+SaltStayz Noida,HT-201,Noida,Uttar Pradesh,Sector 62 Noida,Business
+SaltStayz Jaipur,HT-202,Jaipur,Rajasthan,MI Road Jaipur,Resort
+SaltStayz Mumbai Andheri,HT-203,Mumbai,Maharashtra,Andheri East Mumbai,Business
+SaltStayz Kochi,,Kochi,,,
+SaltStayz Gurgaon,HT-999,Gurgaon,Haryana,Duplicate Name Test,Business

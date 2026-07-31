@@ -47,6 +47,17 @@ router.delete('/types/:id', authorize('leave', 'delete'), LEAVE_ADMIN, ctrl.dele
 router.post('/periods', authorize('leave', 'create'), LEAVE_ADMIN, ctrl.createLeavePeriod);
 router.put('/periods/:id/current', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.setCurrentPeriod);
 
+// Control Panel: leave templates (a reusable bundle of per-type rules) + assignment.
+// Static sub-paths before the :id routes, or Express reads "assignments"/"assign" as an :id.
+router.get('/templates', authorize('leave', 'read'), LEAVE_ADMIN, ctrl.listLeaveTemplates);
+router.get('/templates/assignments', authorize('leave', 'read'), LEAVE_ADMIN, ctrl.listLeaveTemplateAssignments);
+router.post('/templates/assign', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.bulkAssignLeaveTemplate);
+router.get('/templates/:id', authorize('leave', 'read'), LEAVE_ADMIN, ctrl.getLeaveTemplate);
+router.post('/templates', authorize('leave', 'create'), LEAVE_ADMIN, ctrl.createLeaveTemplate);
+router.put('/templates/:id', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.updateLeaveTemplate);
+router.delete('/templates/:id', authorize('leave', 'delete'), LEAVE_ADMIN, ctrl.deleteLeaveTemplate);
+router.put('/employees/:employeeId/template', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.setEmployeeLeaveTemplate);
+
 // Balances: every employee x every leave type for a period (read-only grid).
 // Distinct from GET /balances above, which is the caller's own self-service balances.
 router.get('/balances/overview', authorize('leave', 'read'), LEAVE_ADMIN, ctrl.getBalancesOverview);
@@ -67,6 +78,10 @@ const ADMIN_ONLY = authorizeRoles('admin');
 router.post('/holidays', authorize('leave', 'create'), LEAVE_ADMIN, ctrl.createHoliday);
 router.put('/holidays/:id', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.updateHoliday);
 router.post('/holidays/upload-csv', authorize('leave', 'create'), LEAVE_ADMIN, upload.single('file'), ctrl.uploadHolidaysCSV);
+// How many people a holiday actually reaches. The one thing that can catch a valid-looking
+// audience — "Front Desk at Gurgaon" — that happens to match nobody.
+router.post('/holidays/reach-preview', authorize('leave', 'read'), LEAVE_ADMIN, ctrl.previewHolidayReach);
+router.get('/holidays/:id/reach', authorize('leave', 'read'), LEAVE_ADMIN, ctrl.getHolidayReach);
 router.delete('/holidays/:id', authorize('leave', 'delete'), LEAVE_ADMIN, ctrl.deleteHoliday);
 
 router.post('/regions', ADMIN_ONLY, ctrl.createRegion);

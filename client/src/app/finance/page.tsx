@@ -70,6 +70,11 @@ export default function FinancePage() {
     queryFn: () => api.get('/finance/bank-details/stats').then(r => r.data),
   });
 
+  const { data: propertiesForFilter = [] } = useQuery({
+    queryKey: ['properties'],
+    queryFn: () => api.get('/admin/properties').then(r => r.data),
+  });
+
   const { data: employees = [] } = useQuery({
     queryKey: ['employees-list-for-finance'],
     queryFn: () => api.get('/employees').then(r => r.data),
@@ -158,6 +163,14 @@ export default function FinancePage() {
   }
 
   const branches = [...new Set(records.map((r: any) => r.employee_branch).filter(Boolean))] as string[];
+
+  // The filter list is built from the records themselves, which means a branch that matches no
+  // property still appears — deliberately. Repointing it at the property catalog would make those
+  // records unfilterable, which is the opposite of useful: they are the ones worth finding, since
+  // a branch that resolves to no property costs the employee their state holidays and their
+  // Professional Tax / Labour Welfare Fund / minimum-wage rates. So keep them listed, and say so.
+  const propertyNames = new Set((propertiesForFilter as any[]).map((p) => p.name));
+  const notAProperty = (b: string) => propertyNames.size > 0 && !propertyNames.has(b);
 
   // Client-side pagination — presentation only. Filters/search/stats/branches all
   // keep operating on the full `records` set; only the rendered slice is paged.
@@ -372,9 +385,9 @@ export default function FinancePage() {
               onChange={(e) => setBranchFilter(e.target.value)}
               className="px-3 py-2 border border-border rounded-lg bg-background text-sm"
             >
-              <option value="">All Branches</option>
+              <option value="">All Properties</option>
               {branches.map((b: string) => (
-                <option key={b} value={b}>{b}</option>
+                <option key={b} value={b}>{notAProperty(b) ? `${b} — not a property` : b}</option>
               ))}
             </select>
           )}

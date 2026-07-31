@@ -15,7 +15,10 @@ const MODULE_LABELS: Record<string, string> = {
   dashboard_employee: 'Dashboard (Employee)',
   analytics: 'Analytics',
   attendance: 'Attendance',
-  leave: 'Leaves',
+  // One key covers both the employee's own "My Leaves" page and the admin Leaves group,
+  // because every leave endpoint is gated on it. Named so the toggle doesn't read as
+  // controlling only the admin side.
+  leave: 'Leaves (incl. My Leaves)',
   recruitment: 'Recruitment',
   employee_lifecycle: 'Employee Lifecycle',
   payroll: 'Payroll',
@@ -23,6 +26,12 @@ const MODULE_LABELS: Record<string, string> = {
   shifts: 'Shift Management',
   my_shifts: 'My Shift',
   admin: 'Admin',
+  employees: 'Employee Records',
+  onboarding: 'Onboarding',
+  manpower: 'Manpower & Budget',
+  finance: 'Bank Details',
+  'admin.users': 'User Administration',
+  payroll_setup: 'Payroll Configuration',
 };
 
 export default function ModuleAccessPage() {
@@ -73,9 +82,11 @@ export default function ModuleAccessPage() {
             <AlertTriangle size={14} className="mt-0.5 shrink-0" />
             <span>
               Granting a module gives <span className="font-semibold">full access</span> to it —
-              every action including create, edit, delete and approvals (and org-wide reads where
-              the module has them), regardless of the person&apos;s role. Grant only modules the
-              employee should fully operate.
+              every permission-gated action for that module (create, edit, delete, and any
+              org-wide reads it has), regardless of the person&apos;s role. A few controls stay
+              admin-only no matter what — e.g. approving over-limit hires and saving sanctioned
+              budgets — so a grant won&apos;t hand those over. Grant only modules the employee
+              should fully operate.
             </span>
           </div>
         </div>

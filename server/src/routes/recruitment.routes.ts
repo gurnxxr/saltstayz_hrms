@@ -58,6 +58,7 @@ router.post('/candidates', authorize('recruitment', 'create'), ctrl.createCandid
 router.post('/candidates/bulk-upload', authorize('recruitment', 'create'), upload.single('file'), ctrl.bulkUploadCandidates);
 router.put('/candidates/:id', authorize('recruitment', 'update'), ctrl.updateCandidate);
 router.put('/candidates/:id/stage', authorize('recruitment', 'update'), ctrl.moveCandidateStage);
+router.put('/candidates/:id/hold', authorize('recruitment', 'update'), ctrl.setCandidateHold);
 router.get('/candidates/:id/history', authorize('recruitment', 'read'), ctrl.getCandidateHistory);
 router.get('/candidates/:id/checklists', authorize('recruitment', 'read'), ctrl.getCandidateChecklists);
 
@@ -72,6 +73,8 @@ router.get('/candidates/:id/offer/pdf', authorize('recruitment', 'read'), ctrl.d
 router.post('/candidates/:id/offer/accept', authorize('recruitment', 'create'), ctrl.acceptOffer);
 router.post('/candidates/:id/offer/decline', authorize('recruitment', 'update'), ctrl.declineOffer);
 router.post('/candidates/:id/offer', authorize('recruitment', 'create'), ctrl.releaseOffer);
+// When release is blocked by the sanctioned cap, HR raises an admin-approval request instead of being dead-ended.
+router.post('/candidates/:id/offer/request-approval', authorize('recruitment', 'create'), ctrl.requestOfferApproval);
 router.get('/candidates/:id/offer', authorize('recruitment', 'read'), ctrl.getOffer);
 
 // Step 11: transfer to reporting manager

@@ -49,6 +49,22 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
     queryFn: () => api.get('/admin/departments').then(r => r.data),
   });
 
+  // Branch is the same shape of thing, and matters more: it is the work location, and the
+  // location's state decides Professional Tax, Labour Welfare Fund and the minimum-wage floor.
+  // Typed free-hand, a name that matches no property silently costs the employee their state
+  // holidays and drops their statutory rates onto a default.
+  const { data: properties = [] } = useQuery({
+    queryKey: ['properties'],
+    queryFn: () => api.get('/admin/properties').then(r => r.data),
+  });
+
+  // Branches are a managed list too (Admin → Organization → Branches), for the same reason:
+  // typed by hand, "Corporate Office" and "Corp Office" become two units no report can add up.
+  const { data: branches = [] } = useQuery({
+    queryKey: ['branches'],
+    queryFn: () => api.get('/admin/branches').then(r => r.data),
+  });
+
   const updateMutation = useMutation({
     mutationFn: (data: any) => api.put(`/employees/${id}`, data).then(r => r.data),
     onSuccess: () => {
@@ -71,39 +87,36 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
     onError: (err: any) => { toast.error(err.response?.data?.error || 'Status update failed'); setConfirmDeactivate(false); },
   });
 
-  // Warn before leaving with unsaved employee edits.
+  // Warn before leaving with unsaved employee edits. Only the fields that can actually be
+  // edited — the onboarding-fixed ones can never differ, and testing them would be dead code.
   const dirty = editing && !!emp && (
     form.first_name !== emp.first_name ||
     form.last_name !== emp.last_name ||
-    form.date_of_birth !== (emp.date_of_birth || '') ||
-    form.father_name !== (emp.father_name || '') ||
     String(form.reporting_manager_id) !== String(emp.reporting_manager_id || '') ||
     form.email !== (emp.email || '') ||
-    form.date_of_joining !== (emp.date_of_joining || '') ||
     form.phone !== (emp.phone || '') ||
     form.aadhaar_number !== (emp.aadhaar_number || '') ||
     form.dept_name !== (emp.dept_name || '') ||
     form.branch_name !== (emp.branch_name || '') ||
-    form.gender !== (emp.gender || '') ||
+    form.branch_unit !== (emp.branch_unit || '') ||
     String(form.job_title_id) !== String(emp.job_title_id || '')
   );
   useUnsavedChangesWarning(dirty);
 
   function startEditing() {
     if (!emp) return;
+    // The onboarding-fixed fields are deliberately absent: the server strips them from any
+    // update, so carrying them in the form would only invite them to be sent and dropped.
     setForm({
       first_name: emp.first_name,
       last_name: emp.last_name,
-      date_of_birth: emp.date_of_birth || '',
-      gender: emp.gender || '',
-      father_name: emp.father_name || '',
       reporting_manager_id: emp.reporting_manager_id || '',
       email: emp.email || '',
-      date_of_joining: emp.date_of_joining || '',
       phone: emp.phone || '',
       aadhaar_number: emp.aadhaar_number || '',
       dept_name: emp.dept_name || '',
       branch_name: emp.branch_name || '',
+      branch_unit: emp.branch_unit || '',
       job_title_id: emp.job_title_id || '',
       is_active: emp.is_active ? 1 : 0,
     });
@@ -156,8 +169,40 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   // silently drops a value the record already holds.
   const deptNames: string[] = departments.map((d: any) => d.name as string);
   const currentDept = (form.dept_name ?? '').trim();
-  if (currentDept && !deptNames.includes(currentDept)) deptNames.push(currentDept);
-  const deptOptions = deptNames.map((n) => ({ value: n, label: n }));
+  // Holidays are given department by department, so an off-catalog department is no longer
+  // merely untidy — it costs this person every holiday that is limited to particular
+  // departments, silently. Keep the value, label it, and say what it costs.
+  const deptOffCatalog = !!currentDept && !deptNames.includes(currentDept);
+  if (deptOffCatalog) deptNames.push(currentDept);
+  const deptOptions = deptNames.map((n) => ({
+    value: n,
+    label: deptOffCatalog && n === currentDept ? `${n} — not a department` : n,
+  }));
+  const deptHint = deptOffCatalog
+    ? `"${currentDept}" isn't in the department list. Until it's corrected, this employee won't see any holiday that's limited to particular departments.`
+    : !currentDept
+      ? "Without a department, this employee won't see any holiday that's limited to particular departments."
+      : undefined;
+
+  // Same treatment for branch, with one addition: a value that matches no property is kept but
+  // LABELLED, because it is not merely off-catalog — it is the state of an employee whose
+  // statutory rates are currently resolved from a fallback rather than from where they work.
+  const activeProps = (properties as any[]).filter((p) => p.is_active !== false);
+  const propNames: string[] = activeProps.map((p) => p.name as string);
+  const currentBranch = (form.branch_name ?? '').trim();
+  const branchOptions = propNames.map((n) => ({ value: n, label: n }));
+  if (currentBranch && !propNames.includes(currentBranch)) {
+    branchOptions.unshift({ value: currentBranch, label: `${currentBranch} — not a property` });
+  }
+
+  // Same off-catalog guard as the property picker: an existing value that is not yet in the list
+  // stays selectable, so turning this into a dropdown never blanks somebody's record.
+  const unitNames: string[] = (branches as any[]).filter((b) => b.is_active !== false).map((b) => b.name as string);
+  const currentUnit = (form.branch_unit ?? '').trim();
+  const unitOptions = [{ value: '', label: '—' }, ...unitNames.map((n) => ({ value: n, label: n }))];
+  if (currentUnit && !unitNames.includes(currentUnit)) {
+    unitOptions.splice(1, 0, { value: currentUnit, label: `${currentUnit} — not in the branch list` });
+  }
 
   return (
     <AppShell>
@@ -230,18 +275,25 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
             <div className="p-8 grid grid-cols-1 md:grid-cols-2 gap-6">
               <FormField label="First Name" value={form.first_name} onChange={(v) => setForm((p: any) => ({ ...p, first_name: v }))} />
               <FormField label="Last Name" value={form.last_name} onChange={(v) => setForm((p: any) => ({ ...p, last_name: v }))} />
-              <FormField label="Date of Birth" value={form.date_of_birth} onChange={(v) => setForm((p: any) => ({ ...p, date_of_birth: v }))} type="date" />
-              {/* Gender drives eligibility for gender-restricted leave (Maternity / Paternity). */}
-              <SelectField label="Gender" value={form.gender} onChange={(v) => setForm((p: any) => ({ ...p, gender: v }))} options={[{ value: 'male', label: 'Male' }, { value: 'female', label: 'Female' }, { value: 'other', label: 'Other' }]} />
-              <FormField label="Father's Name (As per UID)" value={form.father_name} onChange={(v) => setForm((p: any) => ({ ...p, father_name: v }))} />
+              {/* Fixed at onboarding — see FIXED_AT_ONBOARDING in employee.service.ts. These come
+                  off the UID/PAN card and are verified once; editing them later would leave the
+                  record no longer matching the document it was checked against. Date of joining
+                  is set by the hire at the end of recruitment, and moving it would shift payable
+                  days and leave accrual. The server drops them on save, so these are shown
+                  read-only rather than left editable and silently ignored. */}
+              <ReadOnlyField label="Date of Birth (As per UID)" value={fmtDate(emp.date_of_birth)} />
+              <ReadOnlyField label="Gender" value={emp.gender ? emp.gender[0].toUpperCase() + emp.gender.slice(1) : ''} />
+              <ReadOnlyField label="Father's Name (As per UID)" value={emp.father_name} />
+              <ReadOnlyField label="PAN Card No" value={emp.pan_number} />
+              <ReadOnlyField label="Date of Joining" value={fmtDate(emp.date_of_joining)} hint="Set when the hire is completed in Recruitment" />
               <SelectField label="Reporting Manager" value={form.reporting_manager_id} onChange={(v) => setForm((p: any) => ({ ...p, reporting_manager_id: v ? Number(v) : null }))} options={managers.filter((m: any) => m.id !== Number(id)).map((m: any) => ({ value: m.id, label: `${m.first_name} ${m.last_name}` }))} />
               <FormField label="Email Address" value={form.email} onChange={(v) => setForm((p: any) => ({ ...p, email: v }))} type="email" />
-              <FormField label="Date of Joining" value={form.date_of_joining} onChange={(v) => setForm((p: any) => ({ ...p, date_of_joining: v }))} type="date" />
               <FormField label="Phone Number" value={form.phone} onChange={(v) => setForm((p: any) => ({ ...p, phone: v }))} />
               <FormField label="Aadhaar Card No" value={form.aadhaar_number} onChange={(v) => setForm((p: any) => ({ ...p, aadhaar_number: v.replace(/\D/g, '') }))} maxLength={12} />
-              <SelectField label="Dept Name" value={form.dept_name} onChange={(v) => setForm((p: any) => ({ ...p, dept_name: v }))} options={deptOptions} />
+              <SelectField label="Dept Name" value={form.dept_name} onChange={(v) => setForm((p: any) => ({ ...p, dept_name: v }))} options={deptOptions} hint={deptHint} />
               <SelectField label="Designation Name" value={form.job_title_id} onChange={(v) => setForm((p: any) => ({ ...p, job_title_id: v ? Number(v) : null }))} options={jobTitles.map((j: any) => ({ value: j.id, label: j.title || j.name }))} />
-              <FormField label="Branch Name" value={form.branch_name} onChange={(v) => setForm((p: any) => ({ ...p, branch_name: v }))} />
+              <SelectField label="Property Name" value={form.branch_name} onChange={(v) => setForm((p: any) => ({ ...p, branch_name: v }))} options={branchOptions} />
+              <SelectField label="Branch Name" value={form.branch_unit} onChange={(v) => setForm((p: any) => ({ ...p, branch_unit: v }))} options={unitOptions} />
               {canEditStatus && (
                 <SelectField label="Status" value={form.is_active} onChange={(v) => setForm((p: any) => ({ ...p, is_active: Number(v) }))} options={[{ value: 1, label: 'Active' }, { value: 0, label: 'Inactive' }]} />
               )}
@@ -258,9 +310,14 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
               <InfoRow icon={Calendar} label="Date of Joining" value={emp.date_of_joining ? new Date(emp.date_of_joining).toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' }) : 'N/A'} />
               <InfoRow icon={Phone} label="Phone Number" value={emp.phone || 'Not set'} />
               <InfoRow icon={Shield} label="Aadhaar Card No" value={emp.aadhaar_number ? maskValue(emp.aadhaar_number, 4) : 'Not set'} />
+              {/* HR's own copy, captured with the identity documents. Finance keeps a separate
+                  PAN on the bank-details record, and that is the one payroll and TDS use — the
+                  two are not synchronised, so they can disagree. */}
+              <InfoRow icon={Shield} label="PAN Card No" value={emp.pan_number ? maskValue(emp.pan_number, 4) : 'Not set'} />
               <InfoRow icon={Briefcase} label="Dept Name" value={emp.dept_name || 'N/A'} />
               <InfoRow icon={Briefcase} label="Designation Name" value={emp.designation_name || 'N/A'} />
-              <InfoRow icon={Briefcase} label="Branch Name" value={emp.branch_name || 'N/A'} />
+              <InfoRow icon={Briefcase} label="Property Name" value={emp.branch_name || 'N/A'} />
+              <InfoRow icon={Briefcase} label="Branch Name" value={emp.branch_unit || 'N/A'} />
               {/* Derived from the property, never stored on the employee — it decides
                   Professional Tax, LWF, minimum wage and per-state holidays. Change it
                   via the property in Admin → Organization. */}
@@ -308,6 +365,33 @@ function InfoRow({ icon: Icon, label, value }: { icon: React.ElementType; label:
   );
 }
 
+/** A date the way the rest of the page shows them, or an em dash when there isn't one. */
+function fmtDate(v?: string | null) {
+  if (!v) return '';
+  return new Date(v).toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+/**
+ * A field shown inside the edit form that cannot be edited.
+ *
+ * Deliberately not a disabled <input>: a greyed-out box invites people to click it and wonder
+ * why nothing happens. This reads as a stated fact, with a note saying where it comes from.
+ */
+function ReadOnlyField({ label, value, hint }: { label: string; value?: string | null; hint?: string }) {
+  return (
+    <div>
+      <label className="block text-sm font-medium text-foreground mb-1.5">
+        {label}
+        <span className="ml-2 text-xs font-normal text-secondary">· not editable</span>
+      </label>
+      <div className="w-full px-3 py-2.5 border border-border border-dashed rounded-lg bg-muted/40 text-sm text-secondary">
+        {value || 'Not set'}
+      </div>
+      {hint && <p className="mt-1 text-xs text-secondary">{hint}</p>}
+    </div>
+  );
+}
+
 function FormField({ label, value, onChange, type = 'text', maxLength }: {
   label: string; value: string; onChange: (v: string) => void; type?: string; maxLength?: number;
 }) {
@@ -325,9 +409,11 @@ function FormField({ label, value, onChange, type = 'text', maxLength }: {
   );
 }
 
-function SelectField({ label, value, onChange, options }: {
+function SelectField({ label, value, onChange, options, hint }: {
   label: string; value: string | number; onChange: (v: string) => void;
   options: { value: number | string; label: string }[];
+  /** Shown in amber under the field. For a value that saves fine but costs the employee something. */
+  hint?: string;
 }) {
   return (
     <div>
@@ -342,6 +428,7 @@ function SelectField({ label, value, onChange, options }: {
           <option key={o.value} value={o.value}>{o.label}</option>
         ))}
       </select>
+      {hint && <p className="mt-1 text-xs text-amber-700">{hint}</p>}
     </div>
   );
 }

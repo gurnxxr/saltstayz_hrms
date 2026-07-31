@@ -86,6 +86,9 @@ export default function RecruitmentPage() {
     },
     onSuccess: (data) => {
       setUploadResult(data);
+      // Refresh every view that reads candidates for this vacancy — the board, the stat
+      // cards, All Candidates, the per-vacancy applicants tables, the vacancy header, and
+      // the by-stage counts — so uploaded rows show up without a hard reload.
       CANDIDATE_QUERY_KEYS.forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
       toast.success(`${data.created} candidate(s) added to Shortlisting${data.skipped ? `, ${data.skipped} skipped` : ''}`);
     },
@@ -171,7 +174,7 @@ export default function RecruitmentPage() {
       <div className="space-y-4">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
-            <h1 className="text-2xl font-bold text-foreground">Recruitment Pipeline</h1>
+            <h1 className="text-2xl font-bold text-foreground">Candidates</h1>
             <p className="text-secondary mt-1">Every applicant, by stage — click a card to open the candidate.</p>
           </div>
           <div className="flex gap-3">
@@ -316,6 +319,7 @@ export default function RecruitmentPage() {
           </div>
         </div>
       )}
+
     </AppShell>
   );
 }

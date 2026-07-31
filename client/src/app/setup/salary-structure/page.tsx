@@ -10,158 +10,31 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { formatINR } from '@/lib/utils';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { LinesEditor, LineDraft, toLineDrafts, linesPayload } from '@/components/salary/LinesEditor';
-import Pagination, { pageSlice } from '@/components/ui/Pagination';
-import { Search, Layers, Loader2, Save, Plus, Trash2, IndianRupee, Users, RotateCcw, UserCog, Wallet, Download } from 'lucide-react';
-
-const CTC_PAGE_SIZE = 25;
-
-// Operating cities/states — resolve to a statutory state on the server.
-const CITIES = ['Haryana', 'Gurugram', 'Faridabad', 'Delhi', 'Noida', 'Greater Noida', 'Uttar Pradesh', 'Chandigarh', 'Dehradun', 'Uttarakhand'];
+import { Search, Layers, Building2, Loader2, Save, Plus, Trash2, IndianRupee, Users, RotateCcw, UserCog } from 'lucide-react';
 
 const inputCls = 'w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50';
 
 export default function SalaryStructurePage() {
-  const [tab, setTab] = useState<'employee' | 'register' | 'templates'>('employee');
+  const [tab, setTab] = useState<'employee' | 'designation' | 'department'>('employee');
   return (
     <AppShell>
       <div className="space-y-6">
         <div>
           <Breadcrumb className="mb-2" items={[{ label: 'Payroll' }, { label: 'Salary Structures' }]} />
           <h1 className="text-2xl font-bold text-foreground">Salary Structures</h1>
-          <p className="text-secondary mt-1">Configure each employee&apos;s own salary structure. Templates are the per-designation defaults that seed new hires and power recruitment offers.</p>
         </div>
 
         <div className="flex gap-1 border-b border-border">
-          <TabBtn active={tab === 'employee'} onClick={() => setTab('employee')} icon={Users} label="By Employee" />
-          <TabBtn active={tab === 'register'} onClick={() => setTab('register')} icon={Wallet} label="CTC Register" />
-          <TabBtn active={tab === 'templates'} onClick={() => setTab('templates')} icon={Layers} label="Templates" />
+          <TabBtn active={tab === 'employee'} onClick={() => setTab('employee')} icon={Users} label="Employees" />
+          <TabBtn active={tab === 'designation'} onClick={() => setTab('designation')} icon={Layers} label="Designation" />
+          <TabBtn active={tab === 'department'} onClick={() => setTab('department')} icon={Building2} label="Departments" />
         </div>
 
-        {tab === 'employee' ? <EmployeesPanel /> : tab === 'register' ? <CtcRegisterPanel /> : <TemplatesPanel />}
+        {tab === 'employee'
+          ? <EmployeesPanel />
+          : <TemplatesPanel key={tab} scope={tab} />}
       </div>
     </AppShell>
-  );
-}
-
-// ─────────────────────────────── CTC Register ───────────────────────────────
-
-function CtcRegisterPanel() {
-  const [search, setSearch] = useState('');
-  const [branch, setBranch] = useState('');
-  const [page, setPage] = useState(1);
-
-  const { data, isLoading, isError } = useQuery({
-    queryKey: ['ctc-register'],
-    queryFn: () => api.get('/admin/employee-salary-register').then(r => r.data),
-  });
-  const rows: any[] = data?.rows ?? [];
-
-  const branches = useMemo(() => [...new Set(rows.map((r) => r.branch_name).filter(Boolean))].sort(), [rows]);
-  const filtered = useMemo(() => {
-    const q = search.toLowerCase();
-    return rows.filter((r) => (!branch || r.branch_name === branch)
-      && (!q || `${r.first_name} ${r.last_name}`.toLowerCase().includes(q)
-        || r.employee_code?.toLowerCase().includes(q) || r.designation?.toLowerCase().includes(q)));
-  }, [rows, search, branch]);
-
-  const totals = useMemo(() => filtered.reduce((a, r) => ({
-    gross: a.gross + (Number(r.gross) || 0), net: a.net + (Number(r.net) || 0),
-    ctc: a.ctc + (Number(r.ctc) || 0), configured: a.configured + (r.gross != null ? 1 : 0),
-  }), { gross: 0, net: 0, ctc: 0, configured: 0 }), [filtered]);
-
-  // Reset to page 1 whenever the filters narrow the set.
-  useEffect(() => { setPage(1); }, [search, branch]);
-  // Clamp: if the filtered set shrinks past the current page, fall back to the last valid page.
-  const pageCount = Math.max(1, Math.ceil(filtered.length / CTC_PAGE_SIZE));
-  const safePage = Math.min(page, pageCount);
-  const paged = pageSlice(filtered, safePage, CTC_PAGE_SIZE);
-
-  const exportCsv = () => {
-    const head = ['Employee Code', 'Name', 'Designation', 'Property', 'Salary/Month', 'Net/Month', 'CTC/Month'];
-    const lines = [head.join(',')];
-    for (const r of filtered) {
-      lines.push([r.employee_code, `${r.first_name} ${r.last_name}`, r.designation ?? '', r.branch_name ?? '',
-        r.gross ?? '', r.net ?? '', r.ctc ?? ''].map((v) => {
-        const s = v == null ? '' : String(v);
-        return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-      }).join(','));
-    }
-    const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'CTC_Register.csv';
-    a.click();
-    URL.revokeObjectURL(a.href);
-  };
-
-  return (
-    <div className="bg-card rounded-xl border border-border overflow-hidden">
-      <div className="p-4 border-b border-border flex flex-wrap items-center gap-3">
-        <div className="relative flex-1 min-w-[220px]">
-          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-secondary" />
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search employee, code, designation..."
-            className="w-full pl-9 pr-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
-        </div>
-        <select value={branch} onChange={(e) => setBranch(e.target.value)}
-          className="px-3 py-2 border border-border rounded-lg bg-background text-sm">
-          <option value="">All properties</option>
-          {branches.map((b) => <option key={b} value={b}>{b}</option>)}
-        </select>
-        <button onClick={exportCsv} disabled={!filtered.length}
-          className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50">
-          <Download size={14} /> Export CSV
-        </button>
-      </div>
-
-      {/* Company totals */}
-      <div className="px-6 py-3 border-b border-border bg-muted/30 flex flex-wrap gap-x-8 gap-y-1 text-sm">
-        <span className="text-secondary">Employees <span className="font-semibold text-foreground">{totals.configured}</span></span>
-        <span className="text-secondary">Monthly salary bill (gross) <span className="font-semibold text-foreground">{formatINR(totals.gross)}</span></span>
-        <span className="text-secondary">Net <span className="font-semibold text-foreground">{formatINR(totals.net)}</span></span>
-        <span className="text-secondary">CTC <span className="font-semibold text-foreground">{formatINR(totals.ctc)}</span></span>
-      </div>
-
-      <div className="overflow-x-auto max-h-[560px] overflow-y-auto">
-        <table className="w-full text-sm">
-          <thead className="sticky top-0 bg-card">
-            <tr className="border-b border-border text-left text-secondary">
-              <th className="px-4 py-2.5 font-medium">Employee</th>
-              <th className="px-4 py-2.5 font-medium">Property</th>
-              <th className="px-3 py-2.5 font-medium text-right">Salary/Month</th>
-              <th className="px-3 py-2.5 font-medium text-right">Net/Month</th>
-              <th className="px-3 py-2.5 font-medium text-right">CTC/Month</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border">
-            {isLoading ? (
-              <tr><td colSpan={5} className="px-4 py-10 text-center text-secondary">Computing salaries…</td></tr>
-            ) : isError ? (
-              <tr><td colSpan={5} className="px-4 py-10 text-center text-red-600">Couldn&apos;t load the register.</td></tr>
-            ) : paged.map((r) => (
-              <tr key={r.employee_id} className="hover:bg-muted/20">
-                <td className="px-4 py-2">
-                  <p className="font-medium text-foreground">{r.first_name} {r.last_name}</p>
-                  <p className="text-xs text-secondary">{r.employee_code} · {r.designation || '—'}</p>
-                </td>
-                <td className="px-4 py-2 text-secondary">{r.branch_name || '—'}</td>
-                <td className="px-3 py-2 text-right text-foreground">{r.gross != null ? formatINR(r.gross) : <span className="text-amber-600 text-xs">Not set</span>}</td>
-                <td className="px-3 py-2 text-right text-foreground">{r.net != null ? formatINR(r.net) : '—'}</td>
-                <td className="px-3 py-2 text-right font-medium text-foreground">{r.ctc != null ? formatINR(r.ctc) : '—'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <Pagination
-        total={filtered.length}
-        page={safePage}
-        pageSize={CTC_PAGE_SIZE}
-        shown={paged.length}
-        onPageChange={setPage}
-        itemLabel="employees"
-      />
-    </div>
   );
 }
 
@@ -276,7 +149,7 @@ function EmployeesPanel() {
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium text-foreground truncate flex-1">{r.first_name} {r.last_name}</span>
                 {r.configured
-                  ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-700">{formatINR(Number(r.base) || 0)}</span>
+                  ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-700">Configured</span>
                   : <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">Not set</span>}
               </div>
               <p className="text-[11px] text-secondary mt-0.5">{r.employee_code} · {r.designation || 'No designation'}</p>
@@ -370,15 +243,46 @@ function EmployeesPanel() {
 // ─────────────────────────────── Templates ───────────────────────────────
 
 interface TemplateForm {
-  name: string; job_title_id: string; payment_basis: string;
+  name: string; scope_id: string; payment_basis: string;
   default_base: string; city: string; is_active: boolean; lines: LineDraft[];
 }
 const emptyTemplate = (): TemplateForm => ({
-  name: '', job_title_id: '', payment_basis: 'monthly', default_base: '', city: 'Haryana', is_active: true,
+  name: '', scope_id: '', payment_basis: 'monthly', default_base: '', city: 'Haryana', is_active: true,
   lines: [{ component_id: '', calculation_type: 'pct_of_base', value: '50' }],
 });
 
-function TemplatesPanel() {
+// TemplatesPanel serves two scopes with the same editor: a Designation template is
+// keyed to a job title (optional — a blank one is a generic template), a Department
+// template to a department (required). Everything that differs — which list to load,
+// which dropdown to show, which id field to send — lives here.
+type TemplateScope = 'designation' | 'department';
+const TEMPLATE_SCOPES: Record<TemplateScope, {
+  listKey: readonly string[]; listUrl: string;
+  optionsKey: readonly string[]; optionsUrl: string; optionLabel: (o: any) => string;
+  payloadField: 'job_title_id' | 'department_id'; rowIdField: 'job_title_id' | 'department_id';
+  rowLabel: (s: any) => string; scopeInputLabel: string; scopeRequired: boolean;
+  nonePlaceholder: string; newLabel: string; emptyHint: string;
+}> = {
+  designation: {
+    listKey: ['salary-structures', 'designation'], listUrl: '/admin/salary-structures',
+    optionsKey: ['job-titles'], optionsUrl: '/admin/job-titles', optionLabel: (o) => o.title,
+    payloadField: 'job_title_id', rowIdField: 'job_title_id',
+    rowLabel: (s) => s.designation || 'No designation',
+    scopeInputLabel: 'Designation (optional)', scopeRequired: false, nonePlaceholder: '— None —',
+    newLabel: 'New Template', emptyHint: 'Select a template, or create one for a designation',
+  },
+  department: {
+    listKey: ['salary-structures', 'department'], listUrl: '/admin/salary-structures?scope=department',
+    optionsKey: ['departments'], optionsUrl: '/admin/departments', optionLabel: (o) => o.name,
+    payloadField: 'department_id', rowIdField: 'department_id',
+    rowLabel: (s) => s.department_name || 'No department',
+    scopeInputLabel: 'Department', scopeRequired: true, nonePlaceholder: '— Select a department —',
+    newLabel: 'New Department Template', emptyHint: 'Select a template, or create one for a department',
+  },
+};
+
+function TemplatesPanel({ scope }: { scope: TemplateScope }) {
+  const cfg = TEMPLATE_SCOPES[scope];
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [selectedId, setSelectedId] = useState<number | 'new' | null>(null);
@@ -386,17 +290,24 @@ function TemplatesPanel() {
   const [confirmDel, setConfirmDel] = useState<any | null>(null);
 
   const { data: list = [], isLoading } = useQuery({
-    queryKey: ['salary-structures'],
-    queryFn: () => api.get('/admin/salary-structures').then(r => r.data),
+    queryKey: cfg.listKey,
+    queryFn: () => api.get(cfg.listUrl).then(r => r.data),
   });
   const { data: components = [] } = useQuery({
     queryKey: ['structure-components'],
     queryFn: () => api.get('/admin/salary-structures/components').then(r => r.data),
   });
-  const { data: jobTitles = [] } = useQuery({
-    queryKey: ['job-titles'],
-    queryFn: () => api.get('/admin/job-titles').then(r => r.data),
+  const { data: scopeOptions = [] } = useQuery({
+    queryKey: cfg.optionsKey,
+    queryFn: () => api.get(cfg.optionsUrl).then(r => r.data),
   });
+  // Data-derived operating states (properties + configured statutory rows). The
+  // preview's rates are keyed by STATE, so the picker lists states, not cities.
+  const { data: operatingStates = [] } = useQuery<string[]>({
+    queryKey: ['operating-states'],
+    queryFn: () => api.get('/statutory/states').then(r => r.data),
+  });
+  const stateOptions = operatingStates.length ? operatingStates : ['Haryana'];
 
   const selected = useMemo(
     () => (typeof selectedId === 'number' ? list.find((x: any) => x.id === selectedId) : null),
@@ -408,7 +319,7 @@ function TemplatesPanel() {
     if (selected) {
       setForm({
         name: selected.name ?? '',
-        job_title_id: selected.job_title_id != null ? String(selected.job_title_id) : '',
+        scope_id: selected[cfg.rowIdField] != null ? String(selected[cfg.rowIdField]) : '',
         payment_basis: selected.payment_basis ?? 'monthly',
         default_base: String(selected.default_base ?? ''),
         city: selected.city ?? 'Haryana',
@@ -426,7 +337,7 @@ function TemplatesPanel() {
 
   const payload = () => ({
     name: form.name.trim(),
-    job_title_id: form.job_title_id ? Number(form.job_title_id) : null,
+    [cfg.payloadField]: form.scope_id ? Number(form.scope_id) : null,
     payment_basis: form.payment_basis,
     default_base: Number(form.default_base) || 0,
     city: form.city,
@@ -447,7 +358,7 @@ function TemplatesPanel() {
       ? api.post('/admin/salary-structures', payload())
       : api.put(`/admin/salary-structures/${selectedId}`, payload())),
     onSuccess: (res) => {
-      queryClient.invalidateQueries({ queryKey: ['salary-structures'] });
+      queryClient.invalidateQueries({ queryKey: ['salary-structures'] }); // prefix-matches both scopes
       toast.success(selectedId === 'new' ? 'Template created' : 'Template saved');
       if (selectedId === 'new' && res.data?.id) setSelectedId(res.data.id);
     },
@@ -467,7 +378,8 @@ function TemplatesPanel() {
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    return list.filter((x: any) => !q || x.name?.toLowerCase().includes(q) || x.designation?.toLowerCase().includes(q));
+    return list.filter((x: any) => !q || x.name?.toLowerCase().includes(q)
+      || x.designation?.toLowerCase().includes(q) || x.department_name?.toLowerCase().includes(q));
   }, [list, search]);
 
   return (
@@ -477,7 +389,7 @@ function TemplatesPanel() {
         <div className="p-3 border-b border-border space-y-2">
           <button onClick={() => setSelectedId('new')}
             className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors">
-            <Plus size={15} /> New Template
+            <Plus size={15} /> {cfg.newLabel}
           </button>
           <div className="relative">
             <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-secondary" />
@@ -497,7 +409,7 @@ function TemplatesPanel() {
                 {!s.is_active && <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-secondary">Inactive</span>}
               </div>
               <p className="text-[11px] text-secondary mt-0.5 ml-6">
-                {s.designation || 'No designation'} · CTC {formatINR(s.breakdown?.ctc ?? 0)}/mo
+                {cfg.rowLabel(s)} · CTC {formatINR(s.breakdown?.ctc ?? 0)}/mo
               </p>
             </button>
           ))}
@@ -508,14 +420,14 @@ function TemplatesPanel() {
       {selectedId === null ? (
         <div className="bg-card rounded-xl border border-border flex flex-col items-center justify-center py-20 text-secondary">
           <IndianRupee size={40} className="opacity-30 mb-3" />
-          <p className="text-sm">Select a template, or create one for a designation</p>
+          <p className="text-sm">{cfg.emptyHint}</p>
         </div>
       ) : (
         <div className="space-y-5">
           <div className="bg-card rounded-xl border border-border p-5">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-foreground">
-                {selectedId === 'new' ? 'New Template' : `Edit — ${selected?.name ?? ''}`}
+                {selectedId === 'new' ? cfg.newLabel : `Edit — ${selected?.name ?? ''}`}
               </h2>
               <div className="flex items-center gap-2">
                 {typeof selectedId === 'number' && (
@@ -524,7 +436,7 @@ function TemplatesPanel() {
                     <Trash2 size={16} />
                   </button>
                 )}
-                <button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || !form.name || !form.default_base}
+                <button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || !form.name || !form.default_base || (cfg.scopeRequired && !form.scope_id)}
                   className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors">
                   {saveMutation.isPending ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />} Save
                 </button>
@@ -537,10 +449,12 @@ function TemplatesPanel() {
                 <input className={inputCls} value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="e.g. F&B Service Staff" />
               </div>
               <div>
-                <label className="block text-xs font-medium text-secondary mb-1">Designation (optional)</label>
-                <select className={inputCls} value={form.job_title_id} onChange={(e) => set('job_title_id', e.target.value)}>
-                  <option value="">— None —</option>
-                  {jobTitles.map((jt: any) => <option key={jt.id} value={jt.id}>{jt.title}</option>)}
+                <label className="block text-xs font-medium text-secondary mb-1">
+                  {cfg.scopeInputLabel}{cfg.scopeRequired && <span className="text-red-600"> *</span>}
+                </label>
+                <select className={inputCls} value={form.scope_id} onChange={(e) => set('scope_id', e.target.value)}>
+                  <option value="">{cfg.nonePlaceholder}</option>
+                  {scopeOptions.map((o: any) => <option key={o.id} value={o.id}>{cfg.optionLabel(o)}</option>)}
                 </select>
               </div>
               <div>
@@ -557,9 +471,9 @@ function TemplatesPanel() {
               <div>
                 <label className="block text-xs font-medium text-secondary mb-1">Preview state (statutory)</label>
                 <select className={inputCls} value={form.city} onChange={(e) => set('city', e.target.value)}
-                  title="Used only for this template's preview — employees' payslips use their property's state">
-                  {!CITIES.includes(form.city) && form.city && <option value={form.city}>{form.city}</option>}
-                  {CITIES.map(c => <option key={c} value={c}>{c}</option>)}
+                  title="Which state's statutory rates to preview against — employees' payslips use their own property's state">
+                  {!stateOptions.includes(form.city) && form.city && <option value={form.city}>{form.city}</option>}
+                  {stateOptions.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
               </div>
               <label className="flex items-center gap-2 mt-5 cursor-pointer select-none">
@@ -579,7 +493,7 @@ function TemplatesPanel() {
       <ConfirmDialog
         open={!!confirmDel}
         title="Delete template?"
-        message={confirmDel ? <>This permanently removes <span className="font-medium text-foreground">{confirmDel.name}</span>. New hires for its designation will no longer be seeded from it.</> : undefined}
+        message={confirmDel ? <>This permanently removes <span className="font-medium text-foreground">{confirmDel.name}</span>.{scope === 'designation' ? ' New hires for its designation will no longer be seeded from it.' : ''}</> : undefined}
         confirmLabel="Delete"
         loading={deleteMutation.isPending}
         onConfirm={() => confirmDel && deleteMutation.mutate(confirmDel.id)}

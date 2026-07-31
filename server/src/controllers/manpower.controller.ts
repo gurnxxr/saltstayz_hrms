@@ -43,9 +43,6 @@ export async function setSanctionLock(req: AuthRequest, res: Response, next: Nex
   try { res.json(await svc.setSanctionLock(Number(req.params.id), !!req.body.locked, req.user!)); } catch (err) { next(err); }
 }
 
-export async function upsertSanctionBand(req: AuthRequest, res: Response, next: NextFunction) {
-  try { res.json(await svc.upsertSanctionBand(Number(req.body.property_id), Number(req.body.job_title_id), req.body.band_min, req.body.band_max, req.user!)); } catch (err) { next(err); }
-}
 
 // ─── Property-level budgets ───
 
@@ -57,6 +54,14 @@ export async function listPropertyBudgets(req: AuthRequest, res: Response, next:
 
 export async function upsertPropertyBudget(req: AuthRequest, res: Response, next: NextFunction) {
   try { res.json(await svc.upsertPropertyBudget(Number(req.params.id), req.body, req.user!)); } catch (err) { next(err); }
+}
+
+export async function unassignedCommitment(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await svc.unassignedCommitment(req.user!)); } catch (err) { next(err); }
+}
+
+export async function propertyCommittedBreakdown(req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await svc.propertyCommittedBreakdown(Number(req.params.id), req.user!)); } catch (err) { next(err); }
 }
 
 // ─── Admin property console ───

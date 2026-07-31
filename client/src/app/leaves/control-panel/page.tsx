@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
@@ -8,32 +8,52 @@ import api from '@/lib/api';
 import Breadcrumb from '@/components/ui/Breadcrumb';
 import LoadError from '@/components/ui/LoadError';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
-import { Plus, Pencil, X, Loader2, Save, CalendarRange, Trash2 } from 'lucide-react';
+import Pagination, { pageSlice } from '@/components/ui/Pagination';
+import { Plus, Pencil, X, Loader2, Save, CalendarRange, Trash2, Layers, Users, Tag, Search, Ban, Star, AlertTriangle } from 'lucide-react';
+import OffDayPicker, { type OffDay } from '@/components/shifts/OffDayPicker';
 
 const inputCls = 'w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50';
+const EMP_PAGE_SIZE = 20;
 
-// Leave-type form incl. the configurable policy rules (blank = no restriction).
+// Leave Types is a catalog: name, active flag, and which departments a type applies to.
+// Every per-type RULE (days, paid/unpaid, encashable, limits, clubbing) now lives on a
+// template row and is edited under the Templates tab — see the note in the editor below.
 const BLANK_LT_FORM = {
-  name: '', default_days: '', is_paid: true, is_encashable: false, is_active: true,
-  min_days_per_request: '', max_days_per_request: '', advance_notice_days: '', document_required_after_days: '',
-  half_day_allowed: true, after_probation_only: false, count_sandwich_days: false, eligibility: 'any',
-  cannot_club_with: [] as number[],
+  name: '', default_days: '', is_active: true,
   departments: [] as number[],
 };
 
 export default function LeaveControlPanelPage() {
+  const [tab, setTab] = useState<'templates' | 'employees' | 'types' | 'periods'>('templates');
   return (
     <AppShell>
       <div className="space-y-6">
         <div>
           <Breadcrumb className="mb-2" items={[{ label: 'Leaves' }, { label: 'Control Panel' }]} />
           <h1 className="text-2xl font-bold text-foreground">Leave Control Panel</h1>
-          <p className="text-secondary mt-1">Leave types and leave periods</p>
+          <p className="text-secondary mt-1">Build leave templates, assign them to employees, and manage the type catalog & periods.</p>
         </div>
-        <LeaveTypesCard />
-        <LeavePeriodsCard />
+        <div className="flex gap-1 border-b border-border flex-wrap">
+          <TabBtn active={tab === 'templates'} onClick={() => setTab('templates')} icon={Layers} label="Templates" />
+          <TabBtn active={tab === 'employees'} onClick={() => setTab('employees')} icon={Users} label="By Employee" />
+          <TabBtn active={tab === 'types'} onClick={() => setTab('types')} icon={Tag} label="Leave Types" />
+          <TabBtn active={tab === 'periods'} onClick={() => setTab('periods')} icon={CalendarRange} label="Leave Periods" />
+        </div>
+        {tab === 'templates' && <TemplatesPanel />}
+        {tab === 'employees' && <ByEmployeePanel />}
+        {tab === 'types' && <LeaveTypesCard />}
+        {tab === 'periods' && <LeavePeriodsCard />}
       </div>
     </AppShell>
+  );
+}
+
+function TabBtn({ active, onClick, icon: Icon, label }: { active: boolean; onClick: () => void; icon: React.ElementType; label: string }) {
+  return (
+    <button onClick={onClick}
+      className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${active ? 'border-primary text-primary' : 'border-transparent text-secondary hover:text-foreground'}`}>
+      <Icon size={15} /> {label}
+    </button>
   );
 }
 
@@ -57,14 +77,8 @@ function LeaveTypesCard() {
 
   const openNew = () => { setForm(BLANK_LT_FORM); setEditing('new'); };
   const openEdit = (t: any) => {
-    const num = (v: any) => (v != null ? String(v) : '');
     setForm({
-      name: t.name, default_days: String(t.default_days), is_paid: !!t.is_paid, is_encashable: !!t.is_encashable, is_active: !!t.is_active,
-      min_days_per_request: num(t.min_days_per_request), max_days_per_request: num(t.max_days_per_request),
-      advance_notice_days: num(t.advance_notice_days), document_required_after_days: num(t.document_required_after_days),
-      half_day_allowed: t.half_day_allowed !== false, after_probation_only: !!t.after_probation_only,
-      count_sandwich_days: !!t.count_sandwich_days, eligibility: t.eligibility || 'any',
-      cannot_club_with: Array.isArray(t.cannot_club_with) ? t.cannot_club_with : [],
+      name: t.name, default_days: String(t.default_days), is_active: !!t.is_active,
       departments: Array.isArray(t.departments) ? t.departments : [],
     });
     setEditing(t);
@@ -72,17 +86,12 @@ function LeaveTypesCard() {
 
   const saveMutation = useMutation({
     mutationFn: () => {
-      const payload = {
-        name: form.name.trim(), default_days: Number(form.default_days),
-        is_paid: form.is_paid, is_encashable: form.is_encashable, is_active: form.is_active,
-        // Policy rules (blank string → server stores null = no restriction).
-        min_days_per_request: form.min_days_per_request, max_days_per_request: form.max_days_per_request,
-        advance_notice_days: form.advance_notice_days, document_required_after_days: form.document_required_after_days,
-        half_day_allowed: form.half_day_allowed, after_probation_only: form.after_probation_only,
-        count_sandwich_days: form.count_sandwich_days, eligibility: form.eligibility,
-        cannot_club_with: form.cannot_club_with,
-        departments: form.departments, // empty = applies to every department
-      };
+      // Catalog fields only. On CREATE, default_days seeds the type's starting row on the
+      // Default template (server-side); rules are refined per template afterwards. On EDIT we
+      // send only what still takes effect live — name, active, and department applicability.
+      const payload = editing === 'new'
+        ? { name: form.name.trim(), default_days: Number(form.default_days), departments: form.departments }
+        : { name: form.name.trim(), is_active: form.is_active, departments: form.departments };
       return editing === 'new' ? api.post('/leave/types', payload) : api.put(`/leave/types/${(editing as any).id}`, payload);
     },
     onSuccess: () => {
@@ -122,9 +131,6 @@ function LeaveTypesCard() {
             <thead>
               <tr className="border-b border-border text-left text-secondary">
                 <th className="px-4 py-2.5 font-medium">Name</th>
-                <th className="px-3 py-2.5 font-medium text-right">Default Days/yr</th>
-                <th className="px-4 py-2.5 font-medium">Paid</th>
-                <th className="px-4 py-2.5 font-medium">Encashable</th>
                 <th className="px-4 py-2.5 font-medium">Status</th>
                 <th className="px-4 py-2.5 font-medium text-right"></th>
               </tr>
@@ -133,15 +139,6 @@ function LeaveTypesCard() {
               {types.map((t: any) => (
                 <tr key={t.id} className="hover:bg-muted/20">
                   <td className="px-4 py-2.5 font-medium text-foreground">{t.name}</td>
-                  <td className="px-3 py-2.5 text-right text-secondary">{t.default_days}</td>
-                  <td className="px-4 py-2.5">{t.is_paid
-                    ? <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">Paid</span>
-                    : <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">Unpaid (LOP)</span>}
-                  </td>
-                  <td className="px-4 py-2.5">{t.is_encashable
-                    ? <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">Yes</span>
-                    : <span className="text-xs text-secondary">—</span>}
-                  </td>
                   <td className="px-4 py-2.5">{t.is_active
                     ? <span className="text-xs text-green-700">Active</span>
                     : <span className="text-xs text-secondary">Inactive</span>}
@@ -176,109 +173,49 @@ function LeaveTypesCard() {
               </button>
             </div>
             <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
+              <div className="rounded-lg bg-blue-50 border border-blue-200 px-3 py-2 text-xs text-blue-800">
+                A leave type is just a name and where it applies. Paid/unpaid, encashable, per-request
+                limits and clubbing are set <span className="font-medium">per template</span> under the
+                Templates tab — so different employees can get different rules for the same type.
+              </div>
               <div>
                 <label className="block text-sm font-medium text-foreground mb-1">Name<span className="text-red-600"> *</span></label>
                 <input className={inputCls} value={form.name} onChange={(e) => setForm((p: any) => ({ ...p, name: e.target.value }))} placeholder="e.g. Casual Leave" />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-1">Default days per year<span className="text-red-600"> *</span></label>
-                <input type="number" min={0} className={inputCls} value={form.default_days}
-                  onChange={(e) => setForm((p: any) => ({ ...p, default_days: e.target.value }))} />
-              </div>
-              <label className="flex items-start gap-2.5 cursor-pointer">
-                <input type="checkbox" className="accent-primary w-4 h-4 mt-0.5" checked={form.is_paid}
-                  onChange={(e) => setForm((p: any) => ({ ...p, is_paid: e.target.checked }))} />
-                <span className="text-sm text-foreground">Paid leave <span className="block text-xs text-secondary">Unchecked = unpaid: approved days count as Loss of Pay in payroll.</span></span>
-              </label>
-              <label className="flex items-start gap-2.5 cursor-pointer">
-                <input type="checkbox" className="accent-primary w-4 h-4 mt-0.5" checked={form.is_encashable}
-                  onChange={(e) => setForm((p: any) => ({ ...p, is_encashable: e.target.checked }))} />
-                <span className="text-sm text-foreground">Encashable <span className="block text-xs text-secondary">Unused days can be encashed from Leaves → Encashment.</span></span>
-              </label>
+              {editing === 'new' && (
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-1">Starting days per year<span className="text-red-600"> *</span></label>
+                  <input type="number" min={0} className={inputCls} value={form.default_days}
+                    onChange={(e) => setForm((p: any) => ({ ...p, default_days: e.target.value }))} />
+                  <p className="text-xs text-secondary mt-1">Seeds this type on the Default template. Adjust it — and every other rule — under Templates.</p>
+                </div>
+              )}
               {editing !== 'new' && (
-                <label className="flex items-center gap-2.5 cursor-pointer">
-                  <input type="checkbox" className="accent-primary w-4 h-4" checked={form.is_active}
+                <label className="flex items-start gap-2.5 cursor-pointer">
+                  <input type="checkbox" className="accent-primary w-4 h-4 mt-0.5" checked={form.is_active}
                     onChange={(e) => setForm((p: any) => ({ ...p, is_active: e.target.checked }))} />
-                  <span className="text-sm text-foreground">Active</span>
+                  <span className="text-sm text-foreground">Active <span className="block text-xs text-secondary">Inactive types are hidden from balances and can&apos;t be applied for.</span></span>
                 </label>
               )}
-
-              {/* ── Policy rules (all optional; blank = no restriction) ── */}
-              <div className="pt-3 border-t border-border space-y-3">
-                <p className="text-xs font-semibold text-secondary uppercase">Policy — optional, blank = no limit</p>
-                <div className="grid grid-cols-2 gap-3">
-                  {([
-                    ['min_days_per_request', 'Min days / request'],
-                    ['max_days_per_request', 'Max days / request'],
-                    ['advance_notice_days', 'Advance notice (days)'],
-                    ['document_required_after_days', 'Document required after (days)'],
-                  ] as [string, string][]).map(([key, label]) => (
-                    <div key={key}>
-                      <label className="block text-xs font-medium text-secondary mb-1">{label}</label>
-                      <input type="number" min={0} className={inputCls} value={form[key]}
-                        onChange={(e) => setForm((p: any) => ({ ...p, [key]: e.target.value }))} />
-                    </div>
+              <div>
+                <label className="block text-xs font-medium text-secondary mb-1">Applies to departments</label>
+                <div className="border border-border rounded-lg p-2 max-h-32 overflow-y-auto space-y-0.5">
+                  {departments.length === 0 ? (
+                    <p className="text-xs text-secondary px-1 py-0.5">No departments configured.</p>
+                  ) : departments.map((d: any) => (
+                    <label key={d.id} className="flex items-center gap-2 px-1 py-0.5 cursor-pointer text-sm">
+                      <input type="checkbox" className="accent-primary w-4 h-4" checked={form.departments.includes(d.id)}
+                        onChange={(e) => setForm((p: any) => ({ ...p, departments: e.target.checked ? [...p.departments, d.id] : p.departments.filter((x: number) => x !== d.id) }))} />
+                      <span className="text-foreground">{d.name}</span>
+                    </label>
                   ))}
                 </div>
-                <div>
-                  <label className="block text-xs font-medium text-secondary mb-1">Who can take it</label>
-                  <select className={inputCls} value={form.eligibility} onChange={(e) => setForm((p: any) => ({ ...p, eligibility: e.target.value }))}>
-                    <option value="any">Anyone</option>
-                    <option value="female">Female only</option>
-                    <option value="male">Male only</option>
-                  </select>
-                </div>
-                <label className="flex items-center gap-2.5 cursor-pointer">
-                  <input type="checkbox" className="accent-primary w-4 h-4" checked={form.half_day_allowed}
-                    onChange={(e) => setForm((p: any) => ({ ...p, half_day_allowed: e.target.checked }))} />
-                  <span className="text-sm text-foreground">Half-day allowed</span>
-                </label>
-                <label className="flex items-center gap-2.5 cursor-pointer">
-                  <input type="checkbox" className="accent-primary w-4 h-4" checked={form.after_probation_only}
-                    onChange={(e) => setForm((p: any) => ({ ...p, after_probation_only: e.target.checked }))} />
-                  <span className="text-sm text-foreground">Only after probation ends</span>
-                </label>
-                <label className="flex items-start gap-2.5 cursor-pointer">
-                  <input type="checkbox" className="accent-primary w-4 h-4 mt-0.5" checked={form.count_sandwich_days}
-                    onChange={(e) => setForm((p: any) => ({ ...p, count_sandwich_days: e.target.checked }))} />
-                  <span className="text-sm text-foreground">Count holidays/weekly-offs in between (sandwich)
-                    <span className="block text-xs text-secondary">Off by default. On = off-days between leave dates also count as leave.</span></span>
-                </label>
-                <div>
-                  <label className="block text-xs font-medium text-secondary mb-1">Cannot be clubbed with</label>
-                  <div className="border border-border rounded-lg p-2 max-h-32 overflow-y-auto space-y-0.5">
-                    {types.filter((o: any) => editing === 'new' || o.id !== (editing as any).id).length === 0 ? (
-                      <p className="text-xs text-secondary px-1 py-0.5">No other leave types.</p>
-                    ) : types.filter((o: any) => editing === 'new' || o.id !== (editing as any).id).map((o: any) => (
-                      <label key={o.id} className="flex items-center gap-2 px-1 py-0.5 cursor-pointer text-sm">
-                        <input type="checkbox" className="accent-primary w-4 h-4" checked={form.cannot_club_with.includes(o.id)}
-                          onChange={(e) => setForm((p: any) => ({ ...p, cannot_club_with: e.target.checked ? [...p.cannot_club_with, o.id] : p.cannot_club_with.filter((x: number) => x !== o.id) }))} />
-                        <span className="text-foreground">{o.name}</span>
-                      </label>
-                    ))}
-                  </div>
-                  <p className="text-xs text-secondary mt-1">Symmetric — the other type will also block this one.</p>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-secondary mb-1">Applies to departments</label>
-                  <div className="border border-border rounded-lg p-2 max-h-32 overflow-y-auto space-y-0.5">
-                    {departments.length === 0 ? (
-                      <p className="text-xs text-secondary px-1 py-0.5">No departments configured.</p>
-                    ) : departments.map((d: any) => (
-                      <label key={d.id} className="flex items-center gap-2 px-1 py-0.5 cursor-pointer text-sm">
-                        <input type="checkbox" className="accent-primary w-4 h-4" checked={form.departments.includes(d.id)}
-                          onChange={(e) => setForm((p: any) => ({ ...p, departments: e.target.checked ? [...p.departments, d.id] : p.departments.filter((x: number) => x !== d.id) }))} />
-                        <span className="text-foreground">{d.name}</span>
-                      </label>
-                    ))}
-                  </div>
-                  <p className="text-xs text-secondary mt-1">Leave all unticked to make this type available to every department.</p>
-                </div>
+                <p className="text-xs text-secondary mt-1">Leave all unticked to make this type available to every department.</p>
               </div>
             </div>
             <div className="flex justify-end gap-2 px-5 py-4 border-t border-border">
               <button onClick={() => setEditing(null)} className="px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted transition-colors">Cancel</button>
-              <button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || !form.name.trim() || form.default_days === ''}
+              <button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || !form.name.trim() || (editing === 'new' && form.default_days === '')}
                 className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors">
                 {saveMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save
               </button>
@@ -409,6 +346,392 @@ function LeavePeriodsCard() {
         onConfirm={() => confirmCurrent && setCurrentMutation.mutate(confirmCurrent.id)}
         onCancel={() => setConfirmCurrent(null)}
       />
+    </div>
+  );
+}
+
+// ─── Templates ───
+
+interface TRow {
+  leave_type_id: number; leave_type_name: string;
+  default_days: number | string; is_paid: boolean; is_encashable: boolean;
+  min_days_per_request: number | string | null; max_days_per_request: number | string | null;
+  advance_notice_days: number | string | null; document_required_after_days: number | string | null;
+  half_day_allowed: boolean; after_probation_only: boolean; count_sandwich_days: boolean;
+  eligibility: string; cannot_club_with: number[];
+}
+type TForm = { name: string; is_active: boolean; rows: TRow[]; off_day_rules: OffDay[] };
+
+function TemplatesPanel() {
+  const queryClient = useQueryClient();
+  const [selectedId, setSelectedId] = useState<number | 'new' | null>(null);
+  const [form, setForm] = useState<TForm>({ name: '', is_active: true, rows: [], off_day_rules: [] });
+  const [confirmDel, setConfirmDel] = useState<any | null>(null);
+
+  const { data: templates = [], isLoading } = useQuery({
+    queryKey: ['leave-templates'], queryFn: () => api.get('/leave/templates').then(r => r.data),
+  });
+  const { data: leaveTypes = [] } = useQuery({
+    queryKey: ['leave-types-all'], queryFn: () => api.get('/leave/types/all').then(r => r.data),
+  });
+  const { data: detail } = useQuery({
+    queryKey: ['leave-template', selectedId],
+    queryFn: () => api.get(`/leave/templates/${selectedId}`).then(r => r.data),
+    enabled: typeof selectedId === 'number',
+  });
+
+  useEffect(() => {
+    if (selectedId === 'new') { setForm({ name: '', is_active: true, rows: [], off_day_rules: [] }); return; }
+    if (detail) setForm({
+      name: detail.name, is_active: detail.is_active, rows: detail.rows.map((r: any) => ({ ...r })),
+      off_day_rules: detail.off_day_rules ?? [],
+    });
+  }, [detail, selectedId]);
+
+  const selected = typeof selectedId === 'number' ? templates.find((t: any) => t.id === selectedId) : null;
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ['leave-templates'] });
+    queryClient.invalidateQueries({ queryKey: ['leave-template'] });
+    queryClient.invalidateQueries({ queryKey: ['leave-assignments'] });
+  };
+
+  const saveMutation = useMutation({
+    mutationFn: () => {
+      const norm = (v: any) => (v === '' || v === null || v === undefined ? null : Number(v));
+      const payload = {
+        name: form.name.trim(), is_active: form.is_active, off_day_rules: form.off_day_rules,
+        rows: form.rows.map((r) => ({
+          leave_type_id: r.leave_type_id, default_days: Number(r.default_days) || 0,
+          is_paid: r.is_paid, is_encashable: r.is_encashable,
+          min_days_per_request: norm(r.min_days_per_request), max_days_per_request: norm(r.max_days_per_request),
+          advance_notice_days: norm(r.advance_notice_days), document_required_after_days: norm(r.document_required_after_days),
+          half_day_allowed: r.half_day_allowed, after_probation_only: r.after_probation_only,
+          count_sandwich_days: r.count_sandwich_days, eligibility: r.eligibility, cannot_club_with: r.cannot_club_with,
+        })),
+      };
+      return selectedId === 'new' ? api.post('/leave/templates', payload) : api.put(`/leave/templates/${selectedId}`, payload);
+    },
+    onSuccess: (res) => { invalidate(); toast.success(selectedId === 'new' ? 'Template created' : 'Template saved'); if (selectedId === 'new' && res.data?.id) setSelectedId(res.data.id); },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to save'),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => api.delete(`/leave/templates/${id}`),
+    onSuccess: () => { invalidate(); toast.success('Template deleted'); setConfirmDel(null); setSelectedId(null); },
+    onError: (e: any) => { toast.error(e.response?.data?.error || 'Failed to delete'); setConfirmDel(null); },
+  });
+
+  const usedIds = new Set(form.rows.map((r) => r.leave_type_id));
+  const addableTypes = leaveTypes.filter((t: any) => t.is_active && !usedIds.has(t.id));
+  const addRow = (ltId: number) => {
+    const lt = leaveTypes.find((t: any) => t.id === ltId); if (!lt) return;
+    setForm((p) => ({ ...p, rows: [...p.rows, {
+      leave_type_id: lt.id, leave_type_name: lt.name, default_days: lt.default_days ?? 0, is_paid: !!lt.is_paid,
+      is_encashable: false, min_days_per_request: '', max_days_per_request: '', advance_notice_days: '',
+      document_required_after_days: '', half_day_allowed: true, after_probation_only: false, count_sandwich_days: false,
+      eligibility: lt.eligibility ?? 'any', cannot_club_with: [],
+    }] }));
+  };
+  const removeRow = (ltId: number) => setForm((p) => ({ ...p, rows: p.rows.filter((r) => r.leave_type_id !== ltId) }));
+  const setRow = (ltId: number, patch: Partial<TRow>) => setForm((p) => ({ ...p, rows: p.rows.map((r) => (r.leave_type_id === ltId ? { ...r, ...patch } : r)) }));
+  const canSave = !!form.name.trim() && form.rows.length > 0 && !saveMutation.isPending;
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-5 items-start">
+      <div className="bg-card rounded-xl border border-border overflow-hidden">
+        <div className="p-3 border-b border-border">
+          <button onClick={() => setSelectedId('new')} className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors">
+            <Plus size={15} /> New Template
+          </button>
+        </div>
+        <div className="max-h-[600px] overflow-y-auto divide-y divide-border">
+          {isLoading ? <div className="p-3 space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-11 bg-muted rounded animate-pulse" />)}</div>
+            : templates.map((t: any) => (
+              <button key={t.id} onClick={() => setSelectedId(t.id)} className={`w-full text-left px-4 py-2.5 transition-colors ${selectedId === t.id ? 'bg-primary/5' : 'hover:bg-muted/40'}`}>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-foreground truncate flex-1">{t.name}</span>
+                  {t.is_default && <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700"><Star size={10} /> Default</span>}
+                  {!t.is_active && <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-secondary">Inactive</span>}
+                </div>
+                <p className="text-[11px] text-secondary mt-0.5">{t.row_count} leave type{t.row_count === 1 ? '' : 's'} · {t.employee_count} employee{t.employee_count === 1 ? '' : 's'}</p>
+              </button>
+            ))}
+        </div>
+      </div>
+
+      {selectedId === null ? (
+        <div className="bg-card rounded-xl border border-border flex flex-col items-center justify-center py-20 text-secondary">
+          <Layers size={40} className="opacity-30 mb-3" />
+          <p className="text-sm">Select a template, or create one</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div className="bg-card rounded-xl border border-border p-5 space-y-4">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <h2 className="text-lg font-semibold text-foreground">
+                {selectedId === 'new' ? 'New Template' : `Edit — ${selected?.name ?? ''}`}
+                {selected?.is_default && <span className="ml-2 text-xs font-normal text-blue-700">(Default)</span>}
+              </h2>
+              <div className="flex items-center gap-2">
+                {typeof selectedId === 'number' && !selected?.is_default && (
+                  <button onClick={() => setConfirmDel(selected)} className="p-2 rounded-lg text-secondary hover:text-red-600 hover:bg-red-50 transition-colors" title="Delete"><Trash2 size={16} /></button>
+                )}
+                <button onClick={() => saveMutation.mutate()} disabled={!canSave} className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors">
+                  {saveMutation.isPending ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />} Save
+                </button>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-secondary mb-1">Template name<span className="text-red-600"> *</span></label>
+                <input className={inputCls} value={form.name} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} placeholder="e.g. Front Office Plan" />
+              </div>
+              <label className={`flex items-center gap-2 mt-6 select-none ${selected?.is_default ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>
+                <input type="checkbox" checked={selected?.is_default ? true : form.is_active} disabled={selected?.is_default}
+                  onChange={(e) => setForm((p) => ({ ...p, is_active: e.target.checked }))} className="h-4 w-4 rounded border-border text-primary focus:ring-2 focus:ring-primary/50" />
+                <span className="text-sm text-foreground">Active {selected?.is_default && <span className="text-xs text-secondary">(the Default plan is always active)</span>}</span>
+              </label>
+            </div>
+
+            {/* The work week. This is what decides whether a day was one the person was SCHEDULED
+                to work — and therefore whether an unevidenced day costs them anything. It lives on
+                the leave template because that is where the business decides it. */}
+            <div className="border-t border-border pt-4">
+              <label className="block text-xs font-medium text-secondary mb-1">Weekly off</label>
+              <p className="text-xs text-secondary mb-3">
+                The days employees on this plan are not scheduled to work. A missing punch on one of
+                these costs them nothing — they were never rostered. Leave it unset and they fall back
+                to the Default plan&apos;s week.
+              </p>
+              <OffDayPicker
+                value={form.off_day_rules}
+                onChange={(v) => setForm((p) => ({ ...p, off_day_rules: v }))}
+                emptyHint="No weekly off set — employees on this plan fall back to the Default plan, then the company work week."
+                preview
+              />
+            </div>
+          </div>
+
+          {form.rows.length === 0 ? (
+            <div className="bg-card rounded-xl border border-border p-6 text-center text-sm text-secondary">No leave types yet — add one below. A type left out means employees on this template don&apos;t get that leave.</div>
+          ) : form.rows.map((r) => (
+            <TemplateRowEditor key={r.leave_type_id} row={r} allRows={form.rows} onChange={(patch) => setRow(r.leave_type_id, patch)} onRemove={() => removeRow(r.leave_type_id)} />
+          ))}
+
+          {addableTypes.length > 0 && (
+            <div className="bg-card rounded-xl border border-dashed border-border p-4 flex items-center gap-3 flex-wrap">
+              <span className="text-sm text-secondary">Add leave type:</span>
+              <select className={`${inputCls} max-w-xs`} value="" onChange={(e) => { if (e.target.value) addRow(Number(e.target.value)); }}>
+                <option value="">Choose…</option>
+                {addableTypes.map((t: any) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            </div>
+          )}
+        </div>
+      )}
+
+      <ConfirmDialog open={!!confirmDel} title="Delete template?" danger confirmLabel="Delete"
+        message={confirmDel ? <>Permanently delete <span className="font-medium text-foreground">{confirmDel.name}</span>? Employees on it must be reassigned first.</> : undefined}
+        loading={deleteMutation.isPending} onConfirm={() => confirmDel && deleteMutation.mutate(confirmDel.id)} onCancel={() => setConfirmDel(null)} />
+    </div>
+  );
+}
+
+function TemplateRowEditor({ row, allRows, onChange, onRemove }: { row: TRow; allRows: TRow[]; onChange: (p: Partial<TRow>) => void; onRemove: () => void }) {
+  const others = allRows.filter((r) => r.leave_type_id !== row.leave_type_id);
+  const numField = (k: keyof TRow, label: string) => (
+    <div>
+      <label className="block text-xs font-medium text-secondary mb-1">{label}</label>
+      <input type="number" min={0} className={inputCls} value={(row[k] as any) ?? ''}
+        onChange={(e) => onChange({ [k]: e.target.value === '' ? '' : Number(e.target.value) } as any)} />
+    </div>
+  );
+  const chk = (k: keyof TRow, label: string) => (
+    <label className="flex items-center gap-2 cursor-pointer select-none">
+      <input type="checkbox" checked={!!row[k]} onChange={(e) => onChange({ [k]: e.target.checked } as any)} className="h-4 w-4 rounded border-border text-primary focus:ring-2 focus:ring-primary/50" />
+      <span className="text-sm text-foreground">{label}</span>
+    </label>
+  );
+  return (
+    <div className="bg-card rounded-xl border border-border p-5 space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-foreground flex items-center gap-2"><Tag size={14} className="text-primary" /> {row.leave_type_name}</h3>
+        <button onClick={onRemove} className="p-1.5 rounded-lg text-secondary hover:text-red-600 hover:bg-red-50 transition-colors" title="Remove from template"><X size={15} /></button>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        {numField('default_days', 'Days / year')}
+        {numField('min_days_per_request', 'Min / request')}
+        {numField('max_days_per_request', 'Max / request')}
+        {numField('advance_notice_days', 'Notice (days)')}
+        {numField('document_required_after_days', 'Document after (days)')}
+        <div>
+          <label className="block text-xs font-medium text-secondary mb-1">Eligibility</label>
+          <select className={inputCls} value={row.eligibility} onChange={(e) => onChange({ eligibility: e.target.value })}>
+            <option value="any">Anyone</option>
+            <option value="female">Female only</option>
+            <option value="male">Male only</option>
+          </select>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-x-6 gap-y-2">
+        {chk('is_paid', 'Paid')}
+        {chk('is_encashable', 'Encashable')}
+        {chk('half_day_allowed', 'Half-day allowed')}
+        {chk('after_probation_only', 'After probation only')}
+        {chk('count_sandwich_days', 'Count sandwich days')}
+      </div>
+      {others.length > 0 && (
+        <div>
+          <label className="block text-xs font-medium text-secondary mb-1">Cannot be clubbed with</label>
+          <div className="flex flex-wrap gap-2">
+            {others.map((o) => {
+              const on = row.cannot_club_with.includes(o.leave_type_id);
+              return (
+                <button key={o.leave_type_id} type="button"
+                  onClick={() => onChange({ cannot_club_with: on ? row.cannot_club_with.filter((x) => x !== o.leave_type_id) : [...row.cannot_club_with, o.leave_type_id] })}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors ${on ? 'border-amber-400 bg-amber-50 text-amber-700' : 'border-border text-secondary hover:bg-muted'}`}>
+                  {on && <Ban size={11} />} {o.leave_type_name}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── By Employee ───
+
+function ByEmployeePanel() {
+  const queryClient = useQueryClient();
+  const [search, setSearch] = useState('');
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [bulkTemplate, setBulkTemplate] = useState('');
+  const [page, setPage] = useState(1);
+
+  const { data: employees = [], isLoading } = useQuery({
+    queryKey: ['leave-assignments'], queryFn: () => api.get('/leave/templates/assignments').then(r => r.data),
+  });
+  const { data: templates = [] } = useQuery({
+    queryKey: ['leave-templates'], queryFn: () => api.get('/leave/templates').then(r => r.data),
+  });
+  const activeTemplates = templates.filter((t: any) => t.is_active);
+  // Reassigning changes each template's employee_count too, so refresh the Templates tab as well.
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ['leave-assignments'] });
+    queryClient.invalidateQueries({ queryKey: ['leave-templates'] });
+  };
+
+  const setOneMutation = useMutation({
+    mutationFn: ({ employeeId, templateId }: { employeeId: number; templateId: number }) => api.put(`/leave/employees/${employeeId}/template`, { template_id: templateId }),
+    onSuccess: () => { invalidate(); toast.success('Template updated'); },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to update'),
+  });
+  const bulkMutation = useMutation({
+    mutationFn: () => api.post('/leave/templates/assign', { employee_ids: [...selected], template_id: Number(bulkTemplate) }),
+    onSuccess: (res) => { invalidate(); toast.success(`${res.data.assigned} employee(s) reassigned`); setSelected(new Set()); setBulkTemplate(''); },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to assign'),
+  });
+
+  const filtered = employees.filter((e: any) => {
+    const q = search.toLowerCase();
+    return !q || `${e.first_name} ${e.last_name}`.toLowerCase().includes(q) || e.employee_code?.toLowerCase().includes(q) || e.designation?.toLowerCase().includes(q);
+  });
+
+  // Client-side pagination over the filtered rows. `paged` is what the table renders;
+  // `selected` persists across pages so a bulk reassignment can span several of them.
+  const totalPages = Math.max(1, Math.ceil(filtered.length / EMP_PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages); // clamp when the filtered set shrinks past the current page
+  const paged = pageSlice(filtered, currentPage, EMP_PAGE_SIZE);
+  useEffect(() => { setPage(1); }, [search]); // a new search starts at page 1
+
+  const toggle = (id: number) => setSelected((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  // Header checkbox acts on the current page only, matching what's on screen.
+  const allVisibleSelected = paged.length > 0 && paged.every((e: any) => selected.has(e.id));
+  const toggleAllVisible = (checked: boolean) => setSelected((p) => {
+    const n = new Set(p);
+    paged.forEach((e: any) => (checked ? n.add(e.id) : n.delete(e.id)));
+    return n;
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="relative flex-1 min-w-[220px]">
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-secondary" />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search employee, code, designation…"
+            className="w-full pl-9 pr-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+        </div>
+        {selected.size > 0 && (
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-secondary">{selected.size} selected →</span>
+            <select className="px-3 py-2 border border-border rounded-lg bg-background text-sm" value={bulkTemplate} onChange={(e) => setBulkTemplate(e.target.value)}>
+              <option value="">Assign to…</option>
+              {activeTemplates.map((t: any) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+            <button onClick={() => bulkMutation.mutate()} disabled={!bulkTemplate || bulkMutation.isPending} className="px-3 py-2 bg-primary text-white rounded-lg text-sm font-medium disabled:opacity-50">Apply</button>
+          </div>
+        )}
+      </div>
+      <div className="bg-card rounded-xl border border-border overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border bg-muted/40 text-left text-xs font-semibold text-secondary uppercase tracking-wide">
+                <th className="px-4 py-3 w-8"><input type="checkbox" checked={allVisibleSelected} onChange={(e) => toggleAllVisible(e.target.checked)} className="h-4 w-4 rounded border-border text-primary" /></th>
+                <th className="px-4 py-3">Employee</th>
+                <th className="px-4 py-3">Designation</th>
+                <th className="px-4 py-3">Property</th>
+                <th className="px-4 py-3">Leave template</th>
+                <th className="px-4 py-3">Weekly off</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {isLoading ? <tr><td colSpan={6} className="p-6 text-center text-secondary">Loading…</td></tr>
+                : filtered.length === 0 ? <tr><td colSpan={6} className="p-6 text-center text-secondary">No employees.</td></tr>
+                : paged.map((e: any) => (
+                  <tr key={e.id} className="hover:bg-muted/30">
+                    <td className="px-4 py-2.5"><input type="checkbox" checked={selected.has(e.id)} onChange={() => toggle(e.id)} className="h-4 w-4 rounded border-border text-primary" /></td>
+                    <td className="px-4 py-2.5"><span className="font-medium text-foreground">{e.first_name} {e.last_name}</span><span className="block text-[11px] text-secondary">{e.employee_code}</span></td>
+                    <td className="px-4 py-2.5 text-secondary">{e.designation || '—'}</td>
+                    <td className="px-4 py-2.5 text-secondary">{e.branch_name || '—'}</td>
+                    <td className="px-4 py-2.5">
+                      <select className="px-2.5 py-1.5 border border-border rounded-lg bg-background text-sm" value={e.leave_template_id ?? ''} disabled={setOneMutation.isPending}
+                        onChange={(ev) => setOneMutation.mutate({ employeeId: e.id, templateId: Number(ev.target.value) })}>
+                        {/* If they sit on a now-inactive template, keep it visible & selected so a stray
+                            pick can't silently move them — it just isn't offered to others. */}
+                        {e.leave_template_id != null && !activeTemplates.some((t: any) => t.id === e.leave_template_id) && (
+                          <option value={e.leave_template_id}>{e.template_name} (inactive)</option>
+                        )}
+                        {activeTemplates.map((t: any) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                      </select>
+                    </td>
+                    {/* The days this person is NOT scheduled to work — resolved exactly as payroll
+                        resolves it, so this column and their pay can never disagree. "Not set"
+                        is deliberately not blank: an unconfigured work week is the thing that
+                        made an unevidenced Sunday cost somebody a day's pay. */}
+                    <td className="px-4 py-2.5">
+                      {e.off_days === 'Not set'
+                        ? <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-700"><AlertTriangle size={11} /> Not set</span>
+                        : <span className="text-secondary whitespace-nowrap">{e.off_days}</span>}
+                    </td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+        {!isLoading && (
+          <Pagination
+            total={filtered.length}
+            page={currentPage}
+            pageSize={EMP_PAGE_SIZE}
+            shown={paged.length}
+            itemLabel="employees"
+            onPageChange={setPage}
+          />
+        )}
+      </div>
     </div>
   );
 }

@@ -89,9 +89,16 @@ export interface AttendanceContext {
   lop_days: number;
   payment_days: number;
   not_employed_days?: number;      // scheduled working days outside the employment span
+  not_employed_calendar_days?: number; // ALL calendar days outside the span (calendar_days method)
+  method?: string;                 // actual_days | fixed_days | calendar_days
   hours?: number | null; // hourly-rated only: attendance working hours
   counts?: Record<string, number>; // day-status counts for the review screen
   lop_overridden?: boolean;        // HR replaced the computed LOP in review
+  // Which named policy set the working days — the divisor every deduction is measured against.
+  // Stored on the payslip so a month can always say what priced it, rather than the answer
+  // depending on whatever the settings happen to say when someone next opens it.
+  calendar_name?: string;
+  calendar_source?: string;
 }
 
 export interface PayslipLine {

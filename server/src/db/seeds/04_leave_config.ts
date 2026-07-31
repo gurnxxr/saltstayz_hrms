@@ -1,4 +1,5 @@
 import type { Knex } from 'knex';
+import { ensureDefaultTemplate } from '../../services/leaveTemplate.service';
 
 export async function seed(knex: Knex): Promise<void> {
   await knex('holidays').del();
@@ -24,14 +25,13 @@ export async function seed(knex: Knex): Promise<void> {
     { name: '2026-2027', start_date: '2026-04-01', end_date: '2027-03-31', is_current: true },
   ]);
 
-  await knex('holidays').insert([
-    { name: 'Republic Day', date: '2026-01-26', is_recurring: true },
-    { name: 'Holi', date: '2026-03-10', is_recurring: false },
-    { name: 'Independence Day', date: '2026-08-15', is_recurring: true },
-    { name: 'Gandhi Jayanti', date: '2026-10-02', is_recurring: true },
-    { name: 'Diwali', date: '2026-10-20', is_recurring: false },
-    { name: 'Christmas', date: '2026-12-25', is_recurring: true },
-  ]);
+  // Holidays are seeded by 14_regions_holidays, which is the file that knows about national vs
+  // state scope. This one used to insert its own set with no `is_national` — and because 14 skips
+  // any name+date that already exists, those rows blocked the properly-scoped ones from ever
+  // landing. The result was a database where NO holiday matched ANY employee: the resolver looks
+  // for `is_national = true OR state = <the employee's state>`, and these rows were neither.
+  // Republic Day, Diwali and Christmas were all being priced as ordinary working days.
+  // Two seeds writing one table WAS the bug, so this one no longer does.
 
   // Leave entitlements for all employees in current period
   const employees = await knex('employees').select('id');
@@ -53,4 +53,11 @@ export async function seed(knex: Knex): Promise<void> {
     }
     await knex('leave_entitlements').insert(entitlements);
   }
+
+  // Migrations run before seeds, so migration 012 built the Default leave template from a
+  // still-empty leave_types table (zero rows). And deleting leave_types above cascades away
+  // any rows it did have. Reconcile now that the real types exist: give Default a row for
+  // every active type and put every employee on it — otherwise all leave reads resolve to an
+  // empty plan and the whole module is dead on a freshly seeded database.
+  await ensureDefaultTemplate(knex);
 }

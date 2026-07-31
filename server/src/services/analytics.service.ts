@@ -89,8 +89,7 @@ export async function getWorkforceOverview() {
   // Headcount by department, seeded with the whole Departments catalog so the
   // chart tracks the catalog: a newly created department shows immediately (at 0)
   // and a deleted one drops off. Unioned with any off-catalog dept_name employees
-  // still carry, so no headcount is lost — same catalog ∪ staff pattern the roster
-  // department filter uses (shift.service getWeeklyRoster).
+  // still carry, so no headcount is lost.
   const [deptCatalog, deptCounts] = await Promise.all([
     db('departments').whereNotNull('name').pluck('name'),
     db('employees').where('is_active', true).whereNotNull('dept_name')
@@ -785,7 +784,9 @@ export async function getDashboardOverview() {
     .count('* as count')
     .first();
 
-  const totalCandidates = await db('candidates').count('* as count').first();
+  // Active pipeline only — a candidate archived on rejection has left recruitment, so
+  // counting them would make "Total Candidates" drift up and never come back down.
+  const totalCandidates = await db('candidates').where('archived', false).count('* as count').first();
 
   const recentHires = await db('employees')
     .where('is_active', true)

@@ -134,10 +134,10 @@ export async function downloadEmployeePayslip(req: AuthRequest, res: Response, n
   } catch (err) { next(err); }
 }
 
-/** Day-by-day payable-days trace for the review dialog. */
+/** Day-by-day payable-days trace for the review dialog. Frozen months serve their stored totals. */
 export async function getPayableDays(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    res.json(await computePayableDays(
+    res.json(await payslip.getPayableDaysForStaff(
       Number(req.params.employeeId), Number(req.query.month), Number(req.query.year),
     ));
   } catch (err) { next(err); }
@@ -196,6 +196,7 @@ export async function lockRun(req: AuthRequest, res: Response, next: NextFunctio
   try {
     res.json(await payslip.lockRun(
       Number(req.body.month), Number(req.body.year), req.user?.userId ?? null, req.body.confirm === true,
+      req.body.stale_override_reason,
     ));
   } catch (err) { next(err); }
 }

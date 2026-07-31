@@ -1,6 +1,7 @@
 import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../types';
 import * as attendanceService from '../services/attendance.service';
+import * as gridService from '../services/attendanceGrid.service';
 
 export async function getMyCalendar(req: AuthRequest, res: Response, next: NextFunction) {
   try {
@@ -52,6 +53,47 @@ export async function uploadAttendanceCsv(req: AuthRequest, res: Response, next:
       file_name: fileName,
       rows_total: 0, rows_created: 0, rows_updated: 0, rows_skipped: 0, unmatched_count: 0,
       dates_count: 0, status: 'failed', error_note: err?.message?.slice(0, 500) || 'Upload failed',
+    });
+    next(err);
+  }
+}
+
+/** Import HR's wide "marked grid" dashboard (.xlsx or .csv), where each cell is a day-code. */
+export async function uploadMarkedGrid(req: AuthRequest, res: Response, next: NextFunction) {
+  const fileName = req.file?.originalname || null;
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Attendance sheet is required' });
+    const month = (req.body?.month || req.query?.month || '').toString().slice(0, 7) || undefined;
+    const result = await gridService.uploadMarkedGrid(req.file.buffer, fileName || 'upload.csv', month);
+
+    const processed = result.created + result.updated;
+    const status: 'success' | 'partial' =
+      (result.skipped > 0 || result.unmatched.length > 0 || result.unrecognized.length > 0 || !processed) ? 'partial' : 'success';
+    await attendanceService.logAttendanceUpload({
+      uploaded_by: req.user?.userId ?? null,
+      uploaded_by_email: req.user?.email ?? null,
+      file_name: fileName,
+      rows_total: result.total,
+      rows_created: result.created,
+      rows_updated: result.updated,
+      rows_skipped: result.skipped,
+      unmatched_count: result.unmatched.length,
+      date_from: result.dates[0] ?? null,
+      date_to: result.dates[result.dates.length - 1] ?? null,
+      dates_count: result.dates.length,
+      locations: null,
+      status,
+    });
+    await attendanceService.resolveTodaysReminders();
+
+    res.json(result);
+  } catch (err: any) {
+    await attendanceService.logAttendanceUpload({
+      uploaded_by: req.user?.userId ?? null,
+      uploaded_by_email: req.user?.email ?? null,
+      file_name: fileName,
+      rows_total: 0, rows_created: 0, rows_updated: 0, rows_skipped: 0, unmatched_count: 0,
+      dates_count: 0, status: 'failed', error_note: err?.message?.slice(0, 500) || 'Grid upload failed',
     });
     next(err);
   }

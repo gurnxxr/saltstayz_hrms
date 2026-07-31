@@ -22,6 +22,20 @@ export const LOCK = {
   LEAVE_APPLY: 811004,
   /** Adding an applicant to one vacancy (duplicate check then insert). */
   CANDIDATE_APPLY: 811005,
+  /**
+   * One payroll month, keyed by `monthKeyOf(month, year)`.
+   *
+   * Held by `refreshPayslipAfterAttendanceChange` around its state re-check and write, so a
+   * concurrent lock cannot land between the two.
+   *
+   * INCOMPLETE, deliberately recorded rather than implied: `lockRun` does NOT take this lock and
+   * does not run in a transaction — it reads the run, builds the register, and flips the status as
+   * separate statements. So a re-price committing inside that window can leave the frozen register
+   * CSV disagreeing with the payslip it was built from. Closing it means threading a transaction
+   * handle through `getRunDetails` and `getSalaryRegister` too, which is a bigger change than the
+   * one this lock was added for. Do not read this constant as "the month is serialised".
+   */
+  PAYROLL_MONTH: 811006,
 } as const;
 
 /**
