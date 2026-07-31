@@ -113,11 +113,18 @@ export interface StalePayslip {
  * Per employee rather than per month, and that carries weight: a 400-person run writes its slips
  * in a loop over minutes, so an attendance change mid-run leaves some slips stale and others fine.
  *
- * The error direction is safe. Postgres `now()` is transaction-start time, so a re-price whose
- * transaction opened before an attendance commit but read after it can stamp an earlier timestamp
- * than the change it did see — a false "stale", costing one redundant re-run. The dangerous
- * direction (stamped later than a change it did NOT see) needs the two transactions to overlap,
- * which the month advisory lock prevents.
+ * KNOWN GAP — it can report a wrong payslip as fresh. The re-price computes OUTSIDE its
+ * transaction (deliberately: see refreshPayslipAfterAttendanceChange), then stamps
+ * payslip_history.updated_at from `now()` of a transaction that opens afterwards. An attendance
+ * write committing in between is therefore older than the payslip that does not contain it, and
+ * this check reports nothing. No attendance writer takes the month lock — not the two uploads, not
+ * leave approval, not regularisation itself — so nothing serialises that window.
+ *
+ * The fix is to capture a timestamp before the first read and write it explicitly instead of using
+ * `now()` at write time. Recorded rather than papered over, because `lockRun` refuses on this
+ * check, so anyone reading it will reasonably assume a clean result means the month is safe to pay.
+ *
+ * The opposite direction is harmless: a false "stale" costs one redundant re-run, nothing more.
  */
 export async function stalePayslips(month: number, year: number): Promise<StalePayslip[]> {
   // Business dates are TEXT 'YYYY-MM-DD', so a zero-padded lexical range is the correct filter

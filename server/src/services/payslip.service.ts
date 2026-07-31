@@ -937,25 +937,19 @@ function markableCells(c: any): number {
     + num(c.short_punch) + num(c.no_punch) + num(c.paid_leave) + num(c.unpaid_leave) + num(c.unmarked);
 }
 
-// Working days this month that were PAID without any evidence the person worked.
+// Working days that were PAID with no evidence the person worked them. Two ways that happens, and
+// since migration 026 they cost the same:
+//   * `unmarked` — the register carries no row at all, and unmarked_day_policy is 'present'.
+//   * `no_punch` — a row exists saying the machine recorded no punch, and the rule pays it in full.
 //
-// Two ways that happens, and since migration 026 they cost the same:
-//   • `unmarked` — the register carries no row at all, and unmarked_day_policy is 'present'.
-//   • `no_punch` — a row exists saying the machine recorded no punch, and the rule pays it in full.
+// `no_punch` belongs in the NUMERATOR, not just the denominator. Every no_punch in these counts is
+// on a SCHEDULED WORKING DAY: the weekly-off and holiday branches of the engine both exit before
+// the attendance tag is read (payableDays.service.ts:490, :507), so a rest day marked NP — which
+// the owner's spec does deliberately — never reaches this tally. Only a working day with no punch
+// counts, which is exactly the suspicious case.
 //
-// `no_punch` belongs here, not just in the denominator. Every no_punch in these counts is on a
-// SCHEDULED WORKING DAY: the weekly-off and holiday branches of the engine both exit before the
-// attendance tag is ever read (payableDays.service.ts:490, :507), so a rest day marked NP never
-// reaches this tally. A rest day tagged NP — which the owner's spec does deliberately — is
-// therefore free; only a working day with no punch counts, which is exactly the suspicious case.
-//
-// Counting it in the denominator alone would have been useless against the failure this gate
-// exists for: a dead reader that yields NP for every day has ZERO unmarked cells, so it reads as
-// 0% either way. It has to be in the numerator for a month with no real attendance to be visible.
-function unevidencedCells(c: any): number {
-  if (!c) return 0;
-  return num(c.unmarked) + num(c.no_punch);
-}
+// Counting it in the denominator alone would have been useless against the failure this gate exists
+// for: a dead reader yielding NP every day has ZERO unmarked cells, so it reads as 0% either way.
 
 // Exported for the coverage test — this is the function that decides whether a month
 // may be locked, and it went a long time with a denominator that silently omitted two codes.
