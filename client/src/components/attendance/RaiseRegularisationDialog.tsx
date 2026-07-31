@@ -1,10 +1,11 @@
 'use client';
 
 import { useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import api from '@/lib/api';
-import { X, Loader2 } from 'lucide-react';
+import { cutoffDateFor, earliestOpenDate, fmtDeadline } from '@/lib/regularisation';
+import { X, Loader2, CalendarClock } from 'lucide-react';
 
 // What the employee says the day actually WAS (order shown in the form). The server maps these
 // onto an attendance status and pays an approved request in full — so every option here has to
@@ -45,6 +46,15 @@ export default function RaiseRegularisationDialog({ initialDate, onClose }: { in
     reason: '',
   });
 
+  // The deadline the server will judge this request by. Read-only for everyone; it is the policy
+  // the employee is already subject to, so showing it beats letting them find out by refusal.
+  const { data: settings } = useQuery({
+    queryKey: ['regularisation-settings'],
+    queryFn: () => api.get('/regularisation/settings').then(r => r.data).catch(() => null),
+  });
+  const cutoffDays: number | null = settings?.cutoff_days_after_month_end ?? null;
+  const minDate = settings ? earliestOpenDate(cutoffDays, today) : undefined;
+
   const raiseMutation = useMutation({
     mutationFn: () => api.post('/regularisation', {
       start_date: form.start_date,
@@ -84,20 +94,46 @@ export default function RaiseRegularisationDialog({ initialDate, onClose }: { in
             <select className={inputCls} value={form.requested_status}
               onChange={(e) => setForm(p => ({ ...p, requested_status: e.target.value }))}>
               <option value="">Select a type…</option>
-              {REG_TYPE_OPTIONS.map(([val, label]) => (
-                <option key={val} value={val}>{label}</option>
-              ))}
+              {/* Only what HR currently offers. Until the settings load we show the full list
+                  rather than an empty dropdown — the server rejects anything withdrawn anyway. */}
+              {REG_TYPE_OPTIONS
+                .filter(([val]) => !settings || settings.allowed_types?.includes(val))
+                .map(([val, label]) => (
+                  <option key={val} value={val}>{label}</option>
+                ))}
             </select>
           </div>
+          {/* The deadline, above the dates, because it is what decides whether a date is pickable. */}
+          {settings && (
+            <div className="flex gap-2 rounded-lg bg-muted/50 border border-border px-3 py-2 text-xs text-secondary">
+              <CalendarClock size={14} className="shrink-0 mt-0.5" />
+              {cutoffDays == null ? (
+                <p>Any month can be corrected while its payroll is still open.</p>
+              ) : form.start_date ? (
+                <p>
+                  Corrections for <span className="text-foreground font-medium">{form.start_date.slice(0, 7)}</span> close on{' '}
+                  <span className="text-foreground font-medium">{fmtDeadline(cutoffDateFor(form.start_date, cutoffDays))}</span>.
+                </p>
+              ) : (
+                <p>
+                  Corrections close{' '}
+                  <span className="text-foreground font-medium">
+                    {cutoffDays === 0 ? 'on the last day of the attendance month' : `${cutoffDays} day${cutoffDays === 1 ? '' : 's'} after the attendance month ends`}
+                  </span>
+                  {minDate && <> — the earliest date you can still correct is <span className="text-foreground font-medium">{fmtDeadline(minDate)}</span>.</>}
+                </p>
+              )}
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-foreground mb-1">From<span className="text-red-600"> *</span></label>
-              <input type="date" className={inputCls} value={form.start_date} max={today}
+              <input type="date" className={inputCls} value={form.start_date} min={minDate} max={today}
                 onChange={(e) => onStartChange(e.target.value)} />
             </div>
             <div>
               <label className="block text-sm font-medium text-foreground mb-1">To<span className="text-red-600"> *</span></label>
-              <input type="date" className={inputCls} value={form.end_date} min={form.start_date || undefined} max={today}
+              <input type="date" className={inputCls} value={form.end_date} min={form.start_date || minDate} max={today}
                 onChange={(e) => setForm(p => ({ ...p, end_date: e.target.value }))} />
             </div>
           </div>

@@ -43,6 +43,9 @@ export const NAVIGATION: NavItem[] = [
     children: [
       { label: 'Calendar', href: '/attendance', icon: 'CalendarCheck', roles: ['admin', 'chro', 'hr', 'property_manager', 'employee'], module: 'attendance' },
       { label: 'Regularisation', href: '/attendance/regularisation', icon: 'ClipboardList', roles: ['admin', 'chro', 'hr', 'property_manager', 'employee'], module: 'attendance' },
+      // Admin/CHRO/HR only — property_manager decides their reports' requests but must not be able
+      // to widen the rules those requests are judged by (see regularisation.routes.ts).
+      { label: 'Regularisation Settings', href: '/attendance/settings', icon: 'SlidersHorizontal', roles: ['admin', 'chro', 'hr'], module: 'attendance' },
     ],
   },
   {

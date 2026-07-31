@@ -3,6 +3,7 @@ import { NotFoundError, ValidationError, ForbiddenError } from '../utils/errors'
 import { notifyEmployee } from './notification.service';
 import { monthWriteState } from './payrollMonth.service';
 import { refreshPayslipAfterAttendanceChange, type RefreshResult } from './payslip.service';
+import { getRegularisationSettings, cutoffDateFor } from './regularisationSettings.service';
 
 // ─── Attendance regularisation ───
 //
@@ -12,36 +13,33 @@ import { refreshPayslipAfterAttendanceChange, type RefreshResult } from './paysl
 // mandatory reason; the reporting manager (or HR) approves; on approval every date
 // in the range is upserted onto attendance_records with the chosen status and
 // flagged is_regularised — so payroll pays the right days and the calendar can
-// mark the day "R". Guardrails: a monthly cap and a hard block once the pay
-// period is locked.
+// mark the day "R". Guardrails: a correction deadline, a monthly cap, and a hard
+// block once the pay period is locked. The first three are configurable — see
+// regularisationSettings.service; the lock is not negotiable.
 
 const STAFF_ROLES = ['admin', 'chro', 'hr'];
 
-// Max regularisation REQUESTS an employee may raise for a given attendance month
-// (pending + approved). A request may span a date range, so we cap requests, not
-// days — without a cap every wrong day gets regularised.
-const MONTHLY_LIMIT = 3;
-
-// The longest range one request may cover (keeps a single request from rewriting a
-// whole quarter and bounds the per-date loop).
-const MAX_RANGE_DAYS = 31;
-
-// Regularisation types the employee may pick, and how each maps onto the attendance
-// status vocabulary the payable-days engine understands. "No Punch" (np) is its own
-// status (no_punch) — a biometric record was simply missing, which is distinct from a
-// genuine Absent and is priced by its own configurable rule. Note that an *approved*
-// regularisation is paid in full regardless of the stored status (payableDays reads
-// is_regularised first); the status below is what the calendar and reports record.
+// How each regularisation type maps onto the attendance status vocabulary the payable-days engine
+// understands. "No Punch" (np) is its own status (no_punch) — a biometric record was simply
+// missing, which is distinct from a genuine Absent and is priced by its own configurable rule.
+// Note that an *approved* regularisation is paid in full regardless of the stored status
+// (payableDays reads is_regularised first); the status below is what the calendar and reports
+// record.
 //
-// "Absent" is deliberately NOT requestable. Asking to be marked absent is not a correction, and
-// since an approved regularisation pays the day in full (see payableDays.service), it was a route
-// to being paid for a day you yourself declared you did not work. Every remaining type describes a
-// day the employee says they DID work, which is what makes the full-pay-on-approval rule sound.
-const REG_TYPES = ['np', 'mp', 'sp', 'present'] as const;
-type RegType = typeof REG_TYPES[number];
-const TYPE_TO_STATUS: Record<RegType, string> = {
+// WHICH of these an employee may pick is configuration (regularisation_settings.allowed_types);
+// this map is the complete vocabulary and must keep a mapping for every code in that service's
+// SELECTABLE_TYPES. It deliberately stays complete even when the admin narrows the offered list,
+// because a request raised while a type was on offer must still be approvable after it is
+// withdrawn — the rules that applied when someone asked are the rules their request is judged by.
+//
+// "Absent" is deliberately NOT here. Asking to be marked absent is not a correction, and since an
+// approved regularisation pays the day in full (see payableDays.service), it was a route to being
+// paid for a day you yourself declared you did not work. Every remaining type describes a day the
+// employee says they DID work, which is what makes the full-pay-on-approval rule sound.
+const TYPE_TO_STATUS = {
   present: 'present', np: 'no_punch', mp: 'miss_punch', sp: 'short_punch',
-};
+} as const;
+type RegType = keyof typeof TYPE_TO_STATUS;
 const TYPE_LABELS: Record<RegType, string> = {
   present: 'Present', np: 'No Punch', mp: 'Miss Punch', sp: 'Short Punch',
 };
@@ -86,6 +84,35 @@ async function assertMonthCorrectable(date: string) {
   throw new ValidationError(`${state.message}. ${remedy}`);
 }
 
+/**
+ * Blocks regularising a date whose correction window has closed.
+ *
+ * Applied ONLY when a request is raised — never at approval. That asymmetry is the point, and it
+ * is the opposite of assertMonthCorrectable's, which deliberately runs at both. The two ask
+ * different questions:
+ *
+ *   • "can this month still be re-priced?" is about the system, can change while a request sits
+ *     in the queue, and must be re-asked before writing — hence both points; and
+ *   • "did the employee ask in time?" is about the employee, and was settled the moment they
+ *     pressed submit.
+ *
+ * Re-checking the deadline at approval would mean a manager who took a week to look at their
+ * queue silently destroys a correction that was filed properly and on time — punishing the
+ * employee for the approver's delay, with no way to tell afterwards that it had ever been valid.
+ *
+ * `today` is passed in rather than read here so the whole range is judged against one instant; a
+ * request submitted at midnight must not have its first date judged by yesterday and its last by
+ * today. Both are YYYY-MM-DD, and comparing them as strings is exact.
+ */
+function assertWithinCutoff(date: string, cutoffDays: number | null, today: string) {
+  if (cutoffDays == null) return; // no deadline configured — corrections stay open indefinitely
+  const closes = cutoffDateFor(date, cutoffDays);
+  if (today <= closes) return; // inclusive: a request raised ON the closing date is in time
+  throw new ValidationError(
+    `Attendance for ${date.slice(0, 7)} can no longer be regularised — corrections for that month closed on ${closes}. Ask HR to correct it for you.`,
+  );
+}
+
 /** A request's date range as a display string. */
 function rangeLabel(start: string, end?: string | null) {
   return end && end !== start ? `${start} to ${end}` : start;
@@ -120,17 +147,26 @@ export async function requestRegularisation(employeeId: number, data: Regularisa
   const today = new Date().toISOString().slice(0, 10);
   if (end > today) throw new ValidationError('You cannot regularise a future date');
 
+  const settings = await getRegularisationSettings();
+
   const type = String(data.requested_status || '') as RegType;
-  if (!REG_TYPES.includes(type)) throw new ValidationError('Choose a valid regularisation type');
+  if (!settings.allowed_types.includes(type)) throw new ValidationError('Choose a valid regularisation type');
 
   const reason = String(data.reason || '').trim();
   if (!reason) throw new ValidationError('A reason is required');
 
   const dates = eachDate(start, end);
-  if (dates.length > MAX_RANGE_DAYS) throw new ValidationError(`A single request can cover at most ${MAX_RANGE_DAYS} days`);
+  if (dates.length > settings.max_range_days) {
+    throw new ValidationError(`A single request can cover at most ${settings.max_range_days} days`);
+  }
 
-  // Every date's payroll month must still be open to a re-price.
-  for (const d of dates) await assertMonthCorrectable(d);
+  // Per date, because one request can straddle two months and they can close on different days:
+  // the payroll month must still be open to a re-price, and the correction window must not have
+  // shut. The deadline is checked HERE and nowhere else — see assertWithinCutoff.
+  for (const d of dates) {
+    await assertMonthCorrectable(d);
+    assertWithinCutoff(d, settings.cutoff_days_after_month_end, today);
+  }
 
   // No overlapping open request for any date in the range.
   const overlap = await db('attendance_regularisations')
@@ -141,8 +177,12 @@ export async function requestRegularisation(employeeId: number, data: Regularisa
 
   // Monthly cap (pending + approved requests) — enforced for EVERY month the requested
   // range touches, not just its start month. Otherwise a request whose dates spill into
-  // a trailing month slips past that month's limit. A request spans <= 31 days, so the
-  // two endpoint months cover the whole range.
+  // a trailing month slips past that month's limit.
+  //
+  // Checking only the two ENDPOINT months is sound solely because a request can span at most 31
+  // days and therefore at most two months. That is why max_range_days is capped at 31 in
+  // regularisationSettings.service rather than left open — raise the ceiling without rewriting
+  // this to walk every month in between and the middle months would skip their cap in silence.
   const months = [...new Set([start.slice(0, 7), end.slice(0, 7)])];
   for (const m of months) {
     const mStart = `${m}-01`;
@@ -153,8 +193,8 @@ export async function requestRegularisation(employeeId: number, data: Regularisa
       // count any existing request whose own range overlaps month m
       .whereRaw('date <= ? AND COALESCE(end_date, date) >= ?', [mEnd, mStart])
       .count({ c: 'id' }).first();
-    if (Number((countRow as any)?.c || 0) >= MONTHLY_LIMIT) {
-      throw new ValidationError(`You have reached the monthly regularisation limit (${MONTHLY_LIMIT}) for ${m}.`);
+    if (Number((countRow as any)?.c || 0) >= settings.monthly_request_limit) {
+      throw new ValidationError(`You have reached the monthly regularisation limit (${settings.monthly_request_limit}) for ${m}.`);
     }
   }
 

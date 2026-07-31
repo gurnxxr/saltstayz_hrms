@@ -1,6 +1,19 @@
 import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../types';
 import * as service from '../services/regularisation.service';
+import * as settingsService from '../services/regularisationSettings.service';
+
+export async function getSettings(_req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json(await settingsService.getRegularisationSettings());
+  } catch (err) { next(err); }
+}
+
+export async function updateSettings(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json(await settingsService.updateRegularisationSettings(req.body, req.user!.userId));
+  } catch (err) { next(err); }
+}
 
 export async function requestRegularisation(req: AuthRequest, res: Response, next: NextFunction) {
   try {

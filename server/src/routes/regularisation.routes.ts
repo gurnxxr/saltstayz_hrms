@@ -1,10 +1,23 @@
 import { Router } from 'express';
 import { authenticate } from '../middleware/auth';
-import { authorize } from '../middleware/rbac';
+import { authorize, authorizeRoles } from '../middleware/rbac';
 import * as ctrl from '../controllers/regularisation.controller';
 
 const router = Router();
 router.use(authenticate);
+
+// Org-wide guardrails (deadline, monthly cap, range ceiling, offered types).
+//
+// READ is open to anyone with attendance access, not restricted to the people who may change it:
+// the employee's own request form has to show the deadline it will be judged against, and a form
+// that enforces a rule it cannot display is how you get someone typing a date that is silently
+// refused. Nothing here is sensitive — it is the policy the employee is already subject to.
+//
+// WRITE is HR's. Deliberately not gated on `authorize('attendance', 'update')` alone: a
+// property_manager holds that permission so they can decide their reports' requests, which must
+// not also let them widen the rules those requests are judged by.
+router.get('/settings', authorize('attendance', 'read'), ctrl.getSettings);
+router.put('/settings', authorize('attendance', 'update'), authorizeRoles('admin', 'chro', 'hr'), ctrl.updateSettings);
 
 // Self-service: raise a correction + see my own requests.
 router.post('/', authorize('attendance', 'create'), ctrl.requestRegularisation);
