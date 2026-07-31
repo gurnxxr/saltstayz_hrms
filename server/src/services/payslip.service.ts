@@ -1076,7 +1076,10 @@ export async function getSalaryRegister(
   return buildRegisterCsv(slips, cx);
 }
 
-export async function lockRun(month: number, year: number, userId?: number | null, confirm = false) {
+export async function lockRun(
+  month: number, year: number, userId?: number | null, confirm = false,
+  staleOverrideReason?: string,
+) {
   assertValidPeriod(month, year);
 
   return db.transaction(async (trx) => {
@@ -1097,16 +1100,37 @@ export async function lockRun(month: number, year: number, userId?: number | nul
     const details = await getRunDetails(month, year, trx);
     const { coverage, staleness } = details;
 
-    // Out-of-date payslips: block, and do NOT offer a confirm-through.
+    // Out-of-date payslips: block, and do NOT offer the coverage gate's confirm-through.
     //
     // Unlike the coverage gate below — where the data may genuinely be all there is — a stale slip
-    // has a correct fix one click away, so confirming through means knowingly paying a figure you
-    // have just been told is wrong, and locking freezes it permanently with no arrears path.
-    if (staleness.count > 0) {
+    // normally has a correct fix one click away, so waving it through means knowingly paying a
+    // figure you have just been told is wrong, and locking freezes it permanently with no arrears
+    // path.
+    //
+    // But it can genuinely dead-end, and a gate that permanently prevents closing the books is its
+    // own kind of bug. Two ways no amount of re-running clears: the month is frozen under legacy
+    // pay rules so runPayroll refuses outright, or an active employee's payslip cannot be
+    // regenerated (no salary structure — runPayroll skips them at 422, and the purge only drops
+    // slips for INACTIVE employees, so their stale row survives every re-run).
+    //
+    // So there is an override, and it is deliberately NOT the `confirm` flag the coverage gate
+    // uses: sharing one would let waving through thin attendance also wave through a figure known
+    // to be wrong, in a single click, with no record. It takes its own typed reason and is written
+    // onto the run.
+    const overrideReason = String(staleOverrideReason ?? '').trim();
+    if (staleness.count > 0 && !overrideReason) {
+      const stale = new Set(staleness.employee_ids);
+      const who = (details.slips as any[])
+        .filter((s) => stale.has(s.employee_id))
+        .map((s) => s.employee_code)
+        .filter(Boolean);
+      const named = who.slice(0, 5).join(', ') + (who.length > 5 ? ` and ${who.length - 5} more` : '');
       throw new AppError(
         `${staleness.count} payslip${staleness.count === 1 ? '' : 's'} in ${monthName(month)} ${year} `
         + `${staleness.count === 1 ? 'is' : 'are'} out of date — attendance changed after this run was `
-        + 'generated. Re-run payroll for this month, then lock.',
+        + `generated${named ? ` (${named})` : ''}. Re-run payroll for this month, then lock. `
+        + 'If re-running does not clear it — a month frozen under old pay rules, or an employee with '
+        + 'no salary structure — you can lock anyway with a written reason, which is recorded.',
         409,
       );
     }
@@ -1134,6 +1158,10 @@ export async function lockRun(month: number, year: number, userId?: number | nul
       locked_by: userId ?? null,
       locked_at: trx.fn.now(),
       register_snapshot: register,
+      // Only set when the gate was actually overridden, so a null means the month locked cleanly
+      // rather than that somebody forgot to explain themselves.
+      lock_override_reason: staleness.count > 0
+        ? `${staleness.count} payslip(s) out of date at lock: ${overrideReason}` : null,
       updated_at: trx.fn.now(),
     });
     return getRun(month, year, trx);

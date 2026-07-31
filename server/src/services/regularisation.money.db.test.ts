@@ -285,6 +285,40 @@ describe.skipIf(!ON_THROWAWAY)('an approved regularisation reaches the money', (
     expect((await getRunDetails(MONTH, YEAR)).staleness.count).toBe(0);
   });
 
+  it('the stale gate can be overridden, but only with a written reason that is recorded', async () => {
+    // The gate must not be able to permanently prevent closing the books. Two real dead ends no
+    // re-run clears: a month frozen under old pay rules (runPayroll refuses outright), and an
+    // active employee whose payslip cannot be regenerated (no salary structure — runPayroll skips
+    // them at 422, and the purge only drops slips for INACTIVE employees). So there is a way past,
+    // and it is deliberately NOT the coverage gate's confirm flag.
+    await runPayroll(MONTH, YEAR, null);
+    await db('attendance_records').insert({ employee_id: empId, date: d(12), status: 'absent' });
+    expect((await getRunDetails(MONTH, YEAR)).staleness.count).toBe(1);
+
+    // `confirm` waves through thin attendance. It must NOT wave through a figure known to be wrong.
+    await expect(lockRun(MONTH, YEAR, null, true)).rejects.toThrow(/out of date/i);
+    // Nor does an empty or whitespace reason.
+    await expect(lockRun(MONTH, YEAR, null, true, '   ')).rejects.toThrow(/out of date/i);
+
+    // The message names who, so the admin can go and look.
+    await expect(lockRun(MONTH, YEAR, null, true)).rejects.toThrow(/RMT-001/);
+
+    const locked = await lockRun(MONTH, YEAR, null, true, 'Employee has no salary structure; a re-run skips them.');
+    expect(locked.status).toBe('locked');
+
+    const run = await db('payroll_runs').where({ month: MONTH, year: YEAR }).first();
+    expect(run.lock_override_reason).toContain('no salary structure');
+    expect(run.lock_override_reason).toContain('1 payslip(s) out of date');
+  });
+
+  it('a clean lock records no override reason', async () => {
+    // Absence of a reason has to mean "the gate was satisfied", not "somebody forgot to explain".
+    await runPayroll(MONTH, YEAR, null);
+    await lockRun(MONTH, YEAR, null, true);
+    const run = await db('payroll_runs').where({ month: MONTH, year: YEAR }).first();
+    expect(run.lock_override_reason).toBeNull();
+  });
+
   it('the approval records what happened to pay, for whoever asks months later', async () => {
     await db('attendance_records').insert({ employee_id: empId, date: d(10), status: 'absent' });
     await runPayroll(MONTH, YEAR, null);

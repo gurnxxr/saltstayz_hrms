@@ -81,8 +81,14 @@ export default function PayrollRunsPage() {
   });
 
   const lockMutation = useMutation({
-    mutationFn: (vars: { month: number; year: number; lock: boolean; confirm?: boolean; reason?: string }) =>
-      api.post(`/payroll/runs/${vars.lock ? 'lock' : 'unlock'}`, { month: vars.month, year: vars.year, confirm: vars.confirm === true, reason: vars.reason }).then(r => r.data),
+    mutationFn: (vars: {
+      month: number; year: number; lock: boolean;
+      confirm?: boolean; reason?: string; staleOverrideReason?: string;
+    }) =>
+      api.post(`/payroll/runs/${vars.lock ? 'lock' : 'unlock'}`, {
+        month: vars.month, year: vars.year, confirm: vars.confirm === true,
+        reason: vars.reason, stale_override_reason: vars.staleOverrideReason,
+      }).then(r => r.data),
     onSuccess: (_d, vars) => {
       queryClient.invalidateQueries({ queryKey: ['payroll-runs'] });
       queryClient.invalidateQueries({ queryKey: ['run-details'] });
@@ -90,11 +96,21 @@ export default function PayrollRunsPage() {
     },
     onError: (err: any, vars) => {
       const message = err.response?.data?.error || 'Action failed';
-      // Out-of-date payslips are NOT confirm-through. Unlike thin attendance — where the data may
-      // be all there is — the fix here is one click away, so confirming would mean knowingly paying
-      // a figure the system has just said is wrong, and locking freezes it for good.
+      // Out-of-date payslips do NOT share the coverage gate's confirm-through. Normally the fix is
+      // one re-run away, so waving it through means knowingly paying a figure the system has just
+      // said is wrong. But it can dead-end — a month frozen under old rules, or an employee with no
+      // salary structure — and a gate that can never be satisfied is its own bug. So the way past
+      // is a TYPED REASON, which is recorded on the run: deliberate, and impossible to reach by
+      // clicking through the other dialog.
       if (err.response?.status === 409 && vars.lock && /out of date/i.test(message)) {
-        toast.error(message, { duration: 10000 });
+        if (vars.staleOverrideReason) { toast.error(message, { duration: 10000 }); return; }
+        const reason = window.prompt(
+          `${message}\n\nTo lock anyway, type why re-running will not fix this. It is recorded against the run.`,
+          '',
+        );
+        if (reason && reason.trim()) {
+          lockMutation.mutate({ ...vars, staleOverrideReason: reason.trim() });
+        }
         return;
       }
       // Attendance-coverage gate (409): let the user lock anyway after confirming.

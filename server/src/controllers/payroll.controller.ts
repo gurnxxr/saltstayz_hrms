@@ -196,6 +196,7 @@ export async function lockRun(req: AuthRequest, res: Response, next: NextFunctio
   try {
     res.json(await payslip.lockRun(
       Number(req.body.month), Number(req.body.year), req.user?.userId ?? null, req.body.confirm === true,
+      req.body.stale_override_reason,
     ));
   } catch (err) { next(err); }
 }
