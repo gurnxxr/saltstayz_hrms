@@ -20,7 +20,7 @@ export default function PaySchedulePage() {
     queryFn: () => api.get('/pay-schedule').then((r) => r.data),
   });
 
-  const [method, setMethod] = useState<'actual_days' | 'fixed_days'>('actual_days');
+  const [method, setMethod] = useState<'actual_days' | 'fixed_days' | 'calendar_days'>('actual_days');
   const [payType, setPayType] = useState<'last_day' | 'fixed_day'>('last_day');
   const [payDay, setPayDay] = useState(1);
   const [unmarkedPolicy, setUnmarkedPolicy] = useState<'present' | 'absent'>('present');
@@ -38,7 +38,11 @@ export default function PaySchedulePage() {
   // Hydrate the form once settings load.
   useEffect(() => {
     if (!data) return;
-    setMethod(data.salary_calculation_method === 'fixed_days' ? 'fixed_days' : 'actual_days');
+    setMethod(
+      data.salary_calculation_method === 'fixed_days' ? 'fixed_days'
+        : data.salary_calculation_method === 'calendar_days' ? 'calendar_days'
+        : 'actual_days',
+    );
     setPayType(data.pay_date_type === 'fixed_day' ? 'fixed_day' : 'last_day');
     setPayDay(Number(data.pay_date_day) || 1);
     setUnmarkedPolicy(data.unmarked_day_policy === 'absent' ? 'absent' : 'present');
@@ -114,26 +118,51 @@ export default function PaySchedulePage() {
               <h2 className="text-base font-semibold text-foreground">Salary Calculation Method <Req /></h2>
               <p className="text-sm text-secondary">Select how monthly salary should be calculated.<Req /></p>
               <div className="space-y-2.5">
-                <label className="flex items-center gap-2.5 cursor-pointer w-fit">
-                  <input type="radio" name="calc-method" className="accent-primary w-4 h-4"
+                <label className="flex items-start gap-2.5 cursor-pointer w-fit">
+                  <input type="radio" name="calc-method" className="accent-primary w-4 h-4 mt-0.5"
                     checked={method === 'actual_days'} onChange={() => { setMethod('actual_days'); setDirty(true); }} />
-                  <span className="text-sm text-foreground">Actual days in a month</span>
+                  <span>
+                    <span className="text-sm text-foreground">Actual days in a month</span>
+                    <span className="block text-xs text-secondary mt-0.5">Divides by the days the employee was scheduled to work — so a 26-working-day month has a higher daily rate than a 31-day one.</span>
+                  </span>
                 </label>
-                <label className="flex items-center gap-2.5 cursor-pointer w-fit">
-                  <input type="radio" name="calc-method" className="accent-primary w-4 h-4"
+                <label className="flex items-start gap-2.5 cursor-pointer w-fit">
+                  <input type="radio" name="calc-method" className="accent-primary w-4 h-4 mt-0.5"
                     checked={method === 'fixed_days'} onChange={() => { setMethod('fixed_days'); setDirty(true); }} />
-                  <span className="text-sm text-foreground inline-flex items-center gap-1.5">
-                    Based on fixed working days per month
-                    <span
-                      className="inline-flex text-secondary cursor-help"
-                      title="Uses a fixed number of working days as the denominator instead of the actual calendar days, so per-day pay stays constant across months."
-                      aria-label="More info"
-                    >
-                      <Info size={14} />
+                  <span>
+                    <span className="text-sm text-foreground inline-flex items-center gap-1.5">
+                      Based on fixed working days per month
+                      <span
+                        className="inline-flex text-secondary cursor-help"
+                        title="Uses a fixed number of working days as the denominator instead of the actual calendar days, so per-day pay stays constant across months."
+                        aria-label="More info"
+                      >
+                        <Info size={14} />
+                      </span>
                     </span>
+                    <span className="block text-xs text-secondary mt-0.5">Divides by the same figure every month, whatever the month&apos;s real shape.</span>
+                  </span>
+                </label>
+                <label className="flex items-start gap-2.5 cursor-pointer w-fit">
+                  <input type="radio" name="calc-method" className="accent-primary w-4 h-4 mt-0.5"
+                    checked={method === 'calendar_days'} onChange={() => { setMethod('calendar_days'); setDirty(true); }} />
+                  <span>
+                    <span className="text-sm text-foreground">Days in the calendar month</span>
+                    <span className="block text-xs text-secondary mt-0.5">Divides by 28, 29, 30 or 31. Weekly offs and holidays are paid days sitting inside that total, so they cost nothing.</span>
                   </span>
                 </label>
               </div>
+              {method === 'calendar_days' && (
+                <div className="flex items-start gap-2.5 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                  <Info size={15} className="text-amber-600 mt-0.5 shrink-0" />
+                  <p className="text-xs text-amber-900">
+                    Saving this <span className="font-medium">re-prices every open month</span> for everyone. A lost day
+                    costs one thirty-first of a 31-day month instead of one twenty-sixth of its working days, so pay goes
+                    up and overtime rates go down. Months already locked keep the figures they were paid on. Re-run the
+                    open payroll after saving.
+                  </p>
+                </div>
+              )}
             </section>
 
             {/* ── Pay Date ── */}

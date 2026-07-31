@@ -90,7 +90,8 @@ describe.skipIf(!ON_THROWAWAY)('payable days — what each attendance code does 
     await db('employees').where('id', employeeId).del();
     await db('leave_templates').where('name', 'like', 'PDT %').del();
     await db('holidays').where('name', 'like', 'PDT %').del();
-    await db.destroy();
+    // NOT db.destroy() — the calendar-month block below runs after this one and needs the pool.
+    // It closes the connection in its own afterAll, as the last thing in the file.
   });
 
   beforeEach(async () => {
@@ -379,5 +380,259 @@ describe.skipIf(!ON_THROWAWAY)('payable days — what each attendance code does 
     // 30 working days in June, minus 3.5 lost.
     expect(res.working_days).toBe(30);
     expect(res.payment_days).toBe(26.5);
+  });
+});
+
+/**
+ * The calendar-month divisor — the owner's salary spec.
+ *
+ * Salary divides over the days in the month (28/29/30/31), and weekly offs and holidays are PAID
+ * days sitting inside that total. So a lost day costs 1/31 of a 31-day month rather than 1/26 of
+ * its working days, and paid days can never exceed the month's length — which is the bug in the
+ * spreadsheet this came from, where one employee reached 35.5 paid days in a 31-day month.
+ *
+ * Its own describe block with its own beforeAll/afterAll, so the method can never leak into the
+ * block above and the two cannot depend on ordering.
+ */
+describe.skipIf(!ON_THROWAWAY)('calendar-month divisor', () => {
+  // May 2026: 31 days, wholly in the past. Sundays fall on 3/10/17/24/31, so a Sunday-off
+  // employee has exactly 26 working days in a 31-day month — the contrast this block is about.
+  const MAY = 5;
+  const MYEAR = 2026;
+  const m = (day: number) => `${MYEAR}-05-${String(day).padStart(2, '0')}`;
+  let empId: number;
+
+  beforeAll(async () => {
+    await updatePaySchedule({
+      work_week: [0, 1, 2, 3, 4, 5, 6],
+      salary_calculation_method: 'calendar_days',
+      unmarked_day_policy: 'present',
+      holidays_paid: true,
+    });
+    await db('pay_schedule_settings').update({ work_pattern_effective_from: null });
+
+    const rule = async (code: string, pay_fraction: number, config: Record<string, unknown> = {}) => {
+      const existing = await db('attendance_pay_rules').where('code', code).first();
+      const patch = { pay_fraction, config: JSON.stringify(config), updated_at: db.fn.now() };
+      if (existing) await db('attendance_pay_rules').where('id', existing.id).update(patch);
+      else await db('attendance_pay_rules').insert({ code, label: code, ...patch });
+    };
+    // The owner's value table.
+    await rule('present', 1);
+    await rule('absent', 0);
+    await rule('half_day', 0.5);
+    await rule('hhd', 0.5);
+    await rule('short_punch', 0.5);
+    await rule('no_punch', 1);
+    await rule('miss_punch', 0.75, { allowance: 0, beyond_pay_fraction: 0.5 });
+
+    await db('employees').where('employee_code', 'CDT-001').del();
+    const [{ id }] = await db('employees').insert({
+      employee_code: 'CDT-001', first_name: 'Calendar', last_name: 'Month',
+      date_of_joining: '2025-01-01', is_active: true,
+    }).returning('id');
+    empId = id;
+  });
+
+  afterAll(async () => {
+    await db('attendance_records').where('employee_id', empId).del();
+    await db('employees').where('id', empId).del();
+    await db('leave_templates').where('name', 'like', 'CDT %').del();
+    await db('holidays').where('name', 'like', 'CDT %').del();
+    // Hand the shared settings back exactly as the other block expects to find them.
+    await updatePaySchedule({
+      work_week: [0, 1, 2, 3, 4, 5, 6],
+      salary_calculation_method: 'actual_days',
+      unmarked_day_policy: 'present',
+      holidays_paid: true,
+    });
+    await db.destroy();  // last block in the file — close the pool here
+  });
+
+  beforeEach(async () => {
+    await db('attendance_records').where('employee_id', empId).del();
+    await db('holidays').where('name', 'like', 'CDT %').del();
+    await db('employees').where('id', empId).update({
+      leave_template_id: null, date_of_joining: '2025-01-01', last_working_day: null,
+    });
+  });
+
+  const markM = (day: number, status: string) =>
+    db('attendance_records').insert({ employee_id: empId, date: m(day), status });
+
+  async function sundayOff() {
+    await db('leave_templates').where('name', 'CDT Sunday Off').del();
+    const [{ id }] = await db('leave_templates').insert({
+      name: 'CDT Sunday Off', is_default: false, is_active: true,
+      off_day_rules: JSON.stringify([{ day: 0, weeks: null }]),
+    }).returning('id');
+    await db('employees').where('id', empId).update({ leave_template_id: id });
+  }
+
+  it('a lost day costs 1/31 of the month, not 1/26 of its working days', async () => {
+    await sundayOff();
+    await markM(4, 'absent');   // a Monday
+    const res = await computePayableDays(empId, MAY, MYEAR);
+    expect(res.scheduled_working_days).toBe(26);  // the month really does have 26 working days
+    expect(res.working_days).toBe(31);            // but the salary divides over 31
+    expect(res.lop_days).toBe(1);
+    expect(res.payment_days).toBe(30);
+    // The price of the lost day: 1/31, not 1/26.
+    expect(1 - res.payment_days / res.working_days).toBeCloseTo(1 / 31, 6);
+  });
+
+  it('weekly offs and holidays are paid days inside the month', async () => {
+    await sundayOff();
+    await db('holidays').insert({
+      name: 'CDT May Day', date: m(1), is_national: true, is_recurring: false,
+      all_departments: true, all_properties: true,
+    });
+    const res = await computePayableDays(empId, MAY, MYEAR);
+    expect(res.lop_days).toBe(0);
+    expect(res.weekly_offs).toBe(5);
+    expect(res.holidays).toBe(1);
+    expect(res.payment_days).toBe(31);   // a clean month pays the whole month
+  });
+
+  it('paid days never exceed the days in the month', async () => {
+    // The direct answer to the spreadsheet: adding the offs and holidays on top of a total that
+    // already contains them produced 35.5 days in a 31-day month.
+    await sundayOff();
+    await db('holidays').insert([
+      { name: 'CDT H1', date: m(1), is_national: true, is_recurring: false, all_departments: true, all_properties: true },
+      { name: 'CDT H2', date: m(2), is_national: true, is_recurring: false, all_departments: true, all_properties: true },
+    ]);
+    const res = await computePayableDays(empId, MAY, MYEAR);
+    expect(res.payment_days).toBe(31);
+    expect(res.payment_days).toBeLessThanOrEqual(res.period_days);
+  });
+
+  it('a mid-month joiner is not paid for the weekly offs before they joined', async () => {
+    await sundayOff();
+    await db('employees').where('id', empId).update({ date_of_joining: m(15) });
+    const res = await computePayableDays(empId, MAY, MYEAR);
+    // 1-14 May is 14 calendar days, two of them Sundays (3rd and 10th).
+    expect(res.not_employed_calendar_days).toBe(14);
+    expect(res.not_employed_days).toBe(12);       // the working days among them
+    expect(res.payment_days).toBe(17);            // the days they were actually on the payroll
+    // The trap: counting only the WORKING days outside the span pays those two Sundays.
+    expect(res.payment_days).not.toBe(19);
+    expect(res.weekly_offs).toBe(3);              // only the offs they were employed for
+  });
+
+  it('a leaver is paid to their last day, not past it', async () => {
+    await sundayOff();
+    await db('employees').where('id', empId).update({ last_working_day: m(20) });
+    const res = await computePayableDays(empId, MAY, MYEAR);
+    expect(res.payment_days).toBe(20);
+  });
+
+  it('a missed punch pays its configured fraction when there is no allowance', async () => {
+    // Fails on the pre-change code: with allowance 0 every day took beyond_pay_fraction (0.5),
+    // so pay_fraction was dead and the admin screen displayed a figure nothing used.
+    for (const day of [4, 5, 6, 7, 8]) await markM(day, 'miss_punch');
+    const res = await computePayableDays(empId, MAY, MYEAR);
+    for (const day of [4, 5, 6, 7, 8]) {
+      expect(res.trace.find((t) => t.date === m(day))?.lop).toBe(0.25);
+    }
+    expect(res.lop_days).toBeCloseTo(1.25, 6);
+  });
+
+  it('an allowance still tiers when one is configured', async () => {
+    await db('attendance_pay_rules').where('code', 'miss_punch')
+      .update({ config: JSON.stringify({ allowance: 2, beyond_pay_fraction: 0.5 }) });
+    for (const day of [4, 5, 6, 7]) await markM(day, 'miss_punch');
+    const res = await computePayableDays(empId, MAY, MYEAR);
+    expect([4, 5, 6, 7].map((day) => res.trace.find((t) => t.date === m(day))?.lop))
+      .toEqual([0.25, 0.25, 0.5, 0.5]);
+    await db('attendance_pay_rules').where('code', 'miss_punch')
+      .update({ config: JSON.stringify({ allowance: 0, beyond_pay_fraction: 0.5 }) });
+  });
+
+  it('No Punch pays a full day when the rule says so', async () => {
+    // The owner: "np is nothing but absent recorded on holiday."
+    await sundayOff();
+    await markM(4, 'no_punch');                    // a Monday - a scheduled working day
+    const res = await computePayableDays(empId, MAY, MYEAR);
+    expect(res.trace.find((t) => t.date === m(4))?.lop).toBe(0);
+    expect(res.payment_days).toBe(31);
+    // And on a rest day it is still a rest day, not an attendance code at all.
+    await markM(3, 'no_punch');                    // a Sunday
+    const res2 = await computePayableDays(empId, MAY, MYEAR);
+    expect(res2.trace.find((t) => t.date === m(3))?.kind).toBe('weekly_off');
+  });
+
+  /**
+   * The owner's six worked examples, as an executable contract.
+   *
+   * These are the FINAL sheet: no separate holiday or weekly-off columns, every day of the month
+   * carrying exactly one attendance tag (all six rows sum to 31), and Paid Days = 31 minus the
+   * shortfall. Weekly offs and holidays are tagged No Punch — "absent recorded on days where
+   * there was an off" — which is why No Punch costs nothing.
+   *
+   * Two tag values differ from the engine's shipped defaults, so this block pins them rather than
+   * inheriting: Missed Punch pays 0.5 (not 0.75) and HHD pays 0.25 (not 0.5). Those are the two
+   * settings changes the spec asks for, and pinning them here means this contract holds whatever
+   * the live Attendance Pay Rules screen currently says.
+   */
+  describe('the owner\'s six worked examples', () => {
+    beforeAll(async () => {
+      await db('attendance_pay_rules').where('code', 'miss_punch')
+        .update({ pay_fraction: 0.5, config: JSON.stringify({ allowance: 0, beyond_pay_fraction: 0.5 }) });
+      await db('attendance_pay_rules').where('code', 'hhd').update({ pay_fraction: 0.25 });
+    });
+
+    afterAll(async () => {
+      // Hand the rules back exactly as the block above expects to find them.
+      await db('attendance_pay_rules').where('code', 'miss_punch')
+        .update({ pay_fraction: 0.75, config: JSON.stringify({ allowance: 0, beyond_pay_fraction: 0.5 }) });
+      await db('attendance_pay_rules').where('code', 'hhd').update({ pay_fraction: 0.5 });
+    });
+
+    const SPEC_ROWS: Array<[string, Record<string, number>, number]> = [
+      ['Anvesha', { present: 7, absent: 1, miss_punch: 3, no_punch: 18, hhd: 2 }, 27],
+      ['Chirag', { present: 6, absent: 1, no_punch: 22, hhd: 2 }, 28.5],
+      ['Raju', { present: 3, half_day: 1, short_punch: 4, miss_punch: 2, no_punch: 18, hhd: 3 }, 25.25],
+      ['Tanya', { present: 9, miss_punch: 7, no_punch: 13, hhd: 2 }, 26],
+      ['Lalit', { present: 13, half_day: 1, short_punch: 2, miss_punch: 1, no_punch: 9, hhd: 5 }, 25.25],
+      ['Anjesh', { present: 3, short_punch: 4, miss_punch: 3, no_punch: 15, hhd: 6 }, 23],
+    ];
+
+    it.each(SPEC_ROWS)('%s is paid the right days', async (_name, marks, expected) => {
+      let day = 1;
+      for (const [status, count] of Object.entries(marks)) {
+        for (let i = 0; i < count; i += 1) { await markM(day, status); day += 1; }
+      }
+      expect(day - 1).toBe(31);   // the sheet's own rule: the tags account for the whole month
+
+      const res = await computePayableDays(empId, MAY, MYEAR);
+      // Self-diagnosing: if a stray holiday or off-day rule leaked in, the divisor moves and the
+      // paid-days figure below would be wrong for a reason that has nothing to do with the spec.
+      expect(res.scheduled_working_days).toBe(31);
+      expect(res.working_days).toBe(31);
+      expect(res.counts.unmarked).toBe(0);
+
+      expect(res.payment_days).toBe(expected);
+      expect(res.payment_days).toBeLessThanOrEqual(31);
+    });
+
+    it('perfect attendance pays the whole month — the double-count is gone', async () => {
+      // The direct answer to the spreadsheet the spec replaced, where adding holidays and weekly
+      // offs on top of a total that already contained them paid 38 days in a 31-day month.
+      for (let d = 1; d <= 31; d += 1) await markM(d, 'present');
+      const res = await computePayableDays(empId, MAY, MYEAR);
+      expect(res.lop_days).toBe(0);
+      expect(res.payment_days).toBe(31);
+      expect(res.payment_days / res.working_days).toBe(1);   // exactly one month's salary
+    });
+
+    it('No Punch costs nothing, so a month of it pays in full', async () => {
+      // Why the coverage gate has to count No Punch as unevidenced: on pay alone this is
+      // indistinguishable from a month everybody worked.
+      for (let d = 1; d <= 31; d += 1) await markM(d, 'no_punch');
+      const res = await computePayableDays(empId, MAY, MYEAR);
+      expect(res.lop_days).toBe(0);
+      expect(res.payment_days).toBe(31);
+    });
   });
 });

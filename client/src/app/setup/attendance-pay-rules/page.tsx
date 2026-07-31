@@ -204,16 +204,26 @@ export default function AttendancePayRulesPage() {
                           <input type="number" step="1" min={0} max={31} value={e.allowance}
                             onChange={(ev) => set(r.code, { allowance: Math.max(0, Math.min(31, Math.round(Number(ev.target.value)))) })}
                             className="w-24 px-3 py-1.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
-                          <p className="text-[11px] text-secondary mt-1">Paid in full before any deduction applies.</p>
+                          <p className="text-[11px] text-secondary mt-1">
+                            {e.allowance === 0
+                              ? 'Zero means no free ones — every miss punch pays the figure above.'
+                              : 'Paid in full before any deduction applies.'}
+                          </p>
                         </div>
-                        <div>
+                        {/* With no allowance there is nothing "beyond" it, so this figure decides nothing.
+                            Disabled rather than hidden, so it is obvious the setting still exists. */}
+                        <div className={e.allowance === 0 ? 'opacity-50' : undefined}>
                           <p className="text-xs font-medium text-foreground mb-1">Beyond the allowance, pays</p>
                           <div className="flex items-center gap-2">
                             <input type="number" step="1" min={0} max={100} value={Math.round(e.beyond_pay_fraction * 100)}
+                              disabled={e.allowance === 0}
                               onChange={(ev) => set(r.code, { beyond_pay_fraction: Math.max(0, Math.min(100, Number(ev.target.value))) / 100 })}
-                              className="w-20 px-3 py-1.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+                              className="w-20 px-3 py-1.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:cursor-not-allowed" />
                             <span className="text-xs text-secondary">% of a day&apos;s pay</span>
                           </div>
+                          {e.allowance === 0 && (
+                            <p className="text-[11px] text-secondary mt-1">Not used while the allowance is zero.</p>
+                          )}
                         </div>
                       </div>
                     )}

@@ -5,7 +5,7 @@ import { ValidationError } from '../utils/errors';
 // work_week is stored as a JSON array of weekday indices (0=Sun … 6=Sat).
 
 const TABLE = 'pay_schedule_settings';
-const CALC_METHODS = ['actual_days', 'fixed_days'] as const;
+const CALC_METHODS = ['actual_days', 'fixed_days', 'calendar_days'] as const;
 const PAY_DATE_TYPES = ['last_day', 'fixed_day'] as const;
 
 export interface PaySchedule {

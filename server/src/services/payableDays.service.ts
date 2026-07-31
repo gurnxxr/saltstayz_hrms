@@ -69,6 +69,8 @@ export interface PayableDays extends AttendanceContext {
   holidays: number;
   scheduled_working_days: number; // actual scheduled working days (denominator basis)
   not_employed_days: number; // scheduled working days outside the employment span
+  /** ALL calendar days outside the span — rest days and holidays too. Used by calendar_days. */
+  not_employed_calendar_days: number;
   // Paid-leave days a code's rule consumed (e.g. a Half Day = worked ½ + ½ leave). This is
   // the leave a run should debit from the employee's balance; the engine only measures it,
   // it does not mutate leave_entitlements (there is no leave-type on an attendance-marked day).
@@ -124,6 +126,44 @@ const humanDate = (iso: string) => {
   const [y, m, d] = iso.slice(0, 10).split('-');
   return `${Number(d)} ${MONTHS[Number(m) - 1]} ${y}`;
 };
+
+/**
+ * Paid days, from the month's shape and its losses.
+ *
+ * One formula, two callers: the engine below, and the LOP-override re-projection in
+ * payslip.service. Those were two copies of the same arithmetic, which is exactly the pair that
+ * silently disagrees — and disagreeing there means the employees Finance corrected by hand get
+ * priced by the old rule.
+ */
+export function projectPaymentDays(a: {
+  method: string;
+  /** The salary divisor — what appears as `working_days` on the payslip. */
+  denominator: number;
+  scheduled_days: number;
+  /** Scheduled WORKING days outside the employment span. */
+  not_employed_days: number;
+  /** ALL calendar days outside the span, rest days and holidays included. */
+  not_employed_calendar_days: number;
+  lop_days: number;
+}): number {
+  if (a.method === 'calendar_days') {
+    // The denominator IS the month, and rest days and holidays are already inside it. So paid
+    // days are the month minus what was lost — never the month PLUS the offs and holidays it
+    // already contained, which is the spreadsheet formula that printed 35.5 days in a 31-day
+    // month. The clamp cannot fire while pay_fraction is validated 0..1, and is here so the
+    // invariant is asserted rather than merely reasoned about.
+    const paid = a.denominator - a.not_employed_calendar_days - a.lop_days;
+    return round2(Math.min(a.denominator, Math.max(0, paid)));
+  }
+  // Employed-and-paid share of the scheduled working days, projected onto the denominator. For
+  // actual_days (denominator = scheduled) this reduces to scheduled − not_employed − lop; for
+  // fixed_days it scales that ratio onto the fixed base, so a mid-month joiner or a fully-absent
+  // month is paid correctly instead of subtracting actual-scale days from a 30-day base.
+  const ratio = a.scheduled_days > 0
+    ? Math.max(0, a.scheduled_days - a.not_employed_days - a.lop_days) / a.scheduled_days
+    : 0;
+  return round2(a.denominator * ratio);
+}
 
 export interface WorkCalendar {
   classify(date: string): DayInfo;
@@ -409,7 +449,12 @@ export async function computePayableDays(employeeId: number, month: number, year
   let workingDays = 0;      // scheduled working days (denominator for actual_days)
   let weeklyOffs = 0;
   let holidayCount = 0;
-  let notEmployedDays = 0;  // scheduled working days outside the employment span
+  let notEmployedDays = 0;  // scheduled WORKING days outside the employment span
+  // EVERY calendar day outside the span — rest days and holidays too. Deliberately a separate
+  // counter: `notEmployedDays` above is the unpaid-share numerator for actual_days and
+  // fixed_days, whose base is working days, and feeding rest days into it would subtract rest
+  // days from a working-days denominator and cut every mid-month joiner's pay on those methods.
+  let notEmployedCalendarDays = 0;
   let lop = 0;
   let leaveDebit = 0;       // paid-leave fraction codes consume (Half Day → ½), measured not mutated
   let shiftDriven = false; // true once any day in the month was decided by a shift's own off days
@@ -424,6 +469,10 @@ export async function computePayableDays(employeeId: number, month: number, year
     if (cal.shiftDriven(date)) shiftDriven = true;
     sourcesSeen.set(info.source, info.sourceName);
     const decided = { decided_by: info.source, decided_by_name: info.sourceName };
+
+    // Counted before the three branches below, because under calendar_days a rest day before
+    // somebody joined must not be paid — and the weekly-off branch returns early.
+    if (!info.employed) notEmployedCalendarDays += 1;
 
     if (info.base === 'weekly_off') {
       // A holiday can coincide with a rest day. It stays named on the day — it is still Diwali —
@@ -501,10 +550,20 @@ export async function computePayableDays(employeeId: number, month: number, year
       } else {
         dayStatus = 'miss_punch';
         // First N a month are within allowance (pay per rule); beyond earns beyond_pay_fraction.
+        //
+        // An allowance of zero — or none configured — means there is no allowance TIER, not that
+        // everybody is already past it. Read the other way, `pay_fraction` becomes dead the moment
+        // the allowance is switched off, and the Attendance Pay Rules screen goes on displaying it
+        // as though it decided something. For any allowance of 1 or more this is unchanged.
         const mp = payRules.get('miss_punch');
-        const allowance = Number(mp?.config?.allowance ?? 0);
-        const beyondPay = Number(mp?.config?.beyond_pay_fraction ?? 0.5);
-        dayLop = missPunchSeen < allowance ? lopFor('miss_punch') : Math.round((1 - beyondPay) * 100) / 100;
+        const allowanceRaw = Number(mp?.config?.allowance);
+        const allowance = Number.isFinite(allowanceRaw) && allowanceRaw > 0 ? Math.trunc(allowanceRaw) : 0;
+        if (allowance === 0 || missPunchSeen < allowance) {
+          dayLop = lopFor('miss_punch');
+        } else {
+          const beyondPay = Number(mp?.config?.beyond_pay_fraction ?? 0.5);
+          dayLop = Math.round((1 - beyondPay) * 100) / 100;
+        }
         missPunchSeen += 1; // only genuine miss punches consume the allowance
       }
     } else if (status === 'short_punch') {
@@ -558,17 +617,27 @@ export async function computePayableDays(employeeId: number, month: number, year
     });
   }
 
-  // fixed_days: salary divides over a fixed number of days (e.g. 30) regardless
-  // of the month's real shape; LOP still comes from actual attendance.
-  const method = schedule.salary_calculation_method === 'fixed_days' ? 'fixed_days' : 'actual_days';
-  const denominator = method === 'fixed_days' ? Number(schedule.fixed_working_days) || 30 : workingDays;
-  // Employed-and-paid share of the scheduled working days, projected onto the
-  // denominator. For actual_days (denominator = workingDays) this reduces to
-  // scheduled − not_employed − lop; for fixed_days it scales that ratio onto the
-  // fixed base, so a mid-month joiner or a fully-absent month is paid correctly
-  // instead of subtracting actual-scale days from a 30-day base.
-  const paidRatio = workingDays > 0 ? Math.max(0, workingDays - notEmployedDays - lop) / workingDays : 0;
-  const paymentDays = round2(denominator * paidRatio);
+  // Which shape of month the salary divides over.
+  //   calendar_days — the days in this month (28/29/30/31). Weekly offs and holidays are PAID
+  //                   days sitting inside that total, so they cost nothing and a lost day costs
+  //                   1/31 of a 31-day month rather than 1/26 of its working days.
+  //   fixed_days    — a fixed number (e.g. 30) regardless of the month's real shape.
+  //   actual_days   — the days the employee was actually scheduled to work.
+  const rawMethod = schedule.salary_calculation_method;
+  const method = rawMethod === 'fixed_days' ? 'fixed_days'
+    : rawMethod === 'calendar_days' ? 'calendar_days'
+    : 'actual_days';
+  const denominator = method === 'calendar_days' ? periodDays
+    : method === 'fixed_days' ? (Number(schedule.fixed_working_days) || 30)
+    : workingDays;
+  const paymentDays = projectPaymentDays({
+    method,
+    denominator,
+    scheduled_days: workingDays,
+    not_employed_days: notEmployedDays,
+    not_employed_calendar_days: notEmployedCalendarDays,
+    lop_days: lop,
+  });
 
   // One line for the payslip: which named policy set this month's working days. More than one
   // means the person moved between policies mid-month, and saying 'mixed' is honest where naming
@@ -583,6 +652,7 @@ export async function computePayableDays(employeeId: number, month: number, year
     scheduled_working_days: workingDays,
     lop_days: lop,
     not_employed_days: notEmployedDays,
+    not_employed_calendar_days: notEmployedCalendarDays,
     leave_debit_days: round2(leaveDebit),
     payment_days: paymentDays,
     counts,
