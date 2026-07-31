@@ -18,6 +18,7 @@
     "baseline:capture": "tsx src/db/capture-shift-baseline.ts",
     "patterns:report": "tsx src/db/derive-work-weeks.ts",
     "baseline:verify": "tsx src/db/verify-payslips-unchanged.ts",
+    "spec:price": "tsx src/db/price-salary-spec.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
