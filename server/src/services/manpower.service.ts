@@ -2,7 +2,7 @@ import type { Knex } from 'knex';
 import db from '../config/database';
 import { JwtPayload } from '../types';
 import { NotFoundError, ValidationError, ForbiddenError, GuardrailError } from '../utils/errors';
-import { getDefaultTemplateId, assertHasWeeklyOff } from './leaveTemplate.service';
+import { resolveTemplateForDepartment, assertHasWeeklyOff } from './leaveTemplate.service';
 import { nextJobId } from '../utils/jobId';
 import { LOCK, advisoryXactLock } from '../utils/locks';
 import { notifyRole } from './notification.service';
@@ -434,7 +434,8 @@ async function insertHire(trx: Knex.Transaction, input: HireInput, ctc: number, 
   const [{ id: employeeId }] = await trx('employees').insert({
     employee_code: code,
     job_id: await nextJobId(trx),
-    leave_template_id: await getDefaultTemplateId(), // new hires land on the Default leave template
+    // Their department's leave plan if one governs it, else Default.
+    leave_template_id: await resolveTemplateForDepartment(input.dept_name),
 
     first_name: firstName,
     last_name: lastName,

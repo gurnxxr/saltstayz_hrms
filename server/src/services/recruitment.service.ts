@@ -1,7 +1,7 @@
 import type { Knex } from 'knex';
 import db from '../config/database';
 import { NotFoundError, ValidationError } from '../utils/errors';
-import { getDefaultTemplateId, assertHasWeeklyOff } from './leaveTemplate.service';
+import { resolveTemplateForDepartment, assertHasWeeklyOff } from './leaveTemplate.service';
 import {
   getCtcRange, getStructureByJobTitle, seedEmployeeStructureFromTemplate,
   editorLines, previewStructure, saveEmployeeStructure, getMonthlyCtcMap,
@@ -537,7 +537,8 @@ export async function createEmployeeFromCandidate(
   const [{ id: employeeId }] = await cx('employees').insert({
     employee_code: employeeCode,
     job_id: await nextJobId(cx),
-    leave_template_id: await getDefaultTemplateId(), // new hires land on the Default leave template
+    // Their department's leave plan if one governs it, else Default.
+    leave_template_id: await resolveTemplateForDepartment(vacancy.department_name),
 
     first_name: firstName,
     last_name: lastName,

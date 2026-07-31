@@ -2,7 +2,7 @@ import type { Knex } from 'knex';
 import db from '../config/database';
 import { nextJobId } from '../utils/jobId';
 import { ValidationError } from '../utils/errors';
-import { getDefaultTemplateId } from './leaveTemplate.service';
+import { resolveTemplateForDepartment } from './leaveTemplate.service';
 import { computePropertyBudget, getRoleBand } from './manpower.service';
 import { advisoryXactLock, LOCK } from '../utils/locks';
 import { buildCsv } from '../utils/csv';
@@ -289,7 +289,10 @@ export async function createEmployee(data: any) {
   normalizeGender(data);
   normalizePan(data);
   if (!data.job_id) data.job_id = await nextJobId(db);
-  if (data.leave_template_id == null) data.leave_template_id = await getDefaultTemplateId(); // land on Default
+  // Their department's leave plan if one governs it, else Default. Resolving it per hire is what
+  // makes a department rule apply to people hired after it was made, rather than only to those
+  // who happened to exist on the day somebody ticked the box.
+  if (data.leave_template_id == null) data.leave_template_id = await resolveTemplateForDepartment(data.dept_name);
   // The sanctioned-cap check and the insert share one advisory-locked transaction, so a concurrent
   // create can't read the same free slot and race past the wall (direct create bypasses recruitment).
   const id = await db.transaction(async (trx) => {
@@ -451,7 +454,7 @@ export async function bulkUploadEmployees(csvContent: string) {
         if (!data.date_of_joining) data.date_of_joining = new Date().toISOString().split('T')[0];
         if (data.is_active === undefined) data.is_active = true;
         data.job_id = await nextJobId(db);
-        if (data.leave_template_id == null) data.leave_template_id = await getDefaultTemplateId(); // land on Default
+        if (data.leave_template_id == null) data.leave_template_id = await resolveTemplateForDepartment(data.dept_name);
         // Cap check + insert in one advisory-locked transaction (see createEmployee). A breach throws,
         // rolling back this row's insert; the catch below records it as skipped + reports the reason.
         await db.transaction(async (trx) => {

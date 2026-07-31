@@ -360,12 +360,15 @@ interface TRow {
   half_day_allowed: boolean; after_probation_only: boolean; count_sandwich_days: boolean;
   eligibility: string; cannot_club_with: number[];
 }
-type TForm = { name: string; is_active: boolean; rows: TRow[]; off_day_rules: OffDay[] };
+type TForm = {
+  name: string; is_active: boolean; rows: TRow[]; off_day_rules: OffDay[]; department_ids: number[];
+};
+const BLANK_TEMPLATE: TForm = { name: '', is_active: true, rows: [], off_day_rules: [], department_ids: [] };
 
 function TemplatesPanel() {
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<number | 'new' | null>(null);
-  const [form, setForm] = useState<TForm>({ name: '', is_active: true, rows: [], off_day_rules: [] });
+  const [form, setForm] = useState<TForm>(BLANK_TEMPLATE);
   const [confirmDel, setConfirmDel] = useState<any | null>(null);
 
   const { data: templates = [], isLoading } = useQuery({
@@ -374,6 +377,11 @@ function TemplatesPanel() {
   const { data: leaveTypes = [] } = useQuery({
     queryKey: ['leave-types-all'], queryFn: () => api.get('/leave/types/all').then(r => r.data),
   });
+  // Departments + headcount + which template already claims each.
+  const { data: deptCoverage = [] } = useQuery({
+    queryKey: ['leave-template-departments'],
+    queryFn: () => api.get('/leave/templates/departments').then(r => r.data),
+  });
   const { data: detail } = useQuery({
     queryKey: ['leave-template', selectedId],
     queryFn: () => api.get(`/leave/templates/${selectedId}`).then(r => r.data),
@@ -381,10 +389,11 @@ function TemplatesPanel() {
   });
 
   useEffect(() => {
-    if (selectedId === 'new') { setForm({ name: '', is_active: true, rows: [], off_day_rules: [] }); return; }
+    if (selectedId === 'new') { setForm(BLANK_TEMPLATE); return; }
     if (detail) setForm({
       name: detail.name, is_active: detail.is_active, rows: detail.rows.map((r: any) => ({ ...r })),
       off_day_rules: detail.off_day_rules ?? [],
+      department_ids: detail.department_ids ?? [],
     });
   }, [detail, selectedId]);
 
@@ -393,6 +402,8 @@ function TemplatesPanel() {
     queryClient.invalidateQueries({ queryKey: ['leave-templates'] });
     queryClient.invalidateQueries({ queryKey: ['leave-template'] });
     queryClient.invalidateQueries({ queryKey: ['leave-assignments'] });
+    // A save can move people between plans, so the coverage map and the By Employee tab are both stale.
+    queryClient.invalidateQueries({ queryKey: ['leave-template-departments'] });
   };
 
   const saveMutation = useMutation({
@@ -400,6 +411,7 @@ function TemplatesPanel() {
       const norm = (v: any) => (v === '' || v === null || v === undefined ? null : Number(v));
       const payload = {
         name: form.name.trim(), is_active: form.is_active, off_day_rules: form.off_day_rules,
+        department_ids: form.department_ids,
         rows: form.rows.map((r) => ({
           leave_type_id: r.leave_type_id, default_days: Number(r.default_days) || 0,
           is_paid: r.is_paid, is_encashable: r.is_encashable,
@@ -411,7 +423,15 @@ function TemplatesPanel() {
       };
       return selectedId === 'new' ? api.post('/leave/templates', payload) : api.put(`/leave/templates/${selectedId}`, payload);
     },
-    onSuccess: (res) => { invalidate(); toast.success(selectedId === 'new' ? 'Template created' : 'Template saved'); if (selectedId === 'new' && res.data?.id) setSelectedId(res.data.id); },
+    onSuccess: (res) => {
+      invalidate();
+      // Report the people actually MOVED, not the size of the departments — "22 employees" when
+      // 21 were already on the plan reads as though the save did far more than it did.
+      const moved = Number(res.data?.employees_moved ?? 0);
+      const base = selectedId === 'new' ? 'Template created' : 'Template saved';
+      toast.success(moved > 0 ? `${base} — ${moved} employee${moved === 1 ? '' : 's'} moved onto this plan` : base);
+      if (selectedId === 'new' && res.data?.id) setSelectedId(res.data.id);
+    },
     onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to save'),
   });
 
@@ -454,6 +474,11 @@ function TemplatesPanel() {
                   {!t.is_active && <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-secondary">Inactive</span>}
                 </div>
                 <p className="text-[11px] text-secondary mt-0.5">{t.row_count} leave type{t.row_count === 1 ? '' : 's'} · {t.employee_count} employee{t.employee_count === 1 ? '' : 's'}</p>
+                {t.departments?.length > 0 && (
+                  <p className="text-[11px] text-primary mt-0.5 truncate" title={t.departments.map((d: any) => d.name).join(', ')}>
+                    {t.departments.map((d: any) => d.name).join(', ')}
+                  </p>
+                )}
               </button>
             ))}
         </div>
@@ -491,6 +516,22 @@ function TemplatesPanel() {
                   onChange={(e) => setForm((p) => ({ ...p, is_active: e.target.checked }))} className="h-4 w-4 rounded border-border text-primary focus:ring-2 focus:ring-primary/50" />
                 <span className="text-sm text-foreground">Active {selected?.is_default && <span className="text-xs text-secondary">(the Default plan is always active)</span>}</span>
               </label>
+            </div>
+
+            {/* Department governance — the bulk lever. Everything else on this screen is edited
+                once and applies to whoever happens to be on the plan; this decides WHO is on it. */}
+            <div className="border-t border-border pt-4">
+              <label className="block text-xs font-medium text-secondary mb-1">Applies to departments</label>
+              <p className="text-xs text-secondary mb-3">
+                Everyone in a selected department moves onto this plan when you save, and anyone hired
+                into it afterwards starts on it. A department can only be on one plan.
+              </p>
+              <DepartmentPicker
+                coverage={deptCoverage}
+                selected={form.department_ids}
+                currentTemplateId={typeof selectedId === 'number' ? selectedId : null}
+                onChange={(ids) => setForm((p) => ({ ...p, department_ids: ids }))}
+              />
             </div>
 
             {/* The work week. This is what decides whether a day was one the person was SCHEDULED
@@ -533,6 +574,85 @@ function TemplatesPanel() {
       <ConfirmDialog open={!!confirmDel} title="Delete template?" danger confirmLabel="Delete"
         message={confirmDel ? <>Permanently delete <span className="font-medium text-foreground">{confirmDel.name}</span>? Employees on it must be reassigned first.</> : undefined}
         loading={deleteMutation.isPending} onConfirm={() => confirmDel && deleteMutation.mutate(confirmDel.id)} onCancel={() => setConfirmDel(null)} />
+    </div>
+  );
+}
+
+/**
+ * Pick the departments this leave plan governs.
+ *
+ * Every department is shown, including those already on another plan — hiding them would leave
+ * the admin wondering why a department they can see in Organisation is missing here. A claimed
+ * one is disabled and says which plan holds it, so the answer to "why can't I pick Housekeeping"
+ * is on the chip itself rather than in an error after a failed save.
+ */
+function DepartmentPicker({ coverage, selected, currentTemplateId, onChange }: {
+  coverage: any[];
+  selected: number[];
+  currentTemplateId: number | null;
+  onChange: (ids: number[]) => void;
+}) {
+  const isOn = (id: number) => selected.includes(id);
+  const toggle = (id: number) => onChange(isOn(id) ? selected.filter((x) => x !== id) : [...selected, id]);
+
+  // Headcount of what is ticked right now, so the cost of Save is visible before pressing it.
+  const reach = coverage
+    .filter((d: any) => isOn(d.id))
+    .reduce((sum: number, d: any) => sum + Number(d.employee_count || 0), 0);
+
+  if (!coverage.length) {
+    return <p className="text-xs text-secondary">No departments configured yet — add them under Admin → Organisation.</p>;
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-2">
+        {coverage.map((d: any) => {
+          const on = isOn(d.id);
+          // "Taken" means another template holds it. A department this template already governs
+          // comes back with template_id === currentTemplateId and must stay untickable-off-able.
+          const takenBy = d.template_id != null && d.template_id !== currentTemplateId ? d.template_name : null;
+          return (
+            <button
+              key={d.id}
+              type="button"
+              disabled={!!takenBy}
+              onClick={() => toggle(d.id)}
+              title={takenBy ? `Already on the "${takenBy}" plan — remove it there first` : undefined}
+              className={`px-3 py-1.5 rounded-lg border text-sm transition-colors text-left ${
+                takenBy
+                  ? 'border-border bg-muted/50 text-secondary cursor-not-allowed'
+                  : on
+                    ? 'border-primary bg-primary/5 text-foreground'
+                    : 'border-border hover:bg-muted'
+              }`}
+            >
+              <span className="font-medium">{d.name}</span>
+              <span className="text-xs text-secondary ml-1.5">
+                {d.employee_count} {d.employee_count === 1 ? 'person' : 'people'}
+              </span>
+              {takenBy && <span className="block text-[11px] text-amber-700 mt-0.5">on {takenBy}</span>}
+            </button>
+          );
+        })}
+      </div>
+
+      {selected.length > 0 ? (
+        <p className="text-xs text-secondary">
+          <b className="text-foreground">{reach}</b> {reach === 1 ? 'person is' : 'people are'} in the{' '}
+          {selected.length} selected department{selected.length === 1 ? '' : 's'}. Saving moves anyone not
+          already on this plan onto it — which changes the leave they get.
+        </p>
+      ) : (
+        <p className="text-xs text-secondary">
+          No departments selected — this plan applies only to people assigned individually on the
+          By Employee tab.
+        </p>
+      )}
+      <p className="text-xs text-secondary">
+        Unticking a department later stops NEW hires landing here, but leaves the people already
+        moved on this plan. Move them back from the By Employee tab if that is what you meant.
+      </p>
     </div>
   );
 }

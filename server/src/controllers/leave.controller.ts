@@ -38,6 +38,9 @@ export async function deleteLeaveTemplate(req: AuthRequest, res: Response, next:
 export async function listLeaveTemplateAssignments(req: AuthRequest, res: Response, next: NextFunction) {
   try { res.json(await templateService.listTemplateAssignments({ search: req.query.search ? String(req.query.search) : undefined })); } catch (err) { next(err); }
 }
+export async function listLeaveTemplateDepartments(_req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await templateService.listDepartmentCoverage()); } catch (err) { next(err); }
+}
 export async function setEmployeeLeaveTemplate(req: AuthRequest, res: Response, next: NextFunction) {
   try { res.json(await templateService.setEmployeeTemplate(Number(req.params.employeeId), Number(req.body.template_id))); } catch (err) { next(err); }
 }
