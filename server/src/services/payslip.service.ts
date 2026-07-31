@@ -22,6 +22,16 @@ import {
 } from './payrollMonth.service';
 import { LOCK, advisoryXactLock } from '../utils/locks';
 
+/**
+ * The DATABASE's clock. Used wherever a timestamp has to be comparable with rows another
+ * connection wrote — comparing those against this process's clock would make the answer depend on
+ * skew between the app server and Postgres.
+ */
+async function dbNow(): Promise<Date> {
+  const r: any = await db.raw('SELECT now() AS now');
+  return new Date(r.rows[0].now);
+}
+
 function num(v: any): number {
   return v === null || v === undefined ? 0 : Number(v);
 }
@@ -385,9 +395,17 @@ export async function getSelfServicePayslip(employeeId: number, month: number, y
 const assertMonthNotFrozen = assertMonthWritable;
 
 /** Upserts a payslip_history row from a computed payslip. Returns the row id. */
+/**
+ * `pricedAt` is the moment the compute that produced `computed` STARTED, not the moment of this
+ * write. It matters because `stalePayslips` compares payslip_history.updated_at against
+ * attendance_records.updated_at: stamping write-time would make a payslip look newer than an
+ * attendance row that landed mid-compute and is therefore absent from it, reporting a wrong slip as
+ * fresh — and `lockRun` refuses on that check, so a clean result reads as "safe to pay". Stamping
+ * read-time can only err the safe way, costing at worst one redundant re-run.
+ */
 async function writePayslipRecord(
   computed: ComputedPayslip, runId: number | null, generatedBy?: number | null,
-  cx: Knex | Knex.Transaction = db,
+  cx: Knex | Knex.Transaction = db, pricedAt?: Date,
 ): Promise<number> {
   // Locked months are immutable — re-check right before the write so a run that
   // started before a concurrent lock cannot overwrite a finalized payslip.
@@ -421,10 +439,12 @@ async function writePayslipRecord(
   const existing = await cx('payslip_history')
     .where({ employee_id: computed.employee.id, month: computed.month, year: computed.year }).first();
   if (existing) {
-    await cx('payslip_history').where('id', existing.id).update({ ...record, updated_at: cx.fn.now() });
+    await cx('payslip_history').where('id', existing.id)
+      .update({ ...record, updated_at: pricedAt ?? cx.fn.now() });
     return existing.id;
   }
-  const [{ id }] = await cx('payslip_history').insert(record).returning('id');
+  const [{ id }] = await cx('payslip_history')
+    .insert(pricedAt ? { ...record, updated_at: pricedAt } : record).returning('id');
   return id;
 }
 
@@ -569,8 +589,12 @@ export async function runPayroll(month: number, year: number, userId?: number | 
       // Period-aware compute so hourly-rated employees are included (a period-less
       // pre-check used to throw for them and silently skip every one). This is a real
       // payroll write, so it may freeze the ESI contribution-period coverage.
+      // Per employee, not per run: a 400-person run writes over minutes, so an attendance change
+      // mid-run leaves the slips written before it stale and the ones after it correct. Stamping
+      // one run-wide timestamp would paper over exactly that.
+      const pricedAt = await dbNow();
       const computed = await computeForEmployee(emp.id, month, year, { persistEsiPeriod: true });
-      await writePayslipRecord(computed, run.id, userId);
+      await writePayslipRecord(computed, run.id, userId, db, pricedAt);
       generated += 1;
       totalNet += computed.breakdown.net_pay;
       totalCtc += computed.breakdown.ctc;
@@ -686,6 +710,11 @@ export async function refreshPayslipAfterAttendanceChange(
   // Compute BEFORE opening the transaction. It reads committed state — which now includes the
   // caller's attendance change — and holding the month lock across a full payslip computation
   // would block every other approval for that month for no benefit.
+  //
+  // Take the clock first, from the DATABASE rather than this process, so it is comparable with the
+  // attendance timestamps it will be measured against and immune to app-server clock skew. See the
+  // note on writePayslipRecord for why read-time and not write-time.
+  const pricedAt = await dbNow();
   const computed = await computeForEmployee(employeeId, month, year, { persistEsiPeriod: false });
   if (!computed) return { outcome: 'no_payslip', month, year, reason: 'no salary structure' };
 
@@ -705,7 +734,7 @@ export async function refreshPayslipAfterAttendanceChange(
     const still = await trx('payslip_history').where({ employee_id: employeeId, month, year }).first();
     if (!still) { outcome = 'no_payslip'; return; }
 
-    await writePayslipRecord(computed, still.run_id ?? run?.id ?? null, userId, trx);
+    await writePayslipRecord(computed, still.run_id ?? run?.id ?? null, userId, trx, pricedAt);
     if (run) await refreshRunTotals(run.id, month, year, trx);
   });
 
@@ -796,9 +825,9 @@ export async function upsertAdjustment(
  * warnings (unmarked days, LOP overrides, manual adjustments), and the
  * employees that were skipped.
  */
-export async function getRunDetails(month: number, year: number) {
-  const run = await getRun(month, year);
-  const rows = await db('payslip_history as ph')
+export async function getRunDetails(month: number, year: number, cx: Knex | Knex.Transaction = db) {
+  const run = await getRun(month, year, cx);
+  const rows = await cx('payslip_history as ph')
     .join('employees as e', 'e.id', 'ph.employee_id')
     .leftJoin('job_titles as jt', 'jt.id', 'e.job_title_id')
     .leftJoin('properties as p', 'p.name', 'e.branch_name')
@@ -810,7 +839,7 @@ export async function getRunDetails(month: number, year: number) {
     )
     .orderBy('e.first_name');
 
-  const adjustments = await db('payroll_adjustments').where({ month, year });
+  const adjustments = await cx('payroll_adjustments').where({ month, year });
   const adjByEmployee = new Map<number, any>(adjustments.map((a: any) => [a.employee_id, a]));
 
   // Minimum-wage validation (Phase 1): flag any slip whose full-month Basic is
@@ -879,7 +908,7 @@ export async function getRunDetails(month: number, year: number) {
   });
 
   const covered = new Set(rows.map((r: any) => r.employee_id));
-  const skipped = (await db('employees')
+  const skipped = (await cx('employees')
     .where('is_active', true)
     .select('id', 'employee_code', 'first_name', 'last_name'))
     .filter((e: any) => !covered.has(e.id))
@@ -895,7 +924,7 @@ export async function getRunDetails(month: number, year: number) {
   // successful re-price clears it automatically and a bulk upload or leave approval is caught the
   // same way a regularisation is. A LOCKED month is frozen by design — "out of date" there is
   // noise, not a finding, so it is not computed.
-  const stale = run?.status === 'locked' ? [] : await stalePayslips(month, year);
+  const stale = run?.status === 'locked' ? [] : await stalePayslips(month, year, cx);
   const staleById = new Map(stale.map((s) => [s.employee_id, s.attendance_touched_at]));
   for (const s of slips as any[]) {
     const touched = staleById.get(s.employee_id);
@@ -1000,17 +1029,14 @@ export function computeCoverage(slips: any[], gatePct: number) {
 }
 
 /**
- * Salary register for the bank hand-off: one CSV row per generated slip with
- * days, net pay, and bank account details where available.
+ * Turns already-computed slips into the bank hand-off CSV.
+ *
+ * Split out from getSalaryRegister so `lockRun` can snapshot the register from the SAME slips its
+ * gates just judged. It used to call getSalaryRegister, which read the month a second time — so the
+ * coverage gate and the file that gets frozen could disagree about the same month.
  */
-export async function getSalaryRegister(month: number, year: number): Promise<string> {
-  // A locked month serves the register snapshotted at lock, so the hand-off file
-  // is reproducible even after structures or rates change.
-  const lockedRun = await getRun(month, year);
-  if (lockedRun?.status === 'locked' && lockedRun.register_snapshot) return lockedRun.register_snapshot;
-
-  const { slips } = await getRunDetails(month, year);
-  const bank = await db('employee_bank_details').select(
+async function buildRegisterCsv(slips: any[], cx: Knex | Knex.Transaction = db): Promise<string> {
+  const bank = await cx('employee_bank_details').select(
     'employee_id', 'account_name', 'bank_account_number', 'ifsc_code', 'payment_mode',
   );
   const bankByEmployee = new Map<number, any>(bank.map((b: any) => [b.employee_id, b]));
@@ -1034,58 +1060,84 @@ export async function getSalaryRegister(month: number, year: number): Promise<st
   return lines.join('\n');
 }
 
+/**
+ * Salary register for the bank hand-off: one CSV row per generated slip with
+ * days, net pay, and bank account details where available.
+ */
+export async function getSalaryRegister(
+  month: number, year: number, cx: Knex | Knex.Transaction = db,
+): Promise<string> {
+  // A locked month serves the register snapshotted at lock, so the hand-off file
+  // is reproducible even after structures or rates change.
+  const lockedRun = await getRun(month, year, cx);
+  if (lockedRun?.status === 'locked' && lockedRun.register_snapshot) return lockedRun.register_snapshot;
+
+  const { slips } = await getRunDetails(month, year, cx);
+  return buildRegisterCsv(slips, cx);
+}
+
 export async function lockRun(month: number, year: number, userId?: number | null, confirm = false) {
   assertValidPeriod(month, year);
-  const run = await getRun(month, year);
-  if (!run) throw new AppError('No payroll run to lock. Run payroll for this month first.', 400);
-  if (run.status === 'locked') return run;
 
-  const countRow = await db('payslip_history').where({ month, year }).count('id as c').first();
-  if (!Number(countRow?.c ?? 0)) {
-    throw new AppError('No payslips generated for this month yet.', 400);
-  }
+  return db.transaction(async (trx) => {
+    await advisoryXactLock(trx, LOCK.PAYROLL_MONTH, monthKeyOf(month, year));
 
-  // Out-of-date payslips: block, and do NOT offer a confirm-through.
-  //
-  // Unlike the coverage gate below — where the data may genuinely be all there is — a stale slip
-  // has a correct fix one click away, so confirming through means knowingly paying a figure you
-  // have just been told is wrong, and locking freezes it permanently with no arrears path.
-  const { coverage, staleness } = await getRunDetails(month, year);
-  if (staleness.count > 0) {
-    throw new AppError(
-      `${staleness.count} payslip${staleness.count === 1 ? '' : 's'} in ${monthName(month)} ${year} `
-      + `${staleness.count === 1 ? 'is' : 'are'} out of date — attendance changed after this run was `
-      + 'generated. Re-run payroll for this month, then lock.',
-      409,
-    );
-  }
+    // Every read below is on `trx`, so the gates judge the same snapshot the write commits against.
+    const run = await getRun(month, year, trx);
+    if (!run) throw new AppError('No payroll run to lock. Run payroll for this month first.', 400);
+    if (run.status === 'locked') return run;
 
-  // Attendance-coverage gate: block the lock (unless explicitly confirmed) when too many
-  // working-day cells were paid with no evidence anybody worked them — no record at all, or a
-  // No Punch, which since migration 026 pays a full day. The run would pay on thin data.
-  if (coverage.over_gate && !confirm) {
-    const parts = [
-      coverage.unmarked_days ? `${coverage.unmarked_days} unmarked` : '',
-      coverage.no_punch_days ? `${coverage.no_punch_days} No Punch` : '',
-    ].filter(Boolean).join(' + ');
-    throw new AppError(
-      `Attendance evidence is only ${(100 - coverage.unevidenced_pct).toFixed(1)}% complete — ${coverage.unevidenced_pct}% of working days (${parts}) would be paid with nothing showing the person worked (gate: ${coverage.gate_pct}%). Review coverage, then confirm to lock anyway.`,
-      409,
-    );
-  }
+    const countRow = await trx('payslip_history').where({ month, year }).count('id as c').first();
+    if (!Number(countRow?.c ?? 0)) {
+      throw new AppError('No payslips generated for this month yet.', 400);
+    }
 
-  // Snapshot the salary register onto the run while it's still draft (computed
-  // live), so the locked month's hand-off file survives later input changes.
-  const register = await getSalaryRegister(month, year);
+    // ONE getRunDetails, not two. The register used to call it again independently, so the coverage
+    // gate and the CSV could be built from different reads of the same month.
+    const details = await getRunDetails(month, year, trx);
+    const { coverage, staleness } = details;
 
-  await db('payroll_runs').where('id', run.id).update({
-    status: 'locked',
-    locked_by: userId ?? null,
-    locked_at: db.fn.now(),
-    register_snapshot: register,
-    updated_at: db.fn.now(),
+    // Out-of-date payslips: block, and do NOT offer a confirm-through.
+    //
+    // Unlike the coverage gate below — where the data may genuinely be all there is — a stale slip
+    // has a correct fix one click away, so confirming through means knowingly paying a figure you
+    // have just been told is wrong, and locking freezes it permanently with no arrears path.
+    if (staleness.count > 0) {
+      throw new AppError(
+        `${staleness.count} payslip${staleness.count === 1 ? '' : 's'} in ${monthName(month)} ${year} `
+        + `${staleness.count === 1 ? 'is' : 'are'} out of date — attendance changed after this run was `
+        + 'generated. Re-run payroll for this month, then lock.',
+        409,
+      );
+    }
+
+    // Attendance-coverage gate: block the lock (unless explicitly confirmed) when too many
+    // working-day cells were paid with no evidence anybody worked them — no record at all, or a
+    // No Punch, which since migration 026 pays a full day. The run would pay on thin data.
+    if (coverage.over_gate && !confirm) {
+      const parts = [
+        coverage.unmarked_days ? `${coverage.unmarked_days} unmarked` : '',
+        coverage.no_punch_days ? `${coverage.no_punch_days} No Punch` : '',
+      ].filter(Boolean).join(' + ');
+      throw new AppError(
+        `Attendance evidence is only ${(100 - coverage.unevidenced_pct).toFixed(1)}% complete — ${coverage.unevidenced_pct}% of working days (${parts}) would be paid with nothing showing the person worked (gate: ${coverage.gate_pct}%). Review coverage, then confirm to lock anyway.`,
+        409,
+      );
+    }
+
+    // Snapshot the bank hand-off from the slips the gates just judged, so the locked month's file
+    // is the one that was approved rather than whatever a second read would have found.
+    const register = await buildRegisterCsv(details.slips, trx);
+
+    await trx('payroll_runs').where('id', run.id).update({
+      status: 'locked',
+      locked_by: userId ?? null,
+      locked_at: trx.fn.now(),
+      register_snapshot: register,
+      updated_at: trx.fn.now(),
+    });
+    return getRun(month, year, trx);
   });
-  return getRun(month, year);
 }
 
 export async function unlockRun(month: number, year: number, userId?: number | null, reason?: string) {

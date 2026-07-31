@@ -2,7 +2,8 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import db from '../config/database';
 import { approveRegularisation, requestRegularisation } from './regularisation.service';
 import {
-  runPayroll, lockRun, getRunDetails, getPayslipForStaff, refreshPayslipAfterAttendanceChange,
+  runPayroll, lockRun, getRunDetails, getPayslipForStaff, getSalaryRegister,
+  refreshPayslipAfterAttendanceChange,
 } from './payslip.service';
 import { updatePaySchedule } from './paySchedule.service';
 import { ensureStructureComponents } from '../db/structureComponents';
@@ -225,6 +226,63 @@ describe.skipIf(!ON_THROWAWAY)('an approved regularisation reaches the money', (
     expect(res.outcome).toBe('no_payslip');
     expect(await db('payslip_history').where({ employee_id: empId, month: MONTH, year: YEAR }).first())
       .toBeUndefined();
+  });
+
+  // ── The two races the adversarial review found ──
+
+  it('the register frozen at lock matches the payslips it was built from', async () => {
+    // lockRun used to read the run, build the register, and flip the status as separate
+    // autocommit statements. A re-price landing in that window left the frozen bank CSV — which a
+    // locked month then serves verbatim FOREVER — disagreeing with the payslip row the employee
+    // sees, with no arrears path to reconcile them. It is now one transaction under the month lock.
+    await db('attendance_records').insert({ employee_id: empId, date: d(10), status: 'absent' });
+    await runPayroll(MONTH, YEAR, null);
+    await lockRun(MONTH, YEAR, null, true);
+
+    const run = await db('payroll_runs').where({ month: MONTH, year: YEAR }).first();
+    expect(run.status).toBe('locked');
+    expect(run.register_snapshot).toBeTruthy();
+
+    const stored = await storedNet();
+    const row = String(run.register_snapshot).split('\n').find((l: string) => l.startsWith('RMT-001'));
+    expect(row).toBeTruthy();
+    // Net pay is the last numeric column before the bank details.
+    expect(row).toContain(String(Math.round(stored)));
+
+    // And the exported register still serves that exact snapshot rather than recomputing.
+    expect(await getSalaryRegister(MONTH, YEAR)).toBe(run.register_snapshot);
+  });
+
+  it('locking is idempotent and cannot be re-entered', async () => {
+    await runPayroll(MONTH, YEAR, null);
+    const first = await lockRun(MONTH, YEAR, null, true);
+    const again = await lockRun(MONTH, YEAR, null, true);
+    expect(again.status).toBe('locked');
+    expect(again.locked_at).toEqual(first.locked_at);   // the second call is a no-op, not a re-lock
+  });
+
+  it('a payslip is stale exactly when attendance is NEWER than it, not the other way round', async () => {
+    // The direction the whole lock gate rests on. The re-price stamps updated_at from BEFORE its
+    // compute read anything, so an attendance write landing mid-compute is necessarily newer than
+    // the payslip that does not contain it. Stamping write-time would invert this for that window
+    // and report a wrong payslip as fresh — and lockRun refuses on this check, so a clean result
+    // reads as "safe to pay".
+    await runPayroll(MONTH, YEAR, null);
+    await db('attendance_records').insert({ employee_id: empId, date: d(12), status: 'absent' });
+
+    const anchorTime = new Date('2026-06-01T12:00:00Z');
+    await db('payslip_history').where({ employee_id: empId, month: MONTH, year: YEAR })
+      .update({ updated_at: anchorTime });
+
+    // Attendance touched AFTER the payslip was priced → the payslip cannot contain it.
+    await db('attendance_records').where({ employee_id: empId, date: d(12) })
+      .update({ updated_at: new Date(anchorTime.getTime() + 1000) });
+    expect((await getRunDetails(MONTH, YEAR)).staleness.count).toBe(1);
+
+    // Touched BEFORE → the payslip already reflects it, and nothing is reported.
+    await db('attendance_records').where({ employee_id: empId, date: d(12) })
+      .update({ updated_at: new Date(anchorTime.getTime() - 1000) });
+    expect((await getRunDetails(MONTH, YEAR)).staleness.count).toBe(0);
   });
 
   it('the approval records what happened to pay, for whoever asks months later', async () => {

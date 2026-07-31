@@ -113,24 +113,25 @@ export interface StalePayslip {
  * Per employee rather than per month, and that carries weight: a 400-person run writes its slips
  * in a loop over minutes, so an attendance change mid-run leaves some slips stale and others fine.
  *
- * KNOWN GAP — it can report a wrong payslip as fresh. The re-price computes OUTSIDE its
- * transaction (deliberately: see refreshPayslipAfterAttendanceChange), then stamps
- * payslip_history.updated_at from `now()` of a transaction that opens afterwards. An attendance
- * write committing in between is therefore older than the payslip that does not contain it, and
- * this check reports nothing. No attendance writer takes the month lock — not the two uploads, not
- * leave approval, not regularisation itself — so nothing serialises that window.
+ * Correct in the direction that matters. A payslip is stamped with a timestamp taken BEFORE the
+ * compute that produced it read anything (see `pricedAt` in refreshPayslipAfterAttendanceChange and
+ * runPayroll), never with `now()` at write time. So an attendance write landing between the read and
+ * the write is necessarily NEWER than the payslip that does not contain it, and shows up here.
  *
- * The fix is to capture a timestamp before the first read and write it explicitly instead of using
- * `now()` at write time. Recorded rather than papered over, because `lockRun` refuses on this
- * check, so anyone reading it will reasonably assume a clean result means the month is safe to pay.
+ * That ordering is load-bearing and cannot be relaxed to a write-time clock: no attendance writer
+ * takes the month lock — not the two uploads, not leave approval, not regularisation itself — so
+ * nothing else serialises that window, and `lockRun` refuses on this check, which means a clean
+ * result is read as "safe to pay".
  *
  * The opposite direction is harmless: a false "stale" costs one redundant re-run, nothing more.
  */
-export async function stalePayslips(month: number, year: number): Promise<StalePayslip[]> {
+export async function stalePayslips(
+  month: number, year: number, cx: Knex | Knex.Transaction = db,
+): Promise<StalePayslip[]> {
   // Business dates are TEXT 'YYYY-MM-DD', so a zero-padded lexical range is the correct filter
   // and uses the (employee_id, date) index. '-31' is a safe upper bound in every month.
   const mm = String(month).padStart(2, '0');
-  const rows = await db('payslip_history as ph')
+  const rows = await cx('payslip_history as ph')
     .join('attendance_records as ar', function joinOn() {
       this.on('ar.employee_id', '=', 'ph.employee_id')
         .andOn('ar.updated_at', '>', 'ph.updated_at');
