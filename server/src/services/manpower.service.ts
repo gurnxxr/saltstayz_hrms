@@ -5,7 +5,7 @@ import { NotFoundError, ValidationError, ForbiddenError, GuardrailError } from '
 import { resolveTemplateForDepartment, assertHasWeeklyOff } from './leaveTemplate.service';
 import { nextJobId } from '../utils/jobId';
 import { LOCK, advisoryXactLock } from '../utils/locks';
-import { notifyRole } from './notification.service';
+import { notify, emit } from './notification.service';
 import { LIVE_VACANCY_STATUSES } from './recruitment.service';
 import { getMonthlyCtcMap } from './salaryStructure.service';
 
@@ -595,7 +595,15 @@ export async function changeStatus(employeeId: number, toStatus: string, data: {
   return getHire(employeeId);
 }
 
-/** Flags admin + HR (bell notification) that a departing / PIP employee's JOB needs a backup. */
+/**
+ * Flags that a departing / PIP employee's JOB needs a backup.
+ *
+ * This used to blast every admin AND every HR user in the company for a single hotel's vacancy —
+ * around thirty inboxes for something two people can act on. It is now the one event where the
+ * settings grid is expected to reduce volume rather than add to it: point it at the cluster HR and
+ * property manager who own that property. HR + admin stay ticked by default so nothing goes quiet
+ * on the day this ships.
+ */
 export async function notifyReplacementNeeded(emp: any) {
   const jt = emp.job_title_id ? (await db('job_titles').where('id', emp.job_title_id).first())?.title : null;
   const who = `${emp.first_name || ''} ${emp.last_name || ''}`.trim() || 'An employee';
@@ -603,14 +611,15 @@ export async function notifyReplacementNeeded(emp: any) {
   const verb = emp.employment_status === 'pip' ? 'is on PIP'
     : emp.employment_status === 'absconding' ? 'has absconded'
     : 'is leaving';
-  const payload = {
-    type: 'replacement_needed',
-    title: 'Replacement needed',
-    message: `${who} (${tag}${jt || 'role'} @ ${emp.branch_name || 'property'}) ${verb} — raise a backfill vacancy.`,
-    link: '/manpower',
-  };
-  await notifyRole('admin', payload);
-  await notifyRole('hr', payload);
+  await emit('employee.replacement_needed', {
+    employeeId: emp.id,
+    payload: {
+      type: 'replacement_needed',
+      title: 'Replacement needed',
+      message: `${who} (${tag}${jt || 'role'} @ ${emp.branch_name || 'property'}) ${verb} — raise a backfill vacancy.`,
+      link: '/manpower',
+    },
+  });
 }
 
 /** JOBs (employees) currently on PIP or Left that are open to backfill. */
@@ -796,7 +805,7 @@ export async function createException(input: HireInput & { request_reason?: stri
 }
 
 export async function approveException(id: number, admin: JwtPayload, adminNote?: string) {
-  return db.transaction(async (trx) => {
+  const result = await db.transaction(async (trx) => {
     // Lock the request row for the whole review so two concurrent approvals can't both pass the
     // status check — for a standalone Add-Hire exception that would mint two employees from one
     // approval (last-writer-wins on the row). Re-reads the live status inside the lock.
@@ -836,6 +845,32 @@ export async function approveException(id: number, admin: JwtPayload, adminNote?
       admin_note: adminNote || null, created_employee_id: employeeId, consumed_at: trx.fn.now(), updated_at: trx.fn.now(),
     });
     return getException(id, trx);
+  });
+
+  await notifyExceptionDecision(result, 'approved', admin);
+  return result;
+}
+
+/**
+ * Tells the person who raised a hiring exception what happened to it. They are blocked until it is
+ * decided and, until now, were told nothing either way — they had to keep reopening the page.
+ *
+ * Always after the transaction commits, and the requester is notified directly rather than through
+ * an audience: they are one named person, not a role.
+ */
+async function notifyExceptionDecision(ex: any, outcome: 'approved' | 'rejected', admin?: JwtPayload) {
+  const title = outcome === 'approved' ? 'Hiring exception approved' : 'Hiring exception rejected';
+  const note = ex?.admin_note ? ` Note: ${ex.admin_note}` : '';
+  const payload = {
+    type: `hiring_exception_${outcome}`,
+    title,
+    message: `Your request for ${ex?.candidate_name || 'a candidate'} was ${outcome}.${note}`,
+    link: '/manpower',
+  };
+  if (ex?.requested_by) await notify(ex.requested_by, payload);
+  await emit('manpower.exception_decided', {
+    actorUserId: admin?.userId ?? null,
+    payload: { ...payload, message: `${ex?.candidate_name || 'A candidate'}: hiring exception ${outcome}.${note}` },
   });
 }
 
@@ -878,12 +913,16 @@ export async function createCandidateException(params: {
     join_date: params.joinDate || null, request_reason: params.reason.trim(),
     status: 'pending',
   }).returning('id');
-  // Surface the request to admins right away — the approval inbox is where it gets actioned.
-  await notifyRole('admin', {
-    type: 'hiring_approval_requested',
-    title: 'Over-limit hire needs approval',
-    message: `${params.candidateName.trim()} at ₹${ctc.toLocaleString('en-IN')}/mo is over the sanctioned limit and is waiting for review.`,
-    link: '/admin/approvals',
+  // Surface the request right away — the approval inbox is where it gets actioned. Admins are
+  // ticked by default; the candidate is not an employee yet, so there is nobody to scope this to.
+  await emit('manpower.exception_raised', {
+    actorUserId: requestedBy || null,
+    payload: {
+      type: 'hiring_approval_requested',
+      title: 'Over-limit hire needs approval',
+      message: `${params.candidateName.trim()} at ₹${ctc.toLocaleString('en-IN')}/mo is over the sanctioned limit and is waiting for review.`,
+      link: '/admin/approvals',
+    },
   });
   return getException(id);
 }
@@ -896,7 +935,9 @@ export async function rejectException(id: number, admin: JwtPayload, adminNote?:
     status: 'rejected', reviewed_by: admin?.userId || null, reviewed_at: db.fn.now(),
     admin_note: adminNote || null, updated_at: db.fn.now(),
   });
-  return getException(id);
+  const result = await getException(id);
+  await notifyExceptionDecision(result, 'rejected', admin);
+  return result;
 }
 
 // ─── Clusters + assignments (Admin) ───

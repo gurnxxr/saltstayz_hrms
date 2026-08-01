@@ -14,7 +14,7 @@ import { getPaySchedule } from './paySchedule.service';
 import {
   computePayableDays, getMonthlyHours, getOvertimeHours, projectPaymentDays,
 } from './payableDays.service';
-import { notifyEmployee } from './notification.service';
+import { notifyEmployee, notify, emit } from './notification.service';
 import { csvCell } from '../utils/csv';
 import type { Knex } from 'knex';
 import {
@@ -1082,13 +1082,14 @@ export async function lockRun(
 ) {
   assertValidPeriod(month, year);
 
-  return db.transaction(async (trx) => {
+  const outcome = await db.transaction(async (trx) => {
     await advisoryXactLock(trx, LOCK.PAYROLL_MONTH, monthKeyOf(month, year));
 
     // Every read below is on `trx`, so the gates judge the same snapshot the write commits against.
     const run = await getRun(month, year, trx);
     if (!run) throw new AppError('No payroll run to lock. Run payroll for this month first.', 400);
-    if (run.status === 'locked') return run;
+    // Already locked: nothing changed, so nothing to announce.
+    if (run.status === 'locked') return { run, overrides: null as string | null, alreadyLocked: true };
 
     const countRow = await trx('payslip_history').where({ month, year }).count('id as c').first();
     if (!Number(countRow?.c ?? 0)) {
@@ -1153,19 +1154,64 @@ export async function lockRun(
     // is the one that was approved rather than whatever a second read would have found.
     const register = await buildRegisterCsv(details.slips, trx);
 
+    // Every warning that was waved through, recorded together.
+    //
+    // The coverage confirm used to leave NO trace at all — lock_override_reason was written only
+    // for stale payslips, so a month locked over a tripped attendance gate was indistinguishable
+    // afterwards from one that locked cleanly. Both are overrides of a control, both are now
+    // written down, and a null still means the month locked with nothing waved through.
+    const overrides: string[] = [];
+    if (staleness.count > 0) {
+      overrides.push(`${staleness.count} payslip(s) out of date at lock: ${overrideReason}`);
+    }
+    if (coverage.over_gate) {
+      overrides.push(
+        `attendance evidence ${coverage.unevidenced_pct}% unevidenced at lock `
+        + `(gate ${coverage.gate_pct}%) — confirmed through`,
+      );
+    }
+
     await trx('payroll_runs').where('id', run.id).update({
       status: 'locked',
       locked_by: userId ?? null,
       locked_at: trx.fn.now(),
       register_snapshot: register,
-      // Only set when the gate was actually overridden, so a null means the month locked cleanly
-      // rather than that somebody forgot to explain themselves.
-      lock_override_reason: staleness.count > 0
-        ? `${staleness.count} payslip(s) out of date at lock: ${overrideReason}` : null,
+      lock_override_reason: overrides.length ? overrides.join(' | ') : null,
       updated_at: trx.fn.now(),
     });
-    return getRun(month, year, trx);
+    return {
+      run: await getRun(month, year, trx),
+      overrides: overrides.length ? overrides.join(' | ') : null,
+      alreadyLocked: false,
+    };
   });
+
+  // Announced after the commit, and never to the person who did it — a lock nobody else hears
+  // about is a control one person can wave through in silence.
+  if (!outcome.alreadyLocked) {
+    const period = `${monthName(month)} ${year}`;
+    await emit('payroll.month_locked', {
+      actorUserId: userId ?? null,
+      payload: {
+        type: 'payroll_locked',
+        title: `Payroll locked — ${period}`,
+        message: `The ${period} payroll month has been closed. Figures are now frozen.`,
+        link: '/payroll',
+      },
+    });
+    if (outcome.overrides) {
+      await emit('payroll.locked_over_warning', {
+        actorUserId: userId ?? null,
+        payload: {
+          type: 'payroll_locked_override',
+          title: `Payroll locked over a warning — ${period}`,
+          message: `${period} was locked despite: ${outcome.overrides}`,
+          link: '/payroll',
+        },
+      });
+    }
+  }
+  return outcome.run;
 }
 
 export async function unlockRun(month: number, year: number, userId?: number | null, reason?: string) {
@@ -1183,5 +1229,19 @@ export async function unlockRun(month: number, year: number, userId?: number | n
     unlock_reason: reason.trim(),
     updated_at: db.fn.now(),
   });
+
+  // A paid month reopening is the single most consequential thing anyone can do to payroll, and
+  // until now it happened in complete silence. The person who locked it is told regardless of the
+  // settings grid: they signed the month off, and it has just been reopened underneath them.
+  const period = `${monthName(month)} ${year}`;
+  const payload = {
+    type: 'payroll_unlocked',
+    title: `Payroll UNLOCKED — ${period}`,
+    message: `${period} has been reopened. Reason: ${reason.trim()}`,
+    link: '/payroll',
+  };
+  if (run.locked_by && run.locked_by !== userId) await notify(run.locked_by, payload);
+  await emit('payroll.month_unlocked', { actorUserId: userId ?? null, payload });
+
   return getRun(month, year);
 }

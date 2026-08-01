@@ -1,4 +1,6 @@
 import db from '../config/database';
+import { getEvent, isAudience } from './notificationEvents';
+import { resolveAudience } from './notificationScope.service';
 
 const TABLE = 'notifications';
 
@@ -43,17 +45,81 @@ export async function notifyEmployee(employeeId: number | null | undefined, p: N
   }
 }
 
-/** Broadcasts to every active user holding a given role (e.g. all HR). */
-export async function notifyRole(roleName: string, p: NotificationPayload): Promise<void> {
+/** Delivers one payload to many users in a single insert. */
+async function notifyMany(userIds: number[], p: NotificationPayload): Promise<void> {
+  if (!userIds.length) return;
+  await db(TABLE).insert(userIds.map((user_id) => ({
+    user_id,
+    type: p.type,
+    title: p.title,
+    message: p.message ?? null,
+    link: p.link ?? null,
+  })));
+}
+
+export interface EmitContext {
+  /** The employee the event is about. Required for the three property-scoped audiences. */
+  employeeId?: number | null;
+  /**
+   * Whoever performed the action, excluded from the fan-out. Telling someone what they just did is
+   * noise, and for an event that exists as a second pair of eyes — locking payroll over a warning —
+   * notifying only the person who did it defeats the entire point.
+   *
+   * Two fields rather than one because the two id spaces are genuinely different and confusing them
+   * is a bug this codebase has already had (see regularisation.service.ts:359). Controllers hold a
+   * user id; several services only ever see an employee id. Pass whichever you actually have.
+   */
+  actorUserId?: number | null;
+  actorEmployeeId?: number | null;
+  payload: NotificationPayload;
+}
+
+/**
+ * Announces that something happened. Who hears about it is a setting, not a decision made here.
+ *
+ * Call sites name an EVENT; `notification_settings` names the audiences; notificationScope turns
+ * those into actual people for this particular employee. That indirection is the point — before
+ * it, "also tell finance" was a code change.
+ *
+ * Same fire-and-forget contract as notify(): this must never throw into the business operation
+ * that triggered it. Call it AFTER the transaction commits, never inside — see the note at
+ * regularisation.service.ts:345 for what reading on a different pooled connection costs.
+ */
+export async function emit(eventKey: string, ctx: EmitContext): Promise<void> {
   try {
-    const users = await db('users as u')
-      .join('roles as r', 'r.id', 'u.role_id')
-      .where('r.name', roleName).where('u.is_active', true)
-      .pluck('u.id');
-    for (const uid of users) await notify(uid, p);
+    if (!getEvent(eventKey)) {
+      // A typo'd key would otherwise be a notification that silently never fires.
+      console.error(`[emit] unknown event key: ${eventKey}`);
+      return;
+    }
+
+    const audiences: string[] = await db('notification_settings')
+      .where({ event_key: eventKey, enabled: true })
+      .pluck('audience');
+    if (!audiences.length) return;
+
+    const recipients = new Set<number>();
+    for (const audience of audiences) {
+      if (!isAudience(audience)) continue;
+      const ids = await resolveAudience(audience, { employeeId: ctx.employeeId });
+      if (!ids.length) {
+        // Nobody holds this audience for this employee — a typo'd branch_name, an unstaffed
+        // cluster. Say so: a notification that resolves to nobody is the failure being fixed.
+        console.warn(`[emit] ${eventKey}: audience '${audience}' resolved to nobody`);
+        continue;
+      }
+      ids.forEach((id) => recipients.add(Number(id)));
+    }
+
+    if (ctx.actorUserId) recipients.delete(Number(ctx.actorUserId));
+    if (ctx.actorEmployeeId) {
+      const actor = await db('users').where('employee_id', ctx.actorEmployeeId).first();
+      if (actor) recipients.delete(Number(actor.id));
+    }
+    await notifyMany([...recipients], ctx.payload);
   } catch (err) {
     // eslint-disable-next-line no-console
-    console.error('[notifyRole] failed:', (err as Error).message);
+    console.error(`[emit] ${eventKey} failed:`, (err as Error).message);
   }
 }
 

@@ -3,6 +3,7 @@ import { NotFoundError, ValidationError } from '../utils/errors';
 import { getCurrentPeriod } from './leave.service';
 import { getEmployeeLeaveRule } from './leaveTemplate.service';
 import { getMonthlyBreakdown } from './payslip.service';
+import { notifyEmployee, emit } from './notification.service';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Leave Encashment (record-only by design): HR encashes unused leave days for
@@ -114,8 +115,31 @@ export async function approveEncashment(id: number, userId?: number | null) {
       approved_at: trx.fn.now(), updated_at: trx.fn.now(),
     });
   });
+
   const rows = await listEncashments();
-  return rows.find((r: any) => r.id === id);
+  const row = rows.find((r: any) => r.id === id);
+
+  // Cash leaving the business against an entitlement. Nothing fired here before, at any stage —
+  // not to the employee whose balance just dropped, and not to whoever has to pay it.
+  await notifyEmployee(enc.employee_id, {
+    type: 'encashment_approved',
+    title: 'Leave encashment approved',
+    message: `Your request to encash ${num(enc.days)} day(s) of leave has been approved.`,
+    link: '/leaves',
+  });
+  await emit('leave.encashment_approved', {
+    employeeId: enc.employee_id,
+    actorUserId: userId ?? null,
+    payload: {
+      type: 'encashment_approved',
+      title: 'Leave encashment approved',
+      message: `${row?.first_name || 'An employee'} ${row?.last_name || ''}`.trim()
+        + ` — ${num(enc.days)} day(s) of leave approved for encashment.`,
+      link: '/leaves',
+    },
+  });
+
+  return row;
 }
 
 export async function rejectEncashment(id: number, userId?: number | null, reason?: string) {

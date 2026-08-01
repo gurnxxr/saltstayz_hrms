@@ -1,7 +1,7 @@
 import type { Knex } from 'knex';
 import db from '../config/database';
 import { NotFoundError, ValidationError, ForbiddenError } from '../utils/errors';
-import { notifyEmployee } from './notification.service';
+import { notifyEmployee, emit } from './notification.service';
 import { buildWorkCalendar, countWorkingDaysInRange, leaveDatesFor } from './payableDays.service';
 import { findBreak } from './holidayBreak';   // date shifting uses this file's own shiftDate
 import { audienceOf, scopeHolidaysTo } from './holidayScope';
@@ -804,15 +804,19 @@ export async function applyLeave(employeeId: number, data: {
     return { id: newId, policyWarnings: warnings };
   });
 
-  // Alert the approver (reporting manager) that a request awaits action.
-  if (employee.reporting_manager_id) {
-    await notifyEmployee(employee.reporting_manager_id, {
+  // Who hears about this is configured on Admin → Notifications. Out of the box that is the
+  // reporting manager, as before; HR can now also route it to the property manager who will be
+  // short-staffed, or to admin who wants to see the volume.
+  await emit('leave.applied', {
+    employeeId,
+    actorEmployeeId: employeeId,
+    payload: {
       type: 'leave_requested',
       title: 'Leave request to review',
       message: `${employee.first_name} ${employee.last_name} requested ${days} day(s) leave (${start_date} to ${end_date}).`,
       link: '/leaves/my?tab=approvals',
-    });
-  }
+    },
+  });
 
   const created = await db('leave_requests')
     .join('leave_types', 'leave_types.id', 'leave_requests.leave_type_id')
@@ -885,7 +889,8 @@ export async function approveLeave(requestId: number, approverId: number, roleNa
   const leave = await db('leave_requests')
     .join('employees', 'employees.id', 'leave_requests.employee_id')
     .where('leave_requests.id', requestId)
-    .select('leave_requests.*', 'employees.reporting_manager_id')
+    .select('leave_requests.*', 'employees.reporting_manager_id',
+      'employees.first_name', 'employees.last_name')
     .first();
 
   if (!leave) throw new NotFoundError('Leave request');
@@ -926,11 +931,25 @@ export async function approveLeave(requestId: number, approverId: number, roleNa
     await markLeaveDaysOnAttendance(trx, leave.employee_id, dates);
   });
 
+  // The employee always hears about their own leave — that is not configurable.
   await notifyEmployee(leave.employee_id, {
     type: 'leave_approved',
     title: 'Leave approved',
     message: `Your leave request for ${leave.days} day(s) (${leave.start_date} to ${leave.end_date}) has been approved.`,
     link: '/attendance',
+  });
+
+  // Anyone else who needs to know a shift now needs covering.
+  await emit('leave.approved', {
+    employeeId: leave.employee_id,
+    actorEmployeeId: approverId,
+    payload: {
+      type: 'leave_approved_fyi',
+      title: 'Leave approved — cover needed',
+      message: `${leave.first_name || 'An employee'} ${leave.last_name || ''}`.trim()
+        + ` is on leave for ${leave.days} day(s) (${leave.start_date} to ${leave.end_date}).`,
+      link: '/leaves',
+    },
   });
 
   return { message: 'Leave approved' };
@@ -964,6 +983,18 @@ export async function rejectLeave(requestId: number, approverId: number, roleNam
       ? `Your leave request (${leave.start_date} to ${leave.end_date}) was rejected. Reason: ${rejectionReason}`
       : `Your leave request (${leave.start_date} to ${leave.end_date}) was rejected.`,
     link: '/attendance',
+  });
+
+  await emit('leave.rejected', {
+    employeeId: leave.employee_id,
+    actorEmployeeId: approverId,
+    payload: {
+      type: 'leave_rejected_fyi',
+      title: 'Leave rejected',
+      message: `${leave.first_name || 'An employee'} ${leave.last_name || ''}`.trim()
+        + `'s leave (${leave.start_date} to ${leave.end_date}) was rejected.`,
+      link: '/leaves',
+    },
   });
 
   return { message: 'Leave rejected' };

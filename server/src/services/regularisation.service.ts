@@ -1,6 +1,6 @@
 import db from '../config/database';
 import { NotFoundError, ValidationError, ForbiddenError } from '../utils/errors';
-import { notifyEmployee } from './notification.service';
+import { notifyEmployee, emit } from './notification.service';
 import { monthWriteState } from './payrollMonth.service';
 import { refreshPayslipAfterAttendanceChange, type RefreshResult } from './payslip.service';
 import { getRegularisationSettings, cutoffDateFor } from './regularisationSettings.service';
@@ -208,15 +208,18 @@ export async function requestRegularisation(employeeId: number, data: Regularisa
     status: 'pending',
   }).returning('id');
 
-  // Alert the reporting manager (the approver) that a request awaits action.
-  if (emp.reporting_manager_id) {
-    await notifyEmployee(emp.reporting_manager_id, {
+  // Who hears about this is configured on Admin → Notifications; the reporting manager (the
+  // approver) is ticked out of the box, and HR falls in behind them when there is no manager.
+  await emit('attendance.regularisation_raised', {
+    employeeId,
+    actorEmployeeId: employeeId,
+    payload: {
       type: 'regularisation_requested',
       title: 'Attendance regularisation to review',
       message: `${emp.first_name} ${emp.last_name} requested to mark ${rangeLabel(start, end)} as ${TYPE_LABELS[type]}.`,
       link: '/attendance/regularisation',
-    });
-  }
+    },
+  });
 
   return getRegularisation(id);
 }
@@ -270,7 +273,7 @@ async function loadForDecision(id: number, approverId: number, roleName: string)
   const reg = await db('attendance_regularisations as ar')
     .join('employees as e', 'e.id', 'ar.employee_id')
     .where('ar.id', id)
-    .select('ar.*', 'e.reporting_manager_id')
+    .select('ar.*', 'e.reporting_manager_id', 'e.first_name', 'e.last_name')
     .first();
   if (!reg) throw new NotFoundError('Regularisation request');
   if (reg.status !== 'pending') throw new ValidationError('Only pending requests can be actioned');
@@ -382,12 +385,32 @@ export async function approveRegularisation(id: number, approverId: number, role
     updated_at: db.fn.now(),
   });
 
+  // A blocked re-price is the one outcome that needs a person. Announce it, so "somebody is dealing
+  // with this" is a fact rather than a hope — see the note on the employee's wording below.
+  if (worst?.outcome === 'blocked') {
+    await emit('payroll.reprice_blocked', {
+      employeeId: reg.employee_id,
+      actorEmployeeId: approverId,
+      payload: {
+        type: 'reprice_blocked',
+        title: 'Payslip could not be re-priced',
+        message: `An approved regularisation for ${reg.first_name || 'an employee'} ${reg.last_name || ''}`.trim()
+          + ` could not reach their payslip (${worst.reason}). The month needs re-running.`,
+        link: '/payroll',
+      },
+    });
+  }
+
   const skipNote = skipped.length ? ` (${skipped.length} day(s) on approved leave were left unchanged)` : '';
   // Tell the employee what happened to their PAY, not just to the record. "Attendance regularised"
   // on its own is the sentence that made this bug invisible for so long.
+  //
+  // The blocked branch claims only what is true no matter how notifications are configured: the
+  // outcome is written to pay_refresh_status and the lock gate refuses the month until payroll is
+  // re-run. It used to say "payroll has been notified" while notifying nobody at all.
   const payNote = worst?.outcome === 'refreshed' ? ' Your payslip for this month has been updated.'
     : worst?.outcome === 'no_payslip' ? ' Payroll for this month has not been run yet — this will be included when it is.'
-      : worst?.outcome === 'blocked' ? ' Your payslip could NOT be updated — payroll has been notified.'
+      : worst?.outcome === 'blocked' ? ' Your payslip could NOT be updated automatically — the month has been flagged for payroll to re-run.'
         : '';
   await notifyEmployee(reg.employee_id, {
     type: 'regularisation_approved',

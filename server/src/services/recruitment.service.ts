@@ -10,7 +10,7 @@ import { listSalaryComponents } from './salaryComponent.service';
 import { assertCtcMeetsMinimumWage } from './statutory.service';
 import { getVacancySanctionContext, getRoleBand, assertHireAllowed, createCandidateException, consumeCandidateApproval, computeAvailability } from './manpower.service';
 import * as checklist from './checklist.service';
-import { notifyEmployee, notifyRole } from './notification.service';
+import { emit } from './notification.service';
 import { nextJobId } from '../utils/jobId';
 import { parseCsv } from '../utils/csv';
 import { advisoryXactLock, LOCK } from '../utils/locks';
@@ -737,24 +737,28 @@ export async function transferToManager(id: number, userId: number, notes?: stri
     await consumeCandidateApproval(trx, id, employee.id);
   });
 
-  if (employee.reporting_manager_id) {
-    await notifyEmployee(employee.reporting_manager_id, {
+  await emit('employee.joined', {
+    employeeId: employee.id,
+    payload: {
       type: 'hire_transferred',
       title: 'New team member joined',
-      message: `${employee.first_name} ${employee.last_name} has joined and now reports to you.`,
+      message: `${employee.first_name} ${employee.last_name} has joined at ${employee.branch_name || 'their property'}.`,
       link: `/employees/${employee.id}`,
-    });
-  }
+    },
+  });
 
   // The hire is now a full employee but has no HRMS login yet — remind admins to
   // create their email + password on Admin → User Credentials, ready to share.
   const hasLogin = await db('users').where({ employee_id: employee.id, is_active: true }).first();
   if (!hasLogin) {
-    await notifyRole('admin', {
-      type: 'login_setup_required',
-      title: 'New hire needs an HRMS login',
-      message: `${employee.first_name} ${employee.last_name} has completed onboarding. Set their login email & password to share.`,
-      link: '/admin/credentials',
+    await emit('employee.login_needed', {
+      employeeId: employee.id,
+      payload: {
+        type: 'login_setup_required',
+        title: 'New hire needs an HRMS login',
+        message: `${employee.first_name} ${employee.last_name} has completed onboarding. Set their login email & password to share.`,
+        link: '/admin/credentials',
+      },
     });
   }
   return getCandidate(id);

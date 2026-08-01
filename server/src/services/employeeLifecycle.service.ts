@@ -2,7 +2,7 @@ import db from '../config/database';
 import { NotFoundError, ValidationError } from '../utils/errors';
 import { getAssignment, upsertAssignment, seedEmployeeStructureFromTemplate } from './salaryStructure.service';
 import { ASSET_CATEGORIES, markAssetsReturned } from './asset.service';
-import { notifyEmployee } from './notification.service';
+import { notifyEmployee, emit } from './notification.service';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Employee Lifecycle: Promotion / Transfer / Exit Interview.
@@ -187,6 +187,24 @@ export async function createTransfer(
       created_by: userId ?? null,
     }).returning('id');
     return newId;
+  });
+
+  // A transfer moves a head off one property's budget and onto another's, and both sides had no
+  // way to hear about it. Emitted after the commit, so the scoped audiences resolve against the
+  // employee's NEW branch — the losing property is named in the message instead.
+  const moved = [
+    toBranch ? `${emp.branch_name || 'no property'} → ${toBranch}` : '',
+    toDept ? `${emp.dept_name || 'no department'} → ${toDept}` : '',
+  ].filter(Boolean).join(', ');
+  await emit('employee.transferred', {
+    employeeId: emp.id,
+    actorUserId: userId ?? null,
+    payload: {
+      type: 'employee_transferred',
+      title: 'Employee transferred',
+      message: `${emp.first_name} ${emp.last_name}: ${moved} (effective ${data.transfer_date}).`,
+      link: `/employees/${emp.id}`,
+    },
   });
 
   const rows = await listTransfers();

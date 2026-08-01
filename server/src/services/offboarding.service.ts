@@ -3,7 +3,7 @@ import { NotFoundError, ValidationError, AppError } from '../utils/errors';
 import { getMonthlyBreakdown } from './payslip.service';
 import { getCurrentPeriod } from './leave.service';
 import { getEmployeeLeaveRules } from './leaveTemplate.service';
-import { notifyEmployee } from './notification.service';
+import { notifyEmployee, emit } from './notification.service';
 import { notifyReplacementNeeded } from './manpower.service';
 
 // Default clearance checklist, grouped by the team responsible for sign-off.
@@ -288,6 +288,19 @@ export async function saveFnF(id: number, details: any) {
     fnf_details: JSON.stringify(details),
     updated_at: db.fn.now(),
   });
+
+  // A settlement figure is money waiting to be paid, and finance had no way to hear it existed.
+  await emit('offboarding.fnf_saved', {
+    employeeId: c.employee_id,
+    payload: {
+      type: 'fnf_saved',
+      title: 'Full & final settlement ready',
+      message: `A settlement of ₹${Math.round(net).toLocaleString('en-IN')} has been calculated`
+        + ` (last working day ${c.last_working_day}).`,
+      link: `/offboarding/${id}`,
+    },
+  });
+
   return getCase(id);
 }
 
@@ -379,7 +392,20 @@ export async function completeCase(id: number) {
     });
   });
 
-  // Flag admin + HR that this JOB now needs a replacement.
+  // Flag that this JOB now needs a replacement.
   await notifyReplacementNeeded({ ...emp, employment_status: 'left' });
+
+  // Separately: the exit is closed and the login revoked. Finance cares because the settlement is
+  // now final; the property cares because the headcount slot is free.
+  await emit('offboarding.case_completed', {
+    employeeId: c.employee_id,
+    payload: {
+      type: 'offboarding_completed',
+      title: 'Exit completed',
+      message: `${emp.first_name} ${emp.last_name} has been offboarded`
+        + ` (last working day ${c.last_working_day}). Their login is revoked.`,
+      link: `/offboarding/${id}`,
+    },
+  });
   return getCase(id);
 }

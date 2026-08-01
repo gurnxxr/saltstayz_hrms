@@ -1,6 +1,6 @@
 import db from '../config/database';
 import { NotFoundError, ValidationError, ForbiddenError } from '../utils/errors';
-import { notifyEmployee } from './notification.service';
+import { notifyEmployee, emit } from './notification.service';
 import { assignShift, resolveShiftForEmployee, getEmployeeShiftHistory } from './shift.service';
 
 /**
@@ -104,15 +104,18 @@ export async function createChangeRequest(employeeId: number, data: any) {
     status: 'pending',
   }).returning('id');
 
-  // Notify the reporting manager (an employee id) if one exists.
-  if (emp.reporting_manager_id) {
-    await notifyEmployee(emp.reporting_manager_id, {
+  // Configured on Admin → Notifications; the reporting manager is ticked out of the box, and
+  // HR catches it when the employee has no manager on file.
+  await emit('shift.change_requested', {
+    employeeId,
+    actorEmployeeId: employeeId,
+    payload: {
       type: 'shift_change_requested',
       title: 'Shift change request to review',
       message: `${emp.first_name} ${emp.last_name} asked to move to ${target.name} from ${date}.`,
       link: '/shifts/change-requests',
-    });
-  }
+    },
+  });
 
   const rows = await listMyChangeRequests(employeeId);
   return rows.find((r: any) => r.id === id);
@@ -191,6 +194,17 @@ export async function decideChangeRequest(
     title: 'Shift change approved',
     message: `Your shift change takes effect from ${date}.`,
     link: '/shifts/my',
+  });
+  await emit('shift.change_decided', {
+    employeeId: cr.employee_id,
+    actorUserId: approver.userId,
+    payload: {
+      type: 'shift_change_approved_fyi',
+      title: 'Shift change approved',
+      message: `${cr.first_name || 'An employee'} ${cr.last_name || ''}`.trim()
+        + ` moves to a new shift from ${date}.`,
+      link: '/shifts/change-requests',
+    },
   });
   return { message: 'Request approved' };
 }
