@@ -6,8 +6,8 @@ import { toast } from 'sonner';
 import api from '@/lib/api';
 import AppShell from '@/components/layout/AppShell';
 import {
-  Upload, FileSpreadsheet, ChevronDown, ChevronRight, Download,
-  Users, CheckCircle, XCircle, Clock, ArrowLeft, History, Wand2,
+  FileSpreadsheet, ChevronDown, ChevronRight, Download,
+  Users, CheckCircle, XCircle, Clock, ArrowLeft, History,
 } from 'lucide-react';
 import Breadcrumb from '@/components/ui/Breadcrumb';
 import { errorFromBlob } from '@/lib/utils';
@@ -22,33 +22,27 @@ type StatusFilter = '' | 'present' | 'absent' | 'half_day' | 'hhd' | 'short_punc
 
 export default function AdminAttendancePage() {
   const qc = useQueryClient();
-  const fileRef = useRef<HTMLInputElement>(null);
   const gridRef = useRef<HTMLInputElement>(null);
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10));
   const [expandedProperty, setExpandedProperty] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('');
   const [uploadResult, setUploadResult] = useState<any>(null);
   const [showHistory, setShowHistory] = useState(false);
-  const [showTemplates, setShowTemplates] = useState(false);
 
   /**
-   * Fetch a blank template and save it.
+   * Fetch the blank marked grid for the selected month and save it.
    *
    * Goes through `api` rather than a plain link so the session cookie and the API base URL are
    * applied — a bare href would hit the Next.js origin unauthenticated and download the login page.
    */
-  async function downloadTemplate(kind: 'marked-grid' | 'punch-csv') {
+  async function downloadTemplate() {
+    const month = selectedDate.slice(0, 7);
     try {
-      const url = kind === 'marked-grid'
-        ? `/attendance/admin/template/marked-grid?month=${selectedDate.slice(0, 7)}`
-        : '/attendance/admin/template/punch-csv';
-      const res = await api.get(url, { responseType: 'blob' });
+      const res = await api.get(`/attendance/admin/template/marked-grid?month=${month}`, { responseType: 'blob' });
       const href = URL.createObjectURL(res.data as Blob);
       const a = document.createElement('a');
       a.href = href;
-      a.download = kind === 'marked-grid'
-        ? `attendance_grid_${selectedDate.slice(0, 7)}.csv`
-        : 'attendance_punch_template.csv';
+      a.download = `attendance_grid_${month}.csv`;
       a.click();
       URL.revokeObjectURL(href);
     } catch (err: any) {
@@ -83,29 +77,6 @@ export default function AdminAttendancePage() {
     enabled: !!expandedProperty,
   });
 
-  const uploadMutation = useMutation({
-    mutationFn: (file: File) => {
-      const fd = new FormData();
-      fd.append('file', file);
-      return api.post('/attendance/upload', fd).then(r => r.data);
-    },
-    onSuccess: (data) => {
-      setUploadResult(data);
-      qc.invalidateQueries({ queryKey: ['attendance-property-summary'] });
-      qc.invalidateQueries({ queryKey: ['attendance-property-employees'] });
-      qc.invalidateQueries({ queryKey: ['attendance-dates'] });
-      qc.invalidateQueries({ queryKey: ['attendance-upload-logs'] });
-      toast.success(`${data.created + data.updated} records processed`);
-    },
-    onError: (e: any) => toast.error(e.response?.data?.error || 'Upload failed'),
-  });
-
-  function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (file) { setUploadResult(null); uploadMutation.mutate(file); }
-    if (fileRef.current) fileRef.current.value = '';
-  }
-
   // Marked-grid dashboard upload (wide sheet of day-codes). The month for bare
   // day-number headers comes from the selected date, so HR uploads the sheet as-is.
   const gridMutation = useMutation({
@@ -131,18 +102,6 @@ export default function AdminAttendancePage() {
     if (file) { setUploadResult(null); gridMutation.mutate(file); }
     if (gridRef.current) gridRef.current.value = '';
   }
-
-  // Apply Shift Type auto-attendance thresholds (half-day/absent hours) to the
-  // selected date's records. Also runs automatically every day for yesterday.
-  const autoMarkMutation = useMutation({
-    mutationFn: () => api.post('/attendance/admin/auto-mark', { date: selectedDate }).then(r => r.data),
-    onSuccess: (data) => {
-      qc.invalidateQueries({ queryKey: ['attendance-property-summary'] });
-      qc.invalidateQueries({ queryKey: ['attendance-property-employees'] });
-      toast.success(`Auto-attendance for ${data.date}: ${data.updated} of ${data.scanned} record(s) re-marked`);
-    },
-    onError: (e: any) => toast.error(e.response?.data?.error || 'Auto-mark failed'),
-  });
 
   const properties = summary?.properties || [];
 
@@ -175,66 +134,22 @@ export default function AdminAttendancePage() {
               <div>
                 <h3 className="text-sm font-semibold text-foreground">Upload Attendance File</h3>
                 <p className="text-xs text-secondary mt-0.5">
-                  <span className="font-medium">Punch CSV:</span> Emp Code, Access Date (dd-mm-yy), First_In_time, Last_Out_time, Location (optional)
+                  <span className="font-medium">Marked grid (.xlsx/.csv):</span> one row per employee, one column per date, cells coded P / NP / A / HD / SP / MP / HHD — imported for <span className="font-medium">{selectedDate.slice(0, 7)}</span>
                 </p>
                 <p className="text-xs text-secondary mt-0.5">
-                  <span className="font-medium">Marked grid (.xlsx/.csv):</span> one row per employee, one column per date, cells coded P / NP / A / HD / SP / MP / HHD — imported for <span className="font-medium">{selectedDate.slice(0, 7)}</span>
+                  Weekly offs, holidays and approved leave come from the calendar — leave those cells blank.
                 </p>
               </div>
             </div>
             <div className="flex items-center gap-2">
+              {/* One importer left, so one template — a menu offering a single choice is just an
+                  extra click. */}
               <button
-                onClick={() => autoMarkMutation.mutate()}
-                disabled={autoMarkMutation.isPending}
-                title="Re-derive statuses from working hours using each shift type's auto-attendance thresholds"
-                className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted disabled:opacity-50 transition-colors"
+                onClick={() => downloadTemplate()}
+                title="Download a blank grid for the selected month, pre-filled with the employee list"
+                className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted transition-colors"
               >
-                <Wand2 size={15} />
-                {autoMarkMutation.isPending ? 'Marking…' : 'Auto-mark'}
-              </button>
-              <div className="relative">
-                <button
-                  onClick={() => setShowTemplates((v) => !v)}
-                  title="Download a blank file in the shape each importer expects"
-                  className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted transition-colors"
-                >
-                  <Download size={15} /> Template
-                </button>
-                {showTemplates && (
-                  <>
-                    {/* Click-away layer — a menu that only closes via its own items strands the page. */}
-                    <div className="fixed inset-0 z-10" onClick={() => setShowTemplates(false)} />
-                    <div className="absolute right-0 mt-1 z-20 w-72 bg-card border border-border rounded-lg shadow-lg overflow-hidden">
-                      <button
-                        onClick={() => { downloadTemplate('marked-grid'); setShowTemplates(false); }}
-                        className="w-full text-left px-4 py-2.5 hover:bg-muted transition-colors"
-                      >
-                        <p className="text-sm font-medium text-foreground">Marked grid — {selectedDate.slice(0, 7)}</p>
-                        <p className="text-xs text-secondary mt-0.5">
-                          Every active employee as a row, each day of the month as a column. Fill the cells with codes.
-                        </p>
-                      </button>
-                      <button
-                        onClick={() => { downloadTemplate('punch-csv'); setShowTemplates(false); }}
-                        className="w-full text-left px-4 py-2.5 border-t border-border hover:bg-muted transition-colors"
-                      >
-                        <p className="text-sm font-medium text-foreground">Punch CSV</p>
-                        <p className="text-xs text-secondary mt-0.5">
-                          Headers plus one worked example, for a biometric export you assemble yourself.
-                        </p>
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-              <input ref={fileRef} type="file" accept=".csv" onChange={handleFileUpload} className="hidden" />
-              <button
-                onClick={() => fileRef.current?.click()}
-                disabled={uploadMutation.isPending}
-                className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted disabled:opacity-50"
-              >
-                <Upload size={16} />
-                {uploadMutation.isPending ? 'Processing...' : 'Upload Punch CSV'}
+                <Download size={15} /> Template
               </button>
               <input ref={gridRef} type="file" accept=".xlsx,.xlsm,.csv" onChange={handleGridUpload} className="hidden" />
               <button

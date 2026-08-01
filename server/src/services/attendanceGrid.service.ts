@@ -399,26 +399,3 @@ export async function buildMarkedGridTemplate(month: string): Promise<string> {
   return [header, ...rows, ...legend].join('\n');
 }
 
-/**
- * A blank punch CSV in exactly the shape `uploadAttendanceCsv` parses, with one worked example.
- *
- * The example row is deliberately a real employee code where one exists: a template whose sample
- * row is rejected on upload teaches the wrong lesson about the file being wrong.
- */
-export async function buildPunchCsvTemplate(): Promise<string> {
-  const sample = await db('employees').where('is_active', true)
-    .select('employee_code').orderBy('employee_code').first();
-  const code = sample?.employee_code ?? 'EMP-0001';
-  const today = new Date();
-  const dd = pad(today.getUTCDate());
-  const mm = pad(today.getUTCMonth() + 1);
-  const yy = String(today.getUTCFullYear()).slice(2);
-
-  return [
-    'Emp Code,Access Date,First_In_time,Last_Out_time,Location',
-    `${code},${dd}-${mm}-${yy},09:02,18:11,Main Gate`,
-    '',
-    '# Access Date is dd-mm-yy. Times are 24-hour HH:MM. Location is optional.',
-    '# One row per employee per day. Delete these comment lines before uploading.',
-  ].join('\n');
-}

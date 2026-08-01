@@ -40,8 +40,8 @@ if (env.NODE_ENV === 'production' || process.env.BACKUP_ENABLED === 'true') {
 }
 
 // Daily auto-attendance: applies Shift Type thresholds (half-day/absent hours)
-// to yesterday's records. Same enablement pattern as backups; the manual
-// trigger (POST /attendance/admin/auto-mark) always works regardless.
+// to yesterday's records. Same enablement pattern as backups. This job is now the
+// only way it runs — the manual trigger and its admin button were removed.
 if (env.NODE_ENV === 'production' || process.env.AUTO_ATTENDANCE_ENABLED === 'true') {
   const DAY = 24 * 60 * 60 * 1000;
   const tick = () => autoMarkAttendance()

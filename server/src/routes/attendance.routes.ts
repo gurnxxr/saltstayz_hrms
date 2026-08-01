@@ -23,11 +23,8 @@ router.get('/admin/property-summary', authorize('attendance', 'read'), ATT_STAFF
 router.get('/admin/property-employees', authorize('attendance', 'read'), ATT_STAFF, ctrl.getPropertyEmployees);
 router.get('/admin/dates', authorize('attendance', 'read'), ATT_STAFF, ctrl.getAvailableDates);
 router.get('/admin/upload-logs', authorize('attendance', 'read'), ATT_STAFF, ctrl.getUploadLogs);
-// Blank templates for the two upload formats. Read-only — they contain the employee roster the
-// uploader can already see on this screen, so they sit behind the same gate as the page itself.
+// Blank template for the marked-grid upload. Read-only — it contains the employee roster the
+// uploader can already see on this screen, so it sits behind the same gate as the page itself.
 router.get('/admin/template/marked-grid', authorize('attendance', 'read'), ATT_STAFF, ctrl.downloadMarkedGridTemplate);
-router.get('/admin/template/punch-csv', authorize('attendance', 'read'), ATT_STAFF, ctrl.downloadPunchCsvTemplate);
-// Apply Shift Type auto-attendance thresholds to a date's records (also runs daily).
-router.post('/admin/auto-mark', authorize('attendance', 'update'), ATT_STAFF, ctrl.autoMark);
 
 export default router;
