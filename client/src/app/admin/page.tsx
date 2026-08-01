@@ -23,8 +23,10 @@ const adminModules = [
   { label: 'Organization', href: '/admin/organization', icon: Building2, description: 'Properties, departments, and employee categories', roles: ['admin'] },
   { label: 'Employment Types', href: '/admin/employment-types', icon: Contact, description: 'Define employment types & their variables — probation, notice, restrictions', roles: ['admin'] },
   { label: 'Attendance Admin', href: '/admin/attendance', icon: ClipboardList, description: 'Upload & review property attendance', roles: ['admin', 'chro', 'hr'] },
-  // Open to everyone the Admin tab is open to, per the same roles as the Admin nav entry.
-  { label: 'Attendance Register', href: '/admin/attendance-register', icon: Table2, description: 'The month per employee — counts by code, day grid, and the day-by-day behind each row', roles: ['admin', 'chro', 'hr', 'hr_manager', 'property_manager', 'finance'] },
+  // Only the roles that actually hold the `admin` module. The Admin nav entry is visible to six
+  // roles, but seeds 01_roles_permissions grants `admin` to these three alone — listing the other
+  // three here showed them a card that could only ever render an error.
+  { label: 'Attendance Register', href: '/admin/attendance-register', icon: Table2, description: 'The month per employee — counts by code, day grid, and the day-by-day behind each row', roles: ['admin', 'chro', 'hr'] },
   { label: 'Holidays', href: '/admin/holidays', icon: CalendarDays, description: 'Upload & manage national + per-state holiday calendars', roles: ['admin', 'chro', 'hr'] },
   { label: 'Notifications', href: '/admin/notifications', icon: Bell, description: 'Choose who is told when something happens, and see how much is happening', roles: ['admin', 'chro', 'hr'] },
 ];

@@ -149,37 +149,56 @@ export async function getAvailableDates(req: AuthRequest, res: Response, next: N
 
 // ─── Attendance Register (admin) ───
 
+/**
+ * One value from the query string.
+ *
+ * Express turns a repeated key into an ARRAY — `?property=A&property=B` arrives as ['A','B'], and
+ * String() would flatten that to the literal "A,B", which matches no property and reports no
+ * error. Take the first and ignore the rest.
+ */
+function one(v: unknown): string | undefined {
+  const s = Array.isArray(v) ? v[0] : v;
+  const t = s == null ? '' : String(s).trim();
+  return t || undefined;
+}
+
 /** Parsed once so the list, the grid and the export can never read the query differently. */
 function registerFilters(req: AuthRequest): registerService.RegisterFilters {
-  const str = (k: string) => (req.query[k] ? String(req.query[k]) : undefined);
   return {
-    month: str('month'),
-    property: str('property'),
+    month: one(req.query.month),
+    property: one(req.query.property),
     // `branch_unit`, never `branch` — every other filter spelled `branch` in this system means
     // the property, and colliding with that would point this at the wrong column.
-    branch_unit: str('branch_unit'),
-    department: str('department'),
-    search: str('search'),
+    branch_unit: one(req.query.branch_unit),
+    department: one(req.query.department),
+    search: one(req.query.search),
   };
+}
+
+/**
+ * Page and size, defaulting rather than trusting.
+ *
+ * The service treats a falsy page as "no pagination wanted" and returns the whole table — which is
+ * correct for the CSV export and catastrophic for a request. `page=0` and `page=abc` (NaN) are both
+ * falsy, so anything not a positive integer becomes page 1 here and never reaches that branch.
+ */
+function paging(req: AuthRequest): { page: number; pageSize: number } {
+  const num = (v: unknown, fallback: number) => {
+    const n = Number(one(v));
+    return Number.isInteger(n) && n > 0 ? n : fallback;
+  };
+  return { page: num(req.query.page, 1), pageSize: num(req.query.pageSize, 25) };
 }
 
 export async function getRegister(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    res.json(await registerService.getRegister({
-      ...registerFilters(req),
-      page: req.query.page ? Number(req.query.page) : 1,
-      pageSize: req.query.pageSize ? Number(req.query.pageSize) : 25,
-    }));
+    res.json(await registerService.getRegister({ ...registerFilters(req), ...paging(req) }));
   } catch (err) { next(err); }
 }
 
 export async function getRegisterGrid(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    res.json(await registerService.getDayGrid({
-      ...registerFilters(req),
-      page: req.query.page ? Number(req.query.page) : 1,
-      pageSize: req.query.pageSize ? Number(req.query.pageSize) : 25,
-    }));
+    res.json(await registerService.getDayGrid({ ...registerFilters(req), ...paging(req) }));
   } catch (err) { next(err); }
 }
 
@@ -203,9 +222,14 @@ export async function exportRegister(req: AuthRequest, res: Response, next: Next
  */
 export async function getEmployeeMonth(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    const employeeId = Number(req.query.employeeId);
-    if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });
-    const month = String(req.query.month || new Date().toISOString().slice(0, 7));
+    const employeeId = Number(one(req.query.employeeId));
+    if (!Number.isInteger(employeeId) || employeeId <= 0) {
+      return res.status(400).json({ error: 'A valid employeeId is required' });
+    }
+    // Validated the same way the three /register endpoints validate it. Passing this straight to
+    // getMyCalendar let "abc" through, where it became the bounds 'abc-01'..'abc-NaN' and returned
+    // a silently empty month instead of the 400 its siblings give for the identical input.
+    const month = registerService.assertMonth(one(req.query.month));
     res.json(await attendanceService.getMyCalendar(employeeId, month));
   } catch (err) { next(err); }
 }

@@ -42,17 +42,26 @@ function clientCodes(): string[] {
   return [...block.matchAll(/^\s*code: '([a-z_]+)'/gm)].map((m) => m[1]);
 }
 
+/** The codes the Attendance Register counts and exports. */
+function registerCodes(): string[] {
+  const src = read(join(SERVER, 'services/attendanceRegister.service.ts'));
+  const block = src.split('const CODES = [')[1]?.split(']')[0] ?? '';
+  return [...block.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]);
+}
+
 describe('attendance codes — one vocabulary across the stack', () => {
   const sql = sqlBuckets();
   const analytics = analyticsCodes();
   const client = clientCodes();
+  const register = registerCodes();
 
-  it('finds all three lists', () => {
+  it('finds all four lists', () => {
     // Guards the parsing itself: if a file is restructured so a regex matches nothing, every
     // comparison below would pass on two empty arrays.
     expect(sql.length).toBe(8);
     expect(analytics.length).toBe(8);
     expect(client.length).toBe(8);
+    expect(register.length).toBe(8);
   });
 
   it('is the same set of eight everywhere', () => {
@@ -62,6 +71,14 @@ describe('attendance codes — one vocabulary across the stack', () => {
     expect([...sql].sort()).toEqual(expected);
     expect([...analytics].sort()).toEqual(expected);
     expect([...client].sort()).toEqual(expected);
+    expect([...register].sort()).toEqual(expected);
+  });
+
+  it('the register counts every bucket the SQL returns', () => {
+    // The register keeps its own copy so its columns and CSV header have a stable order. That copy
+    // silently under-reporting is exactly what this guard exists to prevent.
+    expect(sql.filter((c) => !register.includes(c))).toEqual([]);
+    expect(register.filter((c) => !sql.includes(c))).toEqual([]);
   });
 
   it('forwards every bucket the SQL counts', () => {

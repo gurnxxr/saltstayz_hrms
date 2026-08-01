@@ -26,10 +26,20 @@ const prevMonth = () => {
   const d = new Date();
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1)).toISOString().slice(0, 7);
 };
+/**
+ * Formatted in UTC, because that is how it was built.
+ *
+ * Without `timeZone: 'UTC'` a browser west of Greenwich renders Date.UTC(2026,6,1) as 30 June, so
+ * the heading names the wrong month and every day card is off by one — including its weekday.
+ */
 const monthLabel = (m: string) => {
   const [y, mo] = m.split('-').map(Number);
-  return new Date(Date.UTC(y, mo - 1, 1)).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+  return new Date(Date.UTC(y, mo - 1, 1))
+    .toLocaleDateString('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 };
+
+/** The property value meaning "blank, or not in the catalogue". Mirrors UNASSIGNED on the server. */
+const UNASSIGNED = '__unassigned__';
 
 export default function AttendanceRegisterPage() {
   const [month, setMonth] = useState(thisMonth());
@@ -166,6 +176,9 @@ export default function AttendanceRegisterPage() {
           <select className={selectCls} value={property} onChange={(e) => setProperty(e.target.value)}>
             <option value="">All Properties</option>
             {properties.map((p: any) => <option key={p.id} value={p.name}>{p.name}</option>)}
+            {/* Without this, anyone whose property is blank or off-catalogue vanishes the moment a
+                property is chosen — and a register exists to surface exactly those people. */}
+            <option value={UNASSIGNED}>— Unassigned / not a property —</option>
           </select>
           <select
             className={selectCls} value={branchUnit} onChange={(e) => setBranchUnit(e.target.value)}
@@ -305,8 +318,11 @@ function SummaryTable({ rows, totals, month, expanded, onToggle }: {
 
 /** The wall of code letters — one column per day of the month. */
 function DayGrid({ rows, dates }: { rows: any[]; dates: string[] }) {
-  const isWeekend = (d: string) => [0, 6].includes(new Date(`${d}T00:00:00Z`).getUTCDay());
-
+  // No weekend shading. Saturday/Sunday is exactly the guess attendance.service.ts:136 records as
+  // wrong and buildWorkCalendar exists to replace — weekly offs are per employee and roster-driven,
+  // so a housekeeper off on Tuesday would have seen their rest day drawn as a working one. The
+  // calendar resolves per employee and cannot be fetched for a whole page cheaply; the drill-down,
+  // where it costs one query, says which blanks were days off.
   return (
     <div className="bg-card rounded-xl border border-border overflow-hidden">
       <div className="overflow-auto max-h-[70vh]">
@@ -319,9 +335,7 @@ function DayGrid({ rows, dates }: { rows: any[]; dates: string[] }) {
               </th>
               {dates.map((d) => (
                 <th key={d}
-                  className={`sticky top-0 z-20 px-1 py-2 text-[11px] font-semibold text-secondary text-center border-b border-border min-w-[30px] ${
-                    isWeekend(d) ? 'bg-muted/70' : 'bg-muted/40'
-                  }`}
+                  className="sticky top-0 z-20 bg-muted/40 px-1 py-2 text-[11px] font-semibold text-secondary text-center border-b border-border min-w-[30px]"
                 >
                   {Number(d.slice(-2))}
                 </th>
@@ -343,7 +357,7 @@ function DayGrid({ rows, dates }: { rows: any[]; dates: string[] }) {
                   return (
                     <td key={d}
                       title={cell ? `${d} — ${meta?.label ?? cell.status}${cell.regularised ? ' (regularised)' : ''}` : `${d} — nothing recorded`}
-                      className={`px-1 py-1.5 text-center border-b border-border ${isWeekend(d) ? 'bg-muted/30' : ''}`}
+                      className="px-1 py-1.5 text-center border-b border-border"
                     >
                       {meta ? (
                         <span className={`inline-block w-full text-[10px] font-bold rounded px-0.5 py-0.5 ${meta.badgeBg} ${meta.badgeText}`}>
@@ -415,7 +429,11 @@ function EmployeeMonth({ employeeId, month, name }: { employeeId: number; month:
               className={`rounded-lg border p-2 ${offDay && !rec ? 'border-border/50 bg-muted/30' : 'border-border bg-card'}`}
             >
               <p className="text-[11px] text-secondary">
-                {new Date(`${d.date}T00:00:00Z`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', weekday: 'short' })}
+                {/* timeZone: 'UTC' — the string is a UTC midnight, so formatting it locally would
+                    shift both the day number and the weekday for any viewer behind Greenwich. */}
+                {new Date(`${d.date}T00:00:00Z`).toLocaleDateString('en-IN', {
+                  day: 'numeric', month: 'short', weekday: 'short', timeZone: 'UTC',
+                })}
               </p>
               {meta ? (
                 <>

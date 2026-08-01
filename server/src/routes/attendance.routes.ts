@@ -27,12 +27,18 @@ router.get('/admin/upload-logs', authorize('attendance', 'read'), ATT_STAFF, ctr
 // uploader can already see on this screen, so it sits behind the same gate as the page itself.
 router.get('/admin/template/marked-grid', authorize('attendance', 'read'), ATT_STAFF, ctrl.downloadMarkedGridTemplate);
 
-// Attendance Register — the month, one row per employee. Gated on the ADMIN module rather than
-// attendance, because it lives under the Admin tab: whoever can open Admin can read this.
+// Attendance Register — the month, one row per employee.
+//
+// TWO gates, not one. `authorize` alone is not enough here: a per-employee grant in Admin → Module
+// Access short-circuits it and confers the WHOLE module regardless of action (see rbac.ts:13), so
+// an ordinary employee handed "admin" would otherwise reach every colleague's attendance — and
+// employee-month returns approved leave joined to its TYPE, which is medical information they hold
+// no leave permission for. ATT_STAFF is the same role gate every other cross-employee attendance
+// route carries, for the same reason.
 // Static paths before any param route, or Express reads "export" as an id.
-router.get('/admin/register', authorize('admin', 'read'), ctrl.getRegister);
-router.get('/admin/register/grid', authorize('admin', 'read'), ctrl.getRegisterGrid);
-router.get('/admin/register/export', authorize('admin', 'read'), ctrl.exportRegister);
-router.get('/admin/employee-month', authorize('admin', 'read'), ctrl.getEmployeeMonth);
+router.get('/admin/register', authorize('admin', 'read'), ATT_STAFF, ctrl.getRegister);
+router.get('/admin/register/grid', authorize('admin', 'read'), ATT_STAFF, ctrl.getRegisterGrid);
+router.get('/admin/register/export', authorize('admin', 'read'), ATT_STAFF, ctrl.exportRegister);
+router.get('/admin/employee-month', authorize('admin', 'read'), ATT_STAFF, ctrl.getEmployeeMonth);
 
 export default router;
