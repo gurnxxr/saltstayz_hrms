@@ -393,7 +393,10 @@ export async function buildMarkedGridTemplate(month: string): Promise<string> {
   // header) but a person reading the file in Excel needs.
   const legend = [
     '',
-    csvCell('Codes: P = Present · NP = No Punch · A = Absent · HD = Half Day · SP = Short Punch · MP = Miss Punch · HHD = Half day with half leave'),
+    // HD and HHD are the pair people confuse, so the legend names what separates them: HD spends
+    // half a leave day, HHD is a day the business only opened for half of and spends none. This
+    // line used to describe HD under HHD, which is exactly backwards.
+    csvCell('Codes: P = Present · NP = No Punch · A = Absent · HD = Half Day (uses ½ leave) · SP = Short Punch · MP = Miss Punch · HHD = Half-Day Holiday'),
     csvCell('Weekly offs, holidays and approved leave are calendar-driven — leave those cells blank rather than coding them.'),
   ];
   return [header, ...rows, ...legend].join('\n');

@@ -822,18 +822,45 @@ function monthLabel(month: string): string {
 
 const pctOf = (part: number, total: number) => (total > 0 ? Math.round((part / total) * 100) : 0);
 
+/**
+ * Every code `getMonthSummary` buckets, in the order the screens show them.
+ *
+ * This list used to be four long — present, absent, half_day, on_leave — while getMonthSummary
+ * returned eight. The four it dropped (no_punch, short_punch, miss_punch, hhd) still counted
+ * towards `total`, so the dashboard tiles could not add up to the month and the percentage divided
+ * by days no tile showed. Mirrors client/src/lib/attendanceCodes.ts.
+ */
+const SUMMARY_CODES = [
+  'present', 'no_punch', 'half_day', 'short_punch', 'miss_punch', 'hhd', 'absent', 'on_leave',
+] as const;
+
 async function attendanceForMonth(employeeId: number, month: string) {
   const s: any = await getMonthSummary(employeeId, month);
-  const present = Number(s?.present ?? 0);
-  const absent = Number(s?.absent ?? 0);
-  const half_day = Number(s?.half_day ?? 0);
-  const on_leave = Number(s?.on_leave ?? 0);
+  const counts = Object.fromEntries(
+    SUMMARY_CODES.map((code) => [code, Number(s?.[code] ?? 0)]),
+  ) as Record<(typeof SUMMARY_CODES)[number], number>;
+
   const total = Number(s?.total ?? 0);
   const avg_working_hours = Number(s?.avg_working_hours ?? 0) || 0;
-  return { present, absent, half_day, on_leave, total, avg_working_hours, present_pct: pctOf(present, total) };
+
+  // Days the person was expected to work. Approved leave is not a failure to attend, so scoring
+  // attendance against a denominator that includes it reports 0% for somebody on sanctioned leave
+  // all month. Null (not 0) when there were no working days at all, so the client can say so
+  // rather than render a damning zero.
+  const working_days = Math.max(0, total - counts.on_leave);
+  return {
+    ...counts,
+    total,
+    working_days,
+    avg_working_hours,
+    present_pct: working_days > 0 ? pctOf(counts.present, working_days) : null,
+  };
 }
 
-const ZERO_ATTENDANCE = { present: 0, absent: 0, half_day: 0, on_leave: 0, total: 0, avg_working_hours: 0, present_pct: 0 };
+const ZERO_ATTENDANCE = {
+  ...Object.fromEntries(SUMMARY_CODES.map((c) => [c, 0])) as Record<(typeof SUMMARY_CODES)[number], number>,
+  total: 0, working_days: 0, avg_working_hours: 0, present_pct: null as number | null,
+};
 
 async function leaveBalancesFor(employeeId: number) {
   let balances: any[] = [];

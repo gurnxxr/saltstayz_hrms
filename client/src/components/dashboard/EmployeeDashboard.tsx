@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
 import DashboardGreeting from '@/components/dashboard/DashboardGreeting';
 import UpcomingHolidaysCard from '@/components/leaves/UpcomingHolidaysCard';
+import { ATTENDANCE_CODES } from '@/lib/attendanceCodes';
 import { CalendarCheck, CalendarOff, Clock, Wallet, CalendarPlus, FileText, User, BarChart3 } from 'lucide-react';
 
 const fmt = (t?: string) => (t ? t.slice(0, 5) : '');
@@ -29,7 +30,20 @@ export default function EmployeeDashboard() {
     queryFn: () => api.get('/employees/me/reportees').then(r => r.data).catch(() => []),
   });
 
-  const att = data?.attendance ?? { present: 0, total: 0, present_pct: 0, avg_working_hours: 0, on_leave: 0, absent: 0, half_day: 0 };
+  const att = data?.attendance ?? {};
+
+  // The eight codes the record actually stores, in one place — so the tiles below add up to the
+  // month instead of showing a hand-picked four. `other` is the reconciliation check: it is
+  // total minus the eight, and should always be zero. If it isn't, a status nothing in the code
+  // writes has reached the table, and that deserves to be visible rather than swallowed.
+  const counts = ATTENDANCE_CODES.map((c) => ({ ...c, value: Number(att[c.code] ?? 0) }));
+  const total = Number(att.total ?? 0);
+  const other = Math.max(0, total - counts.reduce((a, c) => a + c.value, 0));
+
+  // Attendance is scored against days the person was expected to work. Approved leave isn't a
+  // miss, so it leaves the denominator; a month entirely of leave has nothing to score and says so.
+  const workingDays = Number(att.working_days ?? 0);
+  const pct = att.present_pct;
   const leave = data?.leave ?? { balances: [], remaining: 0, used_days: 0, total_days: 0, pending_count: 0 };
 
   // Unpaid leave (Loss of Pay) is allocated 365 days to mean "no limit", not as an entitlement —
@@ -53,7 +67,10 @@ export default function EmployeeDashboard() {
       {/* KPI cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card icon={<CalendarCheck className="w-6 h-6" />} label="Attendance (this month)"
-          value={isLoading ? '--' : `${att.present_pct}%`} sub={`${att.present}/${att.total} days present`}
+          value={isLoading ? '--' : pct == null ? '—' : `${pct}%`}
+          sub={workingDays > 0
+            ? `${Number(att.present ?? 0)}/${workingDays} working days present`
+            : 'No working days this month yet'}
           color="bg-green-50 text-green-600" />
         <Card icon={<Clock className="w-6 h-6" />} label="Avg working hours"
           value={isLoading ? '--' : (att.avg_working_hours || 0)} sub="per marked day"
@@ -92,14 +109,20 @@ export default function EmployeeDashboard() {
           )}
         </div>
 
-        {/* This-month attendance breakdown */}
+        {/* This-month attendance breakdown — every code the record can hold, so the tiles
+            reconcile with the month. Zeros stay visible for the same reason. */}
         <div className="bg-card rounded-xl border border-border p-6">
-          <h2 className="text-lg font-semibold text-foreground mb-4">This Month</h2>
-          <div className="grid grid-cols-2 gap-3">
-            <Mini label="Present" value={att.present} color="text-green-600" />
-            <Mini label="Absent" value={att.absent} color="text-red-600" />
-            <Mini label="Half day" value={att.half_day} color="text-amber-600" />
-            <Mini label="On leave" value={att.on_leave} color="text-blue-600" />
+          <div className="flex items-baseline justify-between mb-4">
+            <h2 className="text-lg font-semibold text-foreground">This Month</h2>
+            <span className="text-xs text-secondary">{total} day{total === 1 ? '' : 's'} marked</span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {counts.map((c) => (
+              <Mini key={c.code} label={c.label} badge={c.badge} value={c.value}
+                color={c.value > 0 ? c.tone : 'text-secondary/40'} />
+            ))}
+            {/* Only ever appears if the table holds a status nothing in the code writes. */}
+            {other > 0 && <Mini label="Other" badge="?" value={other} color="text-secondary" />}
           </div>
         </div>
       </div>
@@ -191,11 +214,15 @@ function Card({ icon, label, value, sub, color }: { icon: React.ReactNode; label
   );
 }
 
-function Mini({ label, value, color }: { label: string; value: number; color: string }) {
+function Mini({ label, badge, value, color }: { label: string; badge?: string; value: number; color: string }) {
   return (
     <div className="rounded-lg border border-border p-3 text-center">
       <p className={`text-2xl font-bold ${color}`}>{value}</p>
-      <p className="text-xs text-secondary mt-0.5">{label}</p>
+      {/* The short code beside the name, because it is what HR writes on the upload sheet and
+          what the calendar shows in each cell. */}
+      <p className="text-xs text-secondary mt-0.5 leading-tight">
+        {label}{badge ? <span className="text-secondary/60"> · {badge}</span> : null}
+      </p>
     </div>
   );
 }

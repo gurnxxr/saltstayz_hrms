@@ -195,7 +195,7 @@ describe('marked-grid template round-trip', () => {
     const grid = [
       ...templateShape('2026-07', dates),
       [''],
-      ['Codes: P = Present · NP = No Punch · A = Absent · HD = Half Day · SP = Short Punch · MP = Miss Punch · HHD = Half day with half leave'],
+      ['Codes: P = Present · NP = No Punch · A = Absent · HD = Half Day (uses ½ leave) · SP = Short Punch · MP = Miss Punch · HHD = Half-Day Holiday'],
       ['Weekly offs, holidays and approved leave are calendar-driven — leave those cells blank rather than coding them.'],
     ];
     const { cells } = parseMarkedGrid(grid, { month: '2026-07' });
