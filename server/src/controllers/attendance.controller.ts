@@ -2,6 +2,7 @@ import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../types';
 import * as attendanceService from '../services/attendance.service';
 import * as gridService from '../services/attendanceGrid.service';
+import * as registerService from '../services/attendanceRegister.service';
 
 export async function getMyCalendar(req: AuthRequest, res: Response, next: NextFunction) {
   try {
@@ -143,5 +144,68 @@ export async function getPropertyEmployees(req: AuthRequest, res: Response, next
 export async function getAvailableDates(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     res.json(await attendanceService.getAvailableDates());
+  } catch (err) { next(err); }
+}
+
+// ─── Attendance Register (admin) ───
+
+/** Parsed once so the list, the grid and the export can never read the query differently. */
+function registerFilters(req: AuthRequest): registerService.RegisterFilters {
+  const str = (k: string) => (req.query[k] ? String(req.query[k]) : undefined);
+  return {
+    month: str('month'),
+    property: str('property'),
+    // `branch_unit`, never `branch` — every other filter spelled `branch` in this system means
+    // the property, and colliding with that would point this at the wrong column.
+    branch_unit: str('branch_unit'),
+    department: str('department'),
+    search: str('search'),
+  };
+}
+
+export async function getRegister(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json(await registerService.getRegister({
+      ...registerFilters(req),
+      page: req.query.page ? Number(req.query.page) : 1,
+      pageSize: req.query.pageSize ? Number(req.query.pageSize) : 25,
+    }));
+  } catch (err) { next(err); }
+}
+
+export async function getRegisterGrid(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json(await registerService.getDayGrid({
+      ...registerFilters(req),
+      page: req.query.page ? Number(req.query.page) : 1,
+      pageSize: req.query.pageSize ? Number(req.query.pageSize) : 25,
+    }));
+  } catch (err) { next(err); }
+}
+
+export async function exportRegister(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const filters = registerFilters(req);
+    const csv = await registerService.exportRegisterCsv(filters);
+    const month = filters.month || new Date().toISOString().slice(0, 7);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="Attendance_Register_${month}.csv"`);
+    res.send(csv);
+  } catch (err) { next(err); }
+}
+
+/**
+ * One employee's month, day by day — the drill-down.
+ *
+ * Reuses getMyCalendar, which already takes an employee id and already resolves leave, scoped
+ * holidays and the working calendar. Only the HTTP layer was missing: the existing /my-calendar
+ * route hard-wires req.user.employeeId, so there was no way to look at anybody else.
+ */
+export async function getEmployeeMonth(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const employeeId = Number(req.query.employeeId);
+    if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });
+    const month = String(req.query.month || new Date().toISOString().slice(0, 7));
+    res.json(await attendanceService.getMyCalendar(employeeId, month));
   } catch (err) { next(err); }
 }

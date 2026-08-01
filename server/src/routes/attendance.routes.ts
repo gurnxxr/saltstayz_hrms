@@ -27,4 +27,12 @@ router.get('/admin/upload-logs', authorize('attendance', 'read'), ATT_STAFF, ctr
 // uploader can already see on this screen, so it sits behind the same gate as the page itself.
 router.get('/admin/template/marked-grid', authorize('attendance', 'read'), ATT_STAFF, ctrl.downloadMarkedGridTemplate);
 
+// Attendance Register — the month, one row per employee. Gated on the ADMIN module rather than
+// attendance, because it lives under the Admin tab: whoever can open Admin can read this.
+// Static paths before any param route, or Express reads "export" as an id.
+router.get('/admin/register', authorize('admin', 'read'), ctrl.getRegister);
+router.get('/admin/register/grid', authorize('admin', 'read'), ctrl.getRegisterGrid);
+router.get('/admin/register/export', authorize('admin', 'read'), ctrl.exportRegister);
+router.get('/admin/employee-month', authorize('admin', 'read'), ctrl.getEmployeeMonth);
+
 export default router;
