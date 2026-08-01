@@ -53,6 +53,11 @@ export default function LeaveTab() {
     onError: (err: any) => toast.error(err.response?.data?.error || 'Failed to cancel'),
   });
 
+  // Unpaid leave (Loss of Pay) is allocated 365 days to mean "no limit", not as an entitlement,
+  // so a 365/365 tile beside the real balances is noise. Hidden here only — it is still applied
+  // for from the Apply Leave button below.
+  const paidBalances = (balances as any[]).filter((b: any) => b.is_paid);
+
   return (
     <div className="space-y-6">
       <div className="flex justify-end gap-3">
@@ -67,7 +72,7 @@ export default function LeaveTab() {
       {/* Leave Balances */}
       {balancesError && <LoadError compact message="Couldn't load leave balances." onRetry={() => refetchBalances()} />}
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-        {balances.map((b: any) => {
+        {paidBalances.map((b: any) => {
           const consumed = b.allocated - b.available;
           const pct = b.allocated > 0 ? (consumed / b.allocated) * 100 : 0;
           return (

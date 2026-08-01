@@ -6,10 +6,12 @@ import { toast } from 'sonner';
 import api from '@/lib/api';
 import AppShell from '@/components/layout/AppShell';
 import {
-  Upload, FileSpreadsheet, ChevronDown, ChevronRight,
-  Users, CheckCircle, XCircle, Clock, ArrowLeft, History, Wand2,
+  FileSpreadsheet, ChevronDown, ChevronRight, Download,
+  Users, CheckCircle, XCircle, Clock, ArrowLeft, History,
 } from 'lucide-react';
 import Breadcrumb from '@/components/ui/Breadcrumb';
+import { ATTENDANCE_CODES, ATTENDANCE_STATUSES, CODE_BY_STATUS } from '@/lib/attendanceCodes';
+import { errorFromBlob } from '@/lib/utils';
 
 const fmtDateTime = (s?: string) => {
   if (!s) return '—';
@@ -17,17 +19,39 @@ const fmtDateTime = (s?: string) => {
   return isNaN(d.getTime()) ? s : d.toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 };
 
-type StatusFilter = '' | 'present' | 'absent' | 'half_day' | 'hhd' | 'short_punch' | 'miss_punch' | 'no_punch' | 'on_leave' | 'unmarked';
+// '' is "all"; 'unmarked' is a day with no record at all, not a stored status. Everything between
+// comes from the shared code list, so this can't drift from what the server buckets.
+type StatusFilter = '' | (typeof ATTENDANCE_STATUSES)[number] | 'unmarked';
 
 export default function AdminAttendancePage() {
   const qc = useQueryClient();
-  const fileRef = useRef<HTMLInputElement>(null);
   const gridRef = useRef<HTMLInputElement>(null);
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10));
   const [expandedProperty, setExpandedProperty] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('');
   const [uploadResult, setUploadResult] = useState<any>(null);
   const [showHistory, setShowHistory] = useState(false);
+
+  /**
+   * Fetch the blank marked grid for the selected month and save it.
+   *
+   * Goes through `api` rather than a plain link so the session cookie and the API base URL are
+   * applied — a bare href would hit the Next.js origin unauthenticated and download the login page.
+   */
+  async function downloadTemplate() {
+    const month = selectedDate.slice(0, 7);
+    try {
+      const res = await api.get(`/attendance/admin/template/marked-grid?month=${month}`, { responseType: 'blob' });
+      const href = URL.createObjectURL(res.data as Blob);
+      const a = document.createElement('a');
+      a.href = href;
+      a.download = `attendance_grid_${month}.csv`;
+      a.click();
+      URL.revokeObjectURL(href);
+    } catch (err: any) {
+      toast.error((await errorFromBlob(err)) || 'Could not download the template');
+    }
+  }
 
   const { data: uploadLogs = [] } = useQuery({
     queryKey: ['attendance-upload-logs'],
@@ -56,29 +80,6 @@ export default function AdminAttendancePage() {
     enabled: !!expandedProperty,
   });
 
-  const uploadMutation = useMutation({
-    mutationFn: (file: File) => {
-      const fd = new FormData();
-      fd.append('file', file);
-      return api.post('/attendance/upload', fd).then(r => r.data);
-    },
-    onSuccess: (data) => {
-      setUploadResult(data);
-      qc.invalidateQueries({ queryKey: ['attendance-property-summary'] });
-      qc.invalidateQueries({ queryKey: ['attendance-property-employees'] });
-      qc.invalidateQueries({ queryKey: ['attendance-dates'] });
-      qc.invalidateQueries({ queryKey: ['attendance-upload-logs'] });
-      toast.success(`${data.created + data.updated} records processed`);
-    },
-    onError: (e: any) => toast.error(e.response?.data?.error || 'Upload failed'),
-  });
-
-  function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (file) { setUploadResult(null); uploadMutation.mutate(file); }
-    if (fileRef.current) fileRef.current.value = '';
-  }
-
   // Marked-grid dashboard upload (wide sheet of day-codes). The month for bare
   // day-number headers comes from the selected date, so HR uploads the sheet as-is.
   const gridMutation = useMutation({
@@ -105,31 +106,14 @@ export default function AdminAttendancePage() {
     if (gridRef.current) gridRef.current.value = '';
   }
 
-  // Apply Shift Type auto-attendance thresholds (half-day/absent hours) to the
-  // selected date's records. Also runs automatically every day for yesterday.
-  const autoMarkMutation = useMutation({
-    mutationFn: () => api.post('/attendance/admin/auto-mark', { date: selectedDate }).then(r => r.data),
-    onSuccess: (data) => {
-      qc.invalidateQueries({ queryKey: ['attendance-property-summary'] });
-      qc.invalidateQueries({ queryKey: ['attendance-property-employees'] });
-      toast.success(`Auto-attendance for ${data.date}: ${data.updated} of ${data.scanned} record(s) re-marked`);
-    },
-    onError: (e: any) => toast.error(e.response?.data?.error || 'Auto-mark failed'),
-  });
-
   const properties = summary?.properties || [];
 
-  const grandTotal = properties.reduce((a: any, p: any) => ({
-    total: a.total + p.total,
-    present: a.present + p.present,
-    absent: a.absent + p.absent,
-    half_day: a.half_day + p.half_day,
-    hhd: a.hhd + (p.hhd || 0),
-    short_punch: a.short_punch + (p.short_punch || 0),
-    miss_punch: a.miss_punch + (p.miss_punch || 0),
-    no_punch: a.no_punch + (p.no_punch || 0),
-    on_leave: a.on_leave + p.on_leave,
-  }), { total: 0, present: 0, absent: 0, half_day: 0, hhd: 0, short_punch: 0, miss_punch: 0, no_punch: 0, on_leave: 0 });
+  // Summed over the shared code list, so a code added there is totalled here without an edit.
+  const grandTotal: Record<string, number> = properties.reduce((a: any, p: any) => {
+    const next: any = { total: a.total + Number(p.total || 0) };
+    for (const s of ATTENDANCE_STATUSES) next[s] = a[s] + Number(p[s] || 0);
+    return next;
+  }, { total: 0, ...Object.fromEntries(ATTENDANCE_STATUSES.map((s) => [s, 0])) });
 
   return (
     <AppShell>
@@ -148,31 +132,22 @@ export default function AdminAttendancePage() {
               <div>
                 <h3 className="text-sm font-semibold text-foreground">Upload Attendance File</h3>
                 <p className="text-xs text-secondary mt-0.5">
-                  <span className="font-medium">Punch CSV:</span> Emp Code, Access Date (dd-mm-yy), First_In_time, Last_Out_time, Location (optional)
+                  <span className="font-medium">Marked grid (.xlsx/.csv):</span> one row per employee, one column per date, cells coded P / NP / A / HD / SP / MP / HHD — imported for <span className="font-medium">{selectedDate.slice(0, 7)}</span>
                 </p>
                 <p className="text-xs text-secondary mt-0.5">
-                  <span className="font-medium">Marked grid (.xlsx/.csv):</span> one row per employee, one column per date, cells coded P / NP / A / HD / SP / MP / HHD — imported for <span className="font-medium">{selectedDate.slice(0, 7)}</span>
+                  Weekly offs, holidays and approved leave come from the calendar — leave those cells blank.
                 </p>
               </div>
             </div>
             <div className="flex items-center gap-2">
+              {/* One importer left, so one template — a menu offering a single choice is just an
+                  extra click. */}
               <button
-                onClick={() => autoMarkMutation.mutate()}
-                disabled={autoMarkMutation.isPending}
-                title="Re-derive statuses from working hours using each shift type's auto-attendance thresholds"
-                className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted disabled:opacity-50 transition-colors"
+                onClick={() => downloadTemplate()}
+                title="Download a blank grid for the selected month, pre-filled with the employee list"
+                className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted transition-colors"
               >
-                <Wand2 size={15} />
-                {autoMarkMutation.isPending ? 'Marking…' : 'Auto-mark'}
-              </button>
-              <input ref={fileRef} type="file" accept=".csv" onChange={handleFileUpload} className="hidden" />
-              <button
-                onClick={() => fileRef.current?.click()}
-                disabled={uploadMutation.isPending}
-                className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted disabled:opacity-50"
-              >
-                <Upload size={16} />
-                {uploadMutation.isPending ? 'Processing...' : 'Upload Punch CSV'}
+                <Download size={15} /> Template
               </button>
               <input ref={gridRef} type="file" accept=".xlsx,.xlsm,.csv" onChange={handleGridUpload} className="hidden" />
               <button
@@ -284,44 +259,25 @@ export default function AdminAttendancePage() {
           )}
         </div>
 
-        {/* Grand Total Cards */}
+        {/* Grand totals — all eight codes, so the strip adds up to Total Marked. It used to show
+            four, which meant HHD, SP, MP and NP days were counted in the total and nowhere else. */}
         {properties.length > 0 && (
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div className="grid grid-cols-3 md:grid-cols-5 lg:grid-cols-9 gap-3">
             <div className="bg-card rounded-xl border border-border p-4 flex items-center gap-3">
-              <Users size={20} className="text-primary" />
+              <Users size={20} className="text-primary shrink-0" />
               <div>
                 <p className="text-xs font-medium text-secondary">Total Marked</p>
                 <p className="text-xl font-bold text-foreground">{grandTotal.total}</p>
               </div>
             </div>
-            <div className="bg-card rounded-xl border border-border p-4 flex items-center gap-3">
-              <CheckCircle size={20} className="text-green-600" />
-              <div>
-                <p className="text-xs font-medium text-secondary">Present</p>
-                <p className="text-xl font-bold text-green-600">{grandTotal.present}</p>
+            {ATTENDANCE_CODES.map((c) => (
+              <div key={c.code} className="bg-card rounded-xl border border-border p-4">
+                <p className="text-xs font-medium text-secondary">{c.label}</p>
+                <p className={`text-xl font-bold ${grandTotal[c.code] > 0 ? c.tone : 'text-secondary/40'}`}>
+                  {grandTotal[c.code]}
+                </p>
               </div>
-            </div>
-            <div className="bg-card rounded-xl border border-border p-4 flex items-center gap-3">
-              <XCircle size={20} className="text-red-600" />
-              <div>
-                <p className="text-xs font-medium text-secondary">Absent</p>
-                <p className="text-xl font-bold text-red-600">{grandTotal.absent}</p>
-              </div>
-            </div>
-            <div className="bg-card rounded-xl border border-border p-4 flex items-center gap-3">
-              <Clock size={20} className="text-yellow-600" />
-              <div>
-                <p className="text-xs font-medium text-secondary">Half Day</p>
-                <p className="text-xl font-bold text-yellow-600">{grandTotal.half_day}</p>
-              </div>
-            </div>
-            <div className="bg-card rounded-xl border border-border p-4 flex items-center gap-3">
-              <ArrowLeft size={20} className="text-blue-600" />
-              <div>
-                <p className="text-xs font-medium text-secondary">On Leave</p>
-                <p className="text-xl font-bold text-blue-600">{grandTotal.on_leave}</p>
-              </div>
-            </div>
+            ))}
           </div>
         )}
 
@@ -353,37 +309,16 @@ export default function AdminAttendancePage() {
                     <span className="text-sm font-semibold text-foreground flex-1 text-left">
                       {prop.branch_name || 'Unassigned'}
                     </span>
-                    <div className="flex items-center gap-5 text-xs">
-                      <span className="flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-full bg-green-500" />
-                        <span className="font-medium">{prop.present}</span>
-                        <span className="text-secondary">P</span>
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-full bg-red-500" />
-                        <span className="font-medium">{prop.absent}</span>
-                        <span className="text-secondary">A</span>
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-full bg-yellow-500" />
-                        <span className="font-medium">{prop.half_day}</span>
-                        <span className="text-secondary">HD</span>
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-full bg-amber-500" />
-                        <span className="font-medium">{prop.short_punch || 0}</span>
-                        <span className="text-secondary">SP</span>
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-full bg-orange-500" />
-                        <span className="font-medium">{prop.miss_punch || 0}</span>
-                        <span className="text-secondary">MP</span>
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-full bg-blue-500" />
-                        <span className="font-medium">{prop.on_leave}</span>
-                        <span className="text-secondary">L</span>
-                      </span>
+                    {/* All eight codes. HHD and NP had no dot at all, so a property could show
+                        six numbers that did not reach its own total. */}
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                      {ATTENDANCE_CODES.map((c) => (
+                        <span key={c.code} className="flex items-center gap-1">
+                          <span className={`w-2 h-2 rounded-full ${c.dot}`} />
+                          <span className="font-medium">{Number(prop[c.code] || 0)}</span>
+                          <span className="text-secondary">{c.badge}</span>
+                        </span>
+                      ))}
                       <span className="text-secondary font-medium">
                         {prop.total} total &middot; {prop.avg_hours || 0}h avg
                       </span>
@@ -398,14 +333,9 @@ export default function AdminAttendancePage() {
                         <span className="text-xs text-secondary mr-1">Filter:</span>
                         {([
                           { value: '' as StatusFilter, label: 'All' },
-                          { value: 'present' as StatusFilter, label: 'Present' },
-                          { value: 'absent' as StatusFilter, label: 'Absent' },
-                          { value: 'half_day' as StatusFilter, label: 'Half Day' },
-                          { value: 'hhd' as StatusFilter, label: 'HHD' },
-                          { value: 'short_punch' as StatusFilter, label: 'Short Punch' },
-                          { value: 'miss_punch' as StatusFilter, label: 'Miss Punch' },
-                          { value: 'no_punch' as StatusFilter, label: 'No Punch' },
-                          { value: 'on_leave' as StatusFilter, label: 'On Leave' },
+                          ...ATTENDANCE_CODES.map((c) => ({ value: c.code as StatusFilter, label: c.label })),
+                          // Not a status — a day with no record at all, resolved by the pay
+                          // schedule's unmarked_day_policy rather than stored on the row.
                           { value: 'unmarked' as StatusFilter, label: 'Unmarked' },
                         ]).map(opt => (
                           <button
@@ -494,29 +424,12 @@ function UploadStatusBadge({ status }: { status: string }) {
 
 function StatusBadge({ status }: { status: string | null }) {
   if (!status) return <span className="text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-500">Unmarked</span>;
-  const map: Record<string, string> = {
-    present: 'bg-green-100 text-green-700',
-    absent: 'bg-red-100 text-red-700',
-    half_day: 'bg-yellow-100 text-yellow-700',
-    hhd: 'bg-lime-100 text-lime-700',
-    short_punch: 'bg-amber-100 text-amber-700',
-    miss_punch: 'bg-orange-100 text-orange-700',
-    no_punch: 'bg-purple-100 text-purple-700',
-    on_leave: 'bg-blue-100 text-blue-700',
-  };
-  const labels: Record<string, string> = {
-    present: 'Present',
-    absent: 'Absent',
-    half_day: 'Half Day',
-    hhd: 'HHD',
-    short_punch: 'Short Punch',
-    miss_punch: 'Miss Punch',
-    no_punch: 'No Punch',
-    on_leave: 'On Leave',
-  };
+  // Colours and wording come from the shared definition — this page used to say HHD in lime while
+  // the employee's own calendar said the same day in teal, and called it "HHD" rather than naming it.
+  const meta = CODE_BY_STATUS[status];
   return (
-    <span className={`text-xs px-2 py-1 rounded-full ${map[status] || 'bg-gray-100 text-gray-500'}`}>
-      {labels[status] || status}
+    <span className={`text-xs px-2 py-1 rounded-full ${meta ? `${meta.badgeBg} ${meta.badgeText}` : 'bg-gray-100 text-gray-500'}`}>
+      {meta?.label ?? status}
     </span>
   );
 }

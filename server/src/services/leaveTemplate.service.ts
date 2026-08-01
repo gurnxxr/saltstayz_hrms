@@ -111,6 +111,96 @@ export async function resolveTemplateId(employeeId: number): Promise<number | nu
   return emp?.leave_template_id ?? (await getDefaultTemplateId());
 }
 
+// ─── Department-governed templates ───
+//
+// `employees.dept_name` is free text while `departments` is a catalogue, so every join between
+// them is a name match. It is done case-insensitively on a trimmed value, exactly as
+// leave.service's deptIdOf does — anything looser and " housekeeping " silently misses the
+// department it plainly belongs to, anything stricter and the two screens disagree about who is
+// in a department.
+const deptKey = (name: unknown) => String(name ?? '').trim().toLowerCase();
+
+/** Active employees whose dept_name matches any of these department names. Empty in, empty out. */
+function employeesInDepartments(cx: Knex | Knex.Transaction, deptNames: string[]) {
+  const keys = deptNames.map(deptKey).filter(Boolean);
+  const q = cx('employees').where('is_active', true);
+  if (!keys.length) return q.whereRaw('1 = 0'); // no departments = nobody, never everybody
+  return q.whereRaw(`lower(trim(dept_name)) in (${keys.map(() => '?').join(',')})`, keys);
+}
+
+/**
+ * The template that governs a department by name, or the Default.
+ *
+ * This is what makes the department rule stick for people who did not exist when it was made.
+ * Every "new hires land on Default" site calls it instead, so somebody hired into Housekeeping
+ * next month lands on Housekeeping's plan rather than needing an admin to remember.
+ */
+export async function resolveTemplateForDepartment(deptName: unknown): Promise<number | null> {
+  const key = deptKey(deptName);
+  if (key) {
+    const row = await db('leave_template_departments as td')
+      .join('departments as d', 'd.id', 'td.department_id')
+      .join('leave_templates as t', 't.id', 'td.template_id')
+      .whereRaw('lower(trim(d.name)) = ?', [key])
+      .where('t.is_active', true)
+      .select('td.template_id')
+      .first();
+    if (row) return row.template_id;
+  }
+  return getDefaultTemplateId();
+}
+
+/**
+ * Every department, with how many active people are in it and which template claims it.
+ *
+ * One endpoint behind the whole department picker: the client needs the headcount to say what a
+ * choice will cost, and the claim to grey out a department that already belongs to another plan
+ * rather than letting someone pick it and be refused on save.
+ */
+export async function listDepartmentCoverage() {
+  const [departments, claims, headcounts] = await Promise.all([
+    db('departments').select('id', 'name').orderBy('name'),
+    db('leave_template_departments as td')
+      .join('leave_templates as t', 't.id', 'td.template_id')
+      .select('td.department_id', 'td.template_id', 't.name as template_name'),
+    db('employees').where('is_active', true).whereNotNull('dept_name')
+      .select(db.raw('lower(trim(dept_name)) as key'), db.raw('count(id)::int as c'))
+      .groupBy(db.raw('lower(trim(dept_name))')),
+  ]);
+  const claimBy = new Map<number, any>(claims.map((c: any) => [c.department_id, c]));
+  const headBy = new Map<string, number>(headcounts.map((h: any) => [h.key, Number(h.c)]));
+  return departments.map((d: any) => {
+    const claim = claimBy.get(d.id);
+    return {
+      id: d.id,
+      name: d.name,
+      employee_count: headBy.get(deptKey(d.name)) ?? 0,
+      template_id: claim?.template_id ?? null,
+      template_name: claim?.template_name ?? null,
+    };
+  });
+}
+
+/**
+ * Point every active employee in these departments at this template.
+ *
+ * Returns how many people actually MOVED, which is the number worth telling the admin — counting
+ * everyone in the department would report 22 when 21 were already there and one changed plan.
+ * The NULL arm matters: an unassigned employee resolves to Default at read time but stores NULL,
+ * and `whereNot(col, x)` is never true for NULL in SQL, so without it the people most in need of
+ * a plan would be the ones silently skipped.
+ */
+async function applyTemplateToDepartments(
+  trx: Knex.Transaction, templateId: number, deptIds: number[],
+): Promise<number> {
+  if (!deptIds.length) return 0;
+  const names = await trx('departments').whereIn('id', deptIds).pluck('name');
+  if (!names.length) return 0;
+  return employeesInDepartments(trx, names)
+    .where((q: any) => q.whereNull('leave_template_id').orWhereNot('leave_template_id', templateId))
+    .update({ leave_template_id: templateId });
+}
+
 /** Which days of the week an employee does not work, and the named policy that says so. */
 export interface WorkWeek {
   rules: OffDayRule[];
@@ -295,11 +385,22 @@ export async function listTemplates() {
   const rc = new Map<number, number>(rowCounts.map((r: any) => [r.template_id, Number(r.c)]));
   const ec = new Map<number, number>(empCounts.map((r: any) => [r.leave_template_id, Number(r.c)]));
   const nullCount = Number((nullRow as any)?.c ?? 0);
+  // Governed departments, so the list can show what a plan covers without opening it.
+  const deptRows = await db('leave_template_departments as td')
+    .join('departments as d', 'd.id', 'td.department_id')
+    .select('td.template_id', 'd.id', 'd.name').orderBy('d.name');
+  const deptsByTemplate = new Map<number, any[]>();
+  for (const r of deptRows) {
+    const list = deptsByTemplate.get(r.template_id) ?? [];
+    list.push({ id: r.id, name: r.name });
+    deptsByTemplate.set(r.template_id, list);
+  }
   return templates.map((t: any) => ({
     id: t.id, name: t.name, is_default: !!t.is_default, is_active: !!t.is_active,
     off_day_rules: parseOffDayRules(t.off_day_rules),
     row_count: rc.get(t.id) ?? 0,
     employee_count: (ec.get(t.id) ?? 0) + (t.id === defaultId ? nullCount : 0),
+    departments: deptsByTemplate.get(t.id) ?? [],
   }));
 }
 
@@ -316,9 +417,14 @@ export async function getTemplate(id: number) {
   const conflicts = rowIds.length ? await db('leave_template_row_conflicts').whereIn('template_row_id', rowIds) : [];
   const byRow = new Map<number, number[]>();
   for (const c of conflicts) { const a = byRow.get(c.template_row_id) ?? []; a.push(c.conflict_leave_type_id); byRow.set(c.template_row_id, a); }
+  const departments = await db('leave_template_departments as td')
+    .join('departments as d', 'd.id', 'td.department_id')
+    .where('td.template_id', id).select('d.id', 'd.name').orderBy('d.name');
   return {
     id: t.id, name: t.name, is_default: !!t.is_default, is_active: !!t.is_active,
     off_day_rules: parseOffDayRules(t.off_day_rules),
+    departments,
+    department_ids: departments.map((d: any) => d.id),
     rows: rows.map((r: any) => ({
       leave_type_id: r.leave_type_id, leave_type_name: r.leave_type_name,
       default_days: Number(r.default_days) || 0, is_paid: !!r.is_paid, is_encashable: !!r.is_encashable,
@@ -331,7 +437,49 @@ export async function getTemplate(id: number) {
   };
 }
 
-interface TemplateInput { name: string; is_active: boolean; rows: any[]; off_day_rules?: OffDayRule[]; }
+interface TemplateInput {
+  name: string; is_active: boolean; rows: any[]; off_day_rules?: OffDayRule[];
+  /** undefined = the caller didn't send the field, so leave the existing claims alone. */
+  department_ids?: number[];
+}
+
+/**
+ * Departments this template will govern, refusing any already claimed by another one.
+ *
+ * A department has exactly one governing template — an employee has one leave plan, so a
+ * department claimed twice could not say which. The unique index enforces that regardless; this
+ * exists to fail with a sentence that says what to do instead of a constraint violation.
+ *
+ * It deliberately does NOT steal a department from another template. Reassigning a department
+ * silently rewrites the leave entitlements of everyone in it, which is not something to do as a
+ * side effect of saving an unrelated plan — the admin releases it there, then claims it here.
+ */
+async function validateDepartmentIds(data: any, templateId?: number): Promise<number[] | undefined> {
+  if (!('department_ids' in (data ?? {}))) return undefined;
+  const raw: any[] = Array.isArray(data.department_ids) ? data.department_ids : [];
+  const ids: number[] = [...new Set<number>(raw.map((v) => Number(v)))]
+    .filter((n) => Number.isInteger(n) && n > 0);
+  if (!ids.length) return [];
+
+  const known = await db('departments').whereIn('id', ids).select('id', 'name');
+  if (known.length !== ids.length) throw new ValidationError('Unknown department selected');
+
+  const clash = await db('leave_template_departments as td')
+    .join('leave_templates as t', 't.id', 'td.template_id')
+    .join('departments as d', 'd.id', 'td.department_id')
+    .whereIn('td.department_id', ids)
+    .modify((q) => { if (templateId) q.whereNot('td.template_id', templateId); })
+    .select('d.name as department_name', 't.name as template_name')
+    .first();
+  if (clash) {
+    throw new ValidationError(
+      `${clash.department_name} is already governed by the "${clash.template_name}" template. `
+      + 'A department can only be on one leave plan — remove it there first, then add it here.',
+    );
+  }
+  return ids;
+}
+
 async function validateTemplateInput(data: any, excludeId?: number): Promise<TemplateInput> {
   const name = String(data.name ?? '').trim();
   if (!name) throw new ValidationError('Template name is required');
@@ -389,7 +537,11 @@ async function validateTemplateInput(data: any, excludeId?: number): Promise<Tem
   if (off_day_rules && off_day_rules.length >= 7) {
     throw new ValidationError('A work week cannot have every day off — that would make the month unpayable.');
   }
-  return { name, is_active: data.is_active === undefined ? true : !!data.is_active, rows, off_day_rules };
+  const department_ids = await validateDepartmentIds(data, excludeId);
+  return {
+    name, is_active: data.is_active === undefined ? true : !!data.is_active,
+    rows, off_day_rules, department_ids,
+  };
 }
 
 async function writeRows(trx: Knex.Transaction, templateId: number, rows: any[]) {
@@ -404,18 +556,38 @@ async function writeRows(trx: Knex.Transaction, templateId: number, rows: any[])
   }
 }
 
+/**
+ * Rewrite a template's department claims and pull everyone in them onto it.
+ *
+ * Releasing a department does NOT move its people back off the plan. They were put on it
+ * deliberately, and quietly rewriting the leave entitlements of a whole department because
+ * somebody unticked a box is a bigger action than unticking a box. The screen says so, and the
+ * By Employee tab is where you move them back if that is what you meant.
+ */
+async function syncDepartments(
+  trx: Knex.Transaction, templateId: number, deptIds: number[],
+): Promise<number> {
+  await trx('leave_template_departments').where('template_id', templateId).del();
+  if (deptIds.length) {
+    await trx('leave_template_departments')
+      .insert(deptIds.map((department_id) => ({ template_id: templateId, department_id })));
+  }
+  return applyTemplateToDepartments(trx, templateId, deptIds);
+}
+
 export async function createTemplate(data: any) {
   const input = await validateTemplateInput(data);
   try {
-    const id = await db.transaction(async (trx) => {
+    const { id, applied } = await db.transaction(async (trx) => {
       const [{ id: tId }] = await trx('leave_templates').insert({
         name: input.name, is_default: false, is_active: input.is_active,
         off_day_rules: JSON.stringify(input.off_day_rules ?? []),
       }).returning('id');
       await writeRows(trx, tId, input.rows);
-      return tId;
+      const moved = input.department_ids ? await syncDepartments(trx, tId, input.department_ids) : 0;
+      return { id: tId, applied: moved };
     });
-    return getTemplate(id);
+    return { ...(await getTemplate(id)), employees_moved: applied };
   } catch (e) { rethrowDuplicate(e); }
 }
 
@@ -466,6 +638,7 @@ export async function updateTemplate(id: number, data: any) {
   if (!t) throw new NotFoundError('Leave template');
   const input = await validateTemplateInput(data, id);
   try {
+    let applied = 0;
     await db.transaction(async (trx) => {
       // The Default template is the NULL fallback and every new hire's plan — it can be
       // renamed but never deactivated, or the resolver would keep using an "inactive" plan.
@@ -479,8 +652,11 @@ export async function updateTemplate(id: number, data: any) {
       // leave_entitlements, not here).
       await trx('leave_template_rows').where('template_id', id).del(); // conflicts cascade
       await writeRows(trx, id, input.rows);
+      // Only when the caller actually sent the field — an older client that doesn't know about
+      // department governance must not have its omission read as "release every department".
+      if (input.department_ids) applied = await syncDepartments(trx, id, input.department_ids);
     });
-    return getTemplate(id);
+    return { ...(await getTemplate(id)), employees_moved: applied };
   } catch (e) { rethrowDuplicate(e); }
 }
 

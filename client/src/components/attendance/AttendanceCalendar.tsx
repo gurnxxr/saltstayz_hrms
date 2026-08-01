@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
 import { ChevronLeft, ChevronRight, X, ClipboardCheck } from 'lucide-react';
 import RaiseRegularisationDialog from './RaiseRegularisationDialog';
+import { ATTENDANCE_CODES, CODE_BY_STATUS, NON_STATUS_BADGES } from '@/lib/attendanceCodes';
 
 // What a clicked day carries into the detail card — computed once when the cell renders so the
 // card doesn't re-derive the badge/label.
@@ -95,32 +96,19 @@ export default function AttendanceCalendar() {
   return (
     <div className="space-y-6">
       {/* Summary Cards */}
+      {/* All eight codes, not the six this used to show — HHD and NP were counted by the server
+          and displayed by neither tile strip, so a day could carry a badge nothing tallied. */}
       {summaryData && (
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
-          <div className="bg-card rounded-xl border border-border p-4">
-            <p className="text-xs font-medium text-secondary">Present</p>
-            <p className="text-2xl font-bold text-green-600 mt-1">{summaryData.present || 0}</p>
-          </div>
-          <div className="bg-card rounded-xl border border-border p-4">
-            <p className="text-xs font-medium text-secondary">Absent</p>
-            <p className="text-2xl font-bold text-red-600 mt-1">{summaryData.absent || 0}</p>
-          </div>
-          <div className="bg-card rounded-xl border border-border p-4">
-            <p className="text-xs font-medium text-secondary">Half Day</p>
-            <p className="text-2xl font-bold text-yellow-600 mt-1">{summaryData.half_day || 0}</p>
-          </div>
-          <div className="bg-card rounded-xl border border-border p-4">
-            <p className="text-xs font-medium text-secondary">Short Punch</p>
-            <p className="text-2xl font-bold text-amber-600 mt-1">{summaryData.short_punch || 0}</p>
-          </div>
-          <div className="bg-card rounded-xl border border-border p-4">
-            <p className="text-xs font-medium text-secondary">Miss Punch</p>
-            <p className="text-2xl font-bold text-orange-600 mt-1">{summaryData.miss_punch || 0}</p>
-          </div>
-          <div className="bg-card rounded-xl border border-border p-4">
-            <p className="text-xs font-medium text-secondary">On Leave</p>
-            <p className="text-2xl font-bold text-blue-600 mt-1">{summaryData.on_leave || 0}</p>
-          </div>
+        <div className="grid grid-cols-3 md:grid-cols-5 lg:grid-cols-9 gap-3">
+          {ATTENDANCE_CODES.map((c) => {
+            const value = Number(summaryData[c.code] || 0);
+            return (
+              <div key={c.code} className="bg-card rounded-xl border border-border p-4">
+                <p className="text-xs font-medium text-secondary">{c.label}</p>
+                <p className={`text-2xl font-bold mt-1 ${value > 0 ? c.tone : 'text-secondary/40'}`}>{value}</p>
+              </div>
+            );
+          })}
           <div className="bg-card rounded-xl border border-border p-4">
             <p className="text-xs font-medium text-secondary">Avg Hours</p>
             <p className="text-2xl font-bold text-foreground mt-1">{summaryData.avg_working_hours || '—'}</p>
@@ -192,42 +180,36 @@ export default function AttendanceCalendar() {
                   let statusLabel = 'No attendance recorded';
 
                   if (holiday) {
-                    badge = 'H'; badgeBg = 'bg-orange-100'; badgeText = 'text-orange-700'; tooltip = holiday;
+                    const h = NON_STATUS_BADGES.holiday;
+                    badge = h.badge; badgeBg = h.badgeBg; badgeText = h.badgeText; tooltip = holiday;
                     statusLabel = `Holiday — ${holiday}`;
                   } else if (leave) {
-                    badge = 'L'; badgeBg = 'bg-blue-100'; badgeText = 'text-blue-700'; tooltip = leave;
+                    const l = CODE_BY_STATUS.on_leave;
+                    badge = l.badge; badgeBg = l.badgeBg; badgeText = l.badgeText; tooltip = leave;
                     statusLabel = `On leave — ${leave}`;
                   } else if (record) {
-                    if (record.status === 'present') {
-                      badge = 'P'; badgeBg = 'bg-green-100'; badgeText = 'text-green-700';
-                      tooltip = `Present${record.hours ? ` • ${record.hours}h` : ''}`; statusLabel = 'Present';
-                    } else if (record.status === 'absent') {
-                      badge = 'A'; badgeBg = 'bg-red-100'; badgeText = 'text-red-700'; tooltip = 'Absent'; statusLabel = 'Absent';
-                    } else if (record.status === 'half_day') {
-                      badge = 'HD'; badgeBg = 'bg-yellow-100'; badgeText = 'text-yellow-700';
-                      tooltip = `Half Day${record.hours ? ` • ${record.hours}h` : ''}`; statusLabel = 'Half Day';
-                    } else if (record.status === 'hhd') {
-                      badge = 'HHD'; badgeBg = 'bg-teal-100'; badgeText = 'text-teal-700';
-                      tooltip = 'Half-day Holiday — paid ½'; statusLabel = 'Half-day Holiday';
-                    } else if (record.status === 'short_punch') {
-                      badge = 'SP'; badgeBg = 'bg-amber-100'; badgeText = 'text-amber-700';
-                      tooltip = `Short Punch — left early${record.hours ? ` • ${record.hours}h` : ''}`; statusLabel = 'Short Punch — left early';
-                    } else if (record.status === 'miss_punch') {
-                      badge = 'MP'; badgeBg = 'bg-orange-100'; badgeText = 'text-orange-700';
-                      tooltip = 'Miss Punch — marked only once'; statusLabel = 'Miss Punch — marked only once';
-                    } else if (record.status === 'no_punch') {
-                      badge = 'NP'; badgeBg = 'bg-purple-100'; badgeText = 'text-purple-700';
-                      tooltip = 'No Punch — no biometric record'; statusLabel = 'No Punch — no biometric record';
-                    } else if (record.status === 'on_leave') {
-                      badge = 'L'; badgeBg = 'bg-blue-100'; badgeText = 'text-blue-700'; tooltip = 'On Leave'; statusLabel = 'On Leave';
+                    // One lookup instead of an eight-branch ladder — the badge, colour and wording
+                    // all come from the shared definition, so this cell cannot disagree with the
+                    // legend below it or with the same day on the admin screen.
+                    const meta = CODE_BY_STATUS[record.status];
+                    if (meta) {
+                      badge = meta.badge; badgeBg = meta.badgeBg; badgeText = meta.badgeText;
+                      // Hours matter for the codes derived from punches; they say nothing on a
+                      // leave day or a day the register never saw.
+                      const hours = record.hours && !['on_leave', 'no_punch'].includes(meta.code)
+                        ? ` • ${record.hours}h` : '';
+                      statusLabel = meta.hint ?? meta.label;
+                      tooltip = `${statusLabel}${hours}`;
                     }
                     // A regularised day is shown as "R" (the underlying status stays in the tooltip).
                     if (record.isRegularised) {
+                      const r = NON_STATUS_BADGES.regularised;
                       tooltip = `Regularised — ${tooltip || record.status}`;
-                      badge = 'R'; badgeBg = 'bg-indigo-100'; badgeText = 'text-indigo-700';
+                      badge = r.badge; badgeBg = r.badgeBg; badgeText = r.badgeText;
                     }
                   } else if (isWeekend && !isFuture) {
-                    badge = 'WO'; badgeBg = 'bg-gray-100'; badgeText = 'text-gray-500';
+                    const w = NON_STATUS_BADGES.weekly_off;
+                    badge = w.badge; badgeBg = w.badgeBg; badgeText = w.badgeText;
                     // Name the policy that made it a rest day, so "why wasn't I docked?" — and its
                     // mirror, "why WAS I?" — has an answer on the day itself.
                     const why = scheduled?.decided_by_name ? ` — ${scheduled.decided_by_name}` : '';
@@ -290,17 +272,11 @@ export default function AttendanceCalendar() {
 
             {/* Legend */}
             <div className="flex flex-wrap items-center gap-4 mt-4 pt-4 border-t border-border">
+              {/* Built from the shared list rather than typed out, which is how NP came to be
+                  rendered on the grid for months without ever appearing down here. */}
               {[
-                { badge: 'P', bg: 'bg-green-100', text: 'text-green-700', label: 'Present' },
-                { badge: 'A', bg: 'bg-red-100', text: 'text-red-700', label: 'Absent' },
-                { badge: 'HD', bg: 'bg-yellow-100', text: 'text-yellow-700', label: 'Half Day' },
-                { badge: 'HHD', bg: 'bg-teal-100', text: 'text-teal-700', label: 'Half-day Holiday' },
-                { badge: 'SP', bg: 'bg-amber-100', text: 'text-amber-700', label: 'Short Punch' },
-                { badge: 'MP', bg: 'bg-orange-100', text: 'text-orange-700', label: 'Miss Punch' },
-                { badge: 'L', bg: 'bg-blue-100', text: 'text-blue-700', label: 'On Leave' },
-                { badge: 'R', bg: 'bg-indigo-100', text: 'text-indigo-700', label: 'Regularised' },
-                { badge: 'H', bg: 'bg-orange-100', text: 'text-orange-700', label: 'Holiday' },
-                { badge: 'WO', bg: 'bg-gray-100', text: 'text-gray-500', label: 'Weekly Off' },
+                ...ATTENDANCE_CODES.map((c) => ({ badge: c.badge, bg: c.badgeBg, text: c.badgeText, label: c.label })),
+                ...Object.values(NON_STATUS_BADGES).map((n) => ({ badge: n.badge, bg: n.badgeBg, text: n.badgeText, label: n.label })),
               ].map(item => (
                 <div key={item.badge} className="flex items-center gap-1.5">
                   <span className={`w-6 h-6 rounded-full ${item.bg} ${item.text} text-[10px] font-bold flex items-center justify-center`}>{item.badge}</span>

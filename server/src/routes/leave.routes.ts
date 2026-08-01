@@ -51,6 +51,9 @@ router.put('/periods/:id/current', authorize('leave', 'update'), LEAVE_ADMIN, ct
 // Static sub-paths before the :id routes, or Express reads "assignments"/"assign" as an :id.
 router.get('/templates', authorize('leave', 'read'), LEAVE_ADMIN, ctrl.listLeaveTemplates);
 router.get('/templates/assignments', authorize('leave', 'read'), LEAVE_ADMIN, ctrl.listLeaveTemplateAssignments);
+// Departments + headcount + which template already claims each — powers the department picker.
+// Declared before '/templates/:id' so "departments" is not swallowed as an id.
+router.get('/templates/departments', authorize('leave', 'read'), LEAVE_ADMIN, ctrl.listLeaveTemplateDepartments);
 router.post('/templates/assign', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.bulkAssignLeaveTemplate);
 router.get('/templates/:id', authorize('leave', 'read'), LEAVE_ADMIN, ctrl.getLeaveTemplate);
 router.post('/templates', authorize('leave', 'create'), LEAVE_ADMIN, ctrl.createLeaveTemplate);

@@ -352,3 +352,53 @@ export async function uploadMarkedGrid(buffer: Buffer, fileName: string, month?:
 
   return result;
 }
+
+// ─── Blank templates for the two upload formats ───
+
+/** CSV-escape a cell: names and properties can contain commas or quotes. */
+const csvCell = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+
+/**
+ * A ready-to-fill marked grid for one month: one row per active employee, one column per date.
+ *
+ * Pre-filled with the real roster rather than handed over as an empty shell, because the two
+ * things most likely to be typed wrong are the employee code and the date header — and those are
+ * exactly the two the importer matches on. A file built here cannot mismatch a code that exists
+ * or carry a header this parser will not read, so what is left for a human is the part only a
+ * human knows: the cell.
+ *
+ * Column headers are ISO dates, which `parseHeaderDate` reads without needing the month hint.
+ */
+export async function buildMarkedGridTemplate(month: string): Promise<string> {
+  if (!/^\d{4}-\d{2}$/.test(month)) throw new ValidationError('Month must look like 2026-07');
+  const [year, mon] = month.split('-').map(Number);
+  const daysInMonth = new Date(Date.UTC(year, mon, 0)).getUTCDate();
+  const dates = Array.from({ length: daysInMonth }, (_, i) => `${month}-${pad(i + 1)}`);
+
+  const employees = await db('employees')
+    .where('is_active', true)
+    .select('employee_code', 'first_name', 'last_name', 'dept_name', 'branch_name')
+    .orderBy(['branch_name', 'first_name']);
+
+  const header = ['Emp Code', 'Name', 'Department', 'Property', ...dates].map(csvCell).join(',');
+  const rows = employees.map((e: any) => [
+    e.employee_code,
+    `${e.first_name ?? ''} ${e.last_name ?? ''}`.trim(),
+    e.dept_name ?? '',
+    e.branch_name ?? '',
+    ...dates.map(() => ''), // the part a human fills in
+  ].map(csvCell).join(','));
+
+  // A legend the parser ignores (no day number in the first cell, so it is never read as a date
+  // header) but a person reading the file in Excel needs.
+  const legend = [
+    '',
+    // HD and HHD are the pair people confuse, so the legend names what separates them: HD spends
+    // half a leave day, HHD is a day the business only opened for half of and spends none. This
+    // line used to describe HD under HHD, which is exactly backwards.
+    csvCell('Codes: P = Present · NP = No Punch · A = Absent · HD = Half Day (uses ½ leave) · SP = Short Punch · MP = Miss Punch · HHD = Half-Day Holiday'),
+    csvCell('Weekly offs, holidays and approved leave are calendar-driven — leave those cells blank rather than coding them.'),
+  ];
+  return [header, ...rows, ...legend].join('\n');
+}
+

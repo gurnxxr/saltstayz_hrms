@@ -1,6 +1,7 @@
 import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../types';
 import * as svc from '../services/notification.service';
+import * as settingsSvc from '../services/notificationSettings.service';
 import { ensureDailyAttendanceReminder } from '../services/attendance.service';
 
 const ATTENDANCE_REMINDER_ROLES = ['admin', 'chro', 'hr'];
@@ -25,4 +26,20 @@ export async function markRead(req: AuthRequest, res: Response, next: NextFuncti
 
 export async function markAllRead(req: AuthRequest, res: Response, next: NextFunction) {
   try { res.json(await svc.markAllRead(req.user!.userId)); } catch (err) { next(err); }
+}
+
+// ─── Settings (admin) ───
+
+export async function getSettings(_req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await settingsSvc.getGrid()); } catch (err) { next(err); }
+}
+
+export async function updateEventAudiences(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    res.json(await settingsSvc.setEventAudiences(String(req.params.eventKey), req.body?.audiences));
+  } catch (err) { next(err); }
+}
+
+export async function getActivity(_req: AuthRequest, res: Response, next: NextFunction) {
+  try { res.json(await settingsSvc.getActivity()); } catch (err) { next(err); }
 }

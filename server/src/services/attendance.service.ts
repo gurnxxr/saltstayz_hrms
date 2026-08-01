@@ -67,7 +67,7 @@ export async function autoMarkAttendance(date?: string) {
   const assignRows = await db('employee_shift_assignments as a')
     .join('shift_types as st', 'st.id', 'a.shift_type_id')
     .whereIn('a.employee_id', empIds)
-    .select('a.employee_id', 'a.effective_from', 'st.absent_hours', 'st.half_day_hours',
+    .select('a.employee_id', 'a.effective_from', 'a.effective_to', 'st.absent_hours', 'st.half_day_hours',
       'st.enable_auto_attendance', 'st.effective_from as shift_effective_from')
     .orderBy(['a.employee_id', 'a.effective_from']);
 
@@ -290,7 +290,7 @@ export async function uploadAttendanceCsv(csvContent: string) {
   const assignRows = empIds.length ? await db('employee_shift_assignments as a')
     .join('shift_types as st', 'st.id', 'a.shift_type_id')
     .whereIn('a.employee_id', empIds)
-    .select('a.employee_id', 'a.effective_from', 'st.start_time', 'st.end_time',
+    .select('a.employee_id', 'a.effective_from', 'a.effective_to', 'st.start_time', 'st.end_time',
       'st.ends_next_day', 'st.absent_hours', 'st.half_day_hours',
       'st.enable_auto_attendance', 'st.effective_from as shift_effective_from')
     .orderBy(['a.employee_id', 'a.effective_from']) : [];

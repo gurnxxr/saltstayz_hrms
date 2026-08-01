@@ -106,10 +106,20 @@ export async function getUploadLogs(req: AuthRequest, res: Response, next: NextF
   } catch (err) { next(err); }
 }
 
-/** Apply Shift Type auto-attendance thresholds to a date (default: yesterday). */
-export async function autoMark(req: AuthRequest, res: Response, next: NextFunction) {
+/**
+ * A blank marked grid, in the exact shape the importer parses.
+ *
+ * Sent as a download rather than JSON the client assembles: it needs the live roster and the
+ * month's dates, and rebuilding that in the browser would be a second definition of the file
+ * format to keep in step with the parser.
+ */
+export async function downloadMarkedGridTemplate(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    res.json(await attendanceService.autoMarkAttendance(req.body?.date ? String(req.body.date) : undefined));
+    const month = String(req.query.month || new Date().toISOString().slice(0, 7));
+    const csv = await gridService.buildMarkedGridTemplate(month);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="attendance_grid_${month}.csv"`);
+    res.send(csv);
   } catch (err) { next(err); }
 }
 

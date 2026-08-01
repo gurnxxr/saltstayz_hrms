@@ -94,9 +94,10 @@ export function rulesInForceOn(
 /**
  * Which of an employee's dated assignments governs a given date.
  *
- * The answer is the latest assignment starting on or before that date. When the date falls
- * before every assignment — which happens for attendance older than the mapping itself — the
- * earliest assignment is used instead, so no historical date is left without a shift.
+ * The answer is the latest assignment whose window contains that date — starting on or before it,
+ * and not already ended. When the date falls before every assignment — which happens for
+ * attendance older than the mapping itself — the earliest assignment is used instead, so no
+ * historical date is left without a shift.
  *
  * That backfill only applies to an assignment that has ACTUALLY STARTED. Without the check, an
  * employee whose only assignment is future-dated — the normal result of approving a shift-change
@@ -107,19 +108,39 @@ export function rulesInForceOn(
  *
  * `rows` must be sorted ascending by `effective_from`.
  */
-export function pickAssignmentFor<T extends { effective_from?: string | null }>(
+export function pickAssignmentFor<T extends { effective_from?: string | null; effective_to?: string | null }>(
   rows: T[], date: string, today: string,
 ): T | null {
   if (!rows.length) return null;
   const on = String(date).slice(0, 10);
   const startOf = (r: T) => String(r.effective_from ?? '').slice(0, 10);
+  // Null = open-ended, the normal case. The end is INCLUSIVE: an assignment ending on the 14th
+  // still governs the 14th.
+  const endOf = (r: T) => {
+    const e = String(r.effective_to ?? '').slice(0, 10);
+    return e || null;
+  };
 
   let chosen: T | null = null;
+  let anyStarted = false;
   for (const r of rows) {
-    if (startOf(r) <= on) chosen = r; else break;
+    if (startOf(r) > on) break;
+    anyStarted = true;
+    const end = endOf(r);
+    if (end && end < on) continue; // this one has run out — a later row may still cover the date
+    chosen = r;
   }
   if (chosen) return chosen;
 
+  // Nothing covers the date, and there are two very different reasons for that. If assignments
+  // have already STARTED and simply expired, the employee genuinely has no shift on this date and
+  // the caller must fall through to its own ladder (leave-template work week, then the
+  // organisation one). Reaching for the backfill here would resurrect a shift the admin
+  // deliberately ended — the exact thing an end date exists to prevent.
+  if (anyStarted) return null;
+
+  // Only when the date pre-dates every assignment: project the earliest one backwards, so
+  // attendance older than the mapping itself is not left unshifted. Unchanged behaviour.
   const earliest = rows[0];
   return startOf(earliest) <= String(today).slice(0, 10) ? earliest : null;
 }

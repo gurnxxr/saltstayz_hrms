@@ -7,9 +7,14 @@ import AppShell from '@/components/layout/AppShell';
 import Breadcrumb from '@/components/ui/Breadcrumb';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import Pagination, { pageSlice } from '@/components/ui/Pagination';
 import { Copy, ClipboardCopy, RefreshCw, KeyRound, Loader2, ShieldAlert, X, Check, Wand2 } from 'lucide-react';
 
 const inputCls = 'w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50';
+
+// Matches Salary Details, the closest sibling table. This page lists every employee, so on a real
+// roster it was rendering several hundred rows in one go.
+const PAGE_SIZE = 20;
 
 function genPassword() {
   const chars = 'abcdefghijkmnpqrstuvwxyz23456789';
@@ -44,6 +49,14 @@ export default function CredentialsPage() {
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['admin-credentials'] });
 
   const missing = useMemo(() => rows.filter((r: any) => !r.has_login).length, [rows]);
+
+  // Clamp rather than reset: "Create missing logins" changes rows in place without changing the
+  // count, so the admin should stay where they were. The clamp only matters if the list shrinks
+  // under them (an employee deactivated in another tab) — then fall back to the last valid page.
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const visible = pageSlice(rows, currentPage, PAGE_SIZE);
 
   const fillMutation = useMutation({
     mutationFn: () => api.post('/admin/credentials/fill-missing').then(r => r.data),
@@ -106,7 +119,7 @@ export default function CredentialsPage() {
                   ))
                 ) : rows.length === 0 ? (
                   <tr><td colSpan={4} className="px-4 py-10 text-center text-secondary">No employees found.</td></tr>
-                ) : rows.map((c: any) => (
+                ) : visible.map((c: any) => (
                   <tr key={c.employee_id} className="hover:bg-muted/30">
                     <td className="px-4 py-3">
                       <p className="font-medium text-foreground">{name(c)}</p>
@@ -161,6 +174,16 @@ export default function CredentialsPage() {
               </tbody>
             </table>
           </div>
+
+          {/* Renders nothing while everything fits on one page. */}
+          <Pagination
+            total={rows.length}
+            page={currentPage}
+            pageSize={PAGE_SIZE}
+            shown={visible.length}
+            onPageChange={setPage}
+            itemLabel="employees"
+          />
         </div>
       </div>
 

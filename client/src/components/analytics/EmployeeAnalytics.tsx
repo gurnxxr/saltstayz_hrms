@@ -4,12 +4,24 @@ import { useQuery } from '@tanstack/react-query';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import { CalendarCheck, Clock, Wallet, CalendarOff } from 'lucide-react';
+import { ATTENDANCE_CODES } from '@/lib/attendanceCodes';
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   PieChart, Pie, Cell, BarChart, Bar, Legend,
 } from 'recharts';
 
-const STATUS_COLORS = ['#10b981', '#ef4444', '#f59e0b', '#3b82f6']; // present, absent, half-day, on-leave
+// Hex, because recharts fills SVG rather than taking Tailwind classes. Keyed by code and kept in
+// step with the tints in lib/attendanceCodes.ts.
+const SLICE_COLORS: Record<string, string> = {
+  present: '#16a34a',      // green-600
+  no_punch: '#9333ea',     // purple-600
+  half_day: '#ca8a04',     // yellow-600
+  short_punch: '#d97706',  // amber-600
+  miss_punch: '#ea580c',   // orange-600
+  hhd: '#0d9488',          // teal-600
+  absent: '#dc2626',       // red-600
+  on_leave: '#2563eb',     // blue-600
+};
 
 export default function EmployeeAnalytics() {
   const { data: overview } = useQuery({
@@ -21,18 +33,17 @@ export default function EmployeeAnalytics() {
     queryFn: () => api.get('/analytics/me/trends?months=6').then(r => r.data).catch(() => null),
   });
 
-  const att = overview?.attendance ?? { present: 0, absent: 0, half_day: 0, on_leave: 0, total: 0, present_pct: 0, avg_working_hours: 0 };
+  const att = overview?.attendance ?? {};
   const leave = overview?.leave ?? { remaining: 0, used_days: 0, total_days: 0, pending_count: 0 };
 
   const attendanceTrend = trends?.attendanceTrend ?? [];
   const leaveByType = trends?.leaveByType ?? [];
 
-  const statusPie = [
-    { name: 'Present', value: att.present },
-    { name: 'Absent', value: att.absent },
-    { name: 'Half day', value: att.half_day },
-    { name: 'On leave', value: att.on_leave },
-  ].filter(s => s.value > 0);
+  // Every code, so the slices account for the whole month. A pie of four buckets out of eight
+  // reads as a complete picture while quietly omitting the days with a punch problem.
+  const statusPie = ATTENDANCE_CODES
+    .map(c => ({ name: c.label, code: c.code, value: Number(att[c.code] ?? 0) }))
+    .filter(s => s.value > 0);
 
   return (
     <AppShell>
@@ -44,7 +55,8 @@ export default function EmployeeAnalytics() {
 
         {/* KPI strip */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <Kpi icon={<CalendarCheck className="w-5 h-5" />} label="Attendance (month)" value={`${att.present_pct}%`} color="bg-green-50 text-green-600" />
+          <Kpi icon={<CalendarCheck className="w-5 h-5" />} label="Attendance (month)"
+            value={att.present_pct == null ? '—' : `${att.present_pct}%`} color="bg-green-50 text-green-600" />
           <Kpi icon={<Clock className="w-5 h-5" />} label="Avg working hrs" value={att.avg_working_hours || 0} color="bg-blue-50 text-blue-600" />
           <Kpi icon={<Wallet className="w-5 h-5" />} label="Leave remaining" value={leave.remaining} color="bg-amber-50 text-amber-600" />
           <Kpi icon={<CalendarOff className="w-5 h-5" />} label="Pending requests" value={leave.pending_count} color="bg-red-50 text-red-600" />
@@ -79,7 +91,9 @@ export default function EmployeeAnalytics() {
               <ResponsiveContainer width="100%" height={260}>
                 <PieChart>
                   <Pie data={statusPie} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={55} outerRadius={90} paddingAngle={2}>
-                    {statusPie.map((_, i) => <Cell key={i} fill={STATUS_COLORS[i % STATUS_COLORS.length]} />)}
+                    {/* Coloured by code, not by position — a slice keeps its colour whether or
+                        not the codes above it happen to be zero this month. */}
+                    {statusPie.map((s) => <Cell key={s.code} fill={SLICE_COLORS[s.code] ?? '#94a3b8'} />)}
                   </Pie>
                   <Tooltip />
                   <Legend verticalAlign="bottom" height={28} />
