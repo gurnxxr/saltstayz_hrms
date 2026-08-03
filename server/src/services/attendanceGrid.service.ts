@@ -1,6 +1,6 @@
 import ExcelJS from 'exceljs';
 import db from '../config/database';
-import { ValidationError } from '../utils/errors';
+import { AppError, ValidationError } from '../utils/errors';
 import { buildWorkCalendar } from './payableDays.service';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -68,8 +68,59 @@ const MONTH_NAMES: Record<string, number> = {
   may: 5, jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8,
   sep: 9, sept: 9, september: 9, oct: 10, october: 10, nov: 11, november: 11, dec: 12, december: 12,
 };
-/** A leading weekday label, which the export writes but which carries no information. */
+/** A leading weekday label. Not used to derive the date — but checked against it, see below. */
 const WEEKDAY_PREFIX = /^(?:mon|tue|tues|wed|weds|thu|thur|thurs|fri|sat|sun)[a-z]*[\s,.\-/]+/i;
+
+const WEEKDAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+const WEEKDAY_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/**
+ * The weekday a header claims, as `sun`..`sat` — or null when it names none.
+ *
+ * "Fri 01 Jul" claims Friday. Three letters is enough: tues/thur/weds/thursday all collapse
+ * correctly, and nothing else in these headers starts with a weekday.
+ */
+export function headerWeekday(v: any): string | null {
+  const m = cellText(v).match(WEEKDAY_PREFIX);
+  return m ? m[0].slice(0, 3).toLowerCase() : null;
+}
+
+/** The weekday an ISO date actually falls on, as `sun`..`sat`. */
+function weekdayOfDate(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  return WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+}
+
+/**
+ * The month, if any, whose calendar the header weekdays DO match.
+ *
+ * When HR exports the wrong month the whole header row is offset together, and naming the month
+ * it belongs to turns "these don't line up" into "this looks like June's sheet". Searched over
+ * three years either way, which covers a mis-picked month and the seven-year cycle that makes a
+ * stale template's weekdays line up again.
+ */
+function monthMatchingWeekdays(
+  claims: Array<{ day: number; weekday: string }>,
+  around: { year: number; month: number },
+): string | null {
+  if (!claims.length) return null;
+  // Outward from the chosen month — nearest first. A mis-picked month is almost always the one
+  // next door, and the weekday pattern repeats every few years, so scanning from one end would
+  // name a month years away when the neighbour fits just as well.
+  const offsets = [0];
+  for (let d = 1; d <= 36; d++) offsets.push(-d, d);
+  for (const off of offsets) {
+    const probe = new Date(Date.UTC(around.year, around.month - 1 + off, 1));
+    const y = probe.getUTCFullYear();
+    const mo = probe.getUTCMonth() + 1;
+    const daysIn = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+    if (claims.some((c) => c.day > daysIn)) continue;
+    if (claims.every((c) => WEEKDAYS[new Date(Date.UTC(y, mo - 1, c.day)).getUTCDay()] === c.weekday)) {
+      return `${y}-${pad(mo)}`;
+    }
+  }
+  return null;
+}
 
 /**
  * Which calendar year a bare "01 Jul" belongs to.
@@ -147,10 +198,19 @@ export function parseHeaderDate(v: any, month?: string): string | null {
 const EMP_CODE_ALIASES = new Set(['empcode', 'employeecode', 'empno', 'employeeno', 'empid', 'employeeid', 'code']);
 
 export interface GridCell { empCode: string; date: string; code: string; }
+export interface WeekdayMismatch { header: string; date: string; claimed: string; actual: string; }
 export interface ParsedGrid {
   cells: GridCell[];
   dates: string[];          // distinct dates seen, sorted
   unrecognized: string[];   // marks we couldn't map (surfaced, not guessed)
+  /**
+   * Headers whose weekday name disagrees with the date they resolve to. The date wins — the day
+   * NUMBER plus the chosen month is what places a column — but a disagreement usually means the
+   * wrong month was picked, which would write a whole register onto the wrong dates.
+   */
+  weekdayMismatches: WeekdayMismatch[];
+  /** The month the header weekdays actually describe, when they consistently describe one. */
+  weekdaysMatchMonth: string | null;
 }
 
 /**
@@ -183,6 +243,28 @@ export function parseMarkedGrid(matrix: any[][], opts: { month?: string } = {}):
     throw new ValidationError('No date columns found. Pick the month for this sheet, or include full dates in the header row.');
   }
 
+  // 2b. Does each header's weekday name agree with the date it resolved to?
+  const weekdayMismatches: WeekdayMismatch[] = [];
+  const claims: Array<{ day: number; weekday: string }> = [];
+  for (const dc of dateCols) {
+    const claimed = headerWeekday(header[dc.col]);
+    if (!claimed) continue;                                              // no weekday named — nothing to check
+    claims.push({ day: Number(dc.date.slice(8, 10)), weekday: claimed });
+    const actual = weekdayOfDate(dc.date);
+    if (claimed !== actual) {
+      weekdayMismatches.push({
+        header: cellText(header[dc.col]),
+        date: dc.date,
+        claimed: WEEKDAY_FULL[WEEKDAYS.indexOf(claimed)],
+        actual: WEEKDAY_FULL[WEEKDAYS.indexOf(actual)],
+      });
+    }
+  }
+  const first = dateCols[0].date;
+  const weekdaysMatchMonth = weekdayMismatches.length
+    ? monthMatchingWeekdays(claims, { year: Number(first.slice(0, 4)), month: Number(first.slice(5, 7)) })
+    : null;
+
   // 3. Read each employee row's cells under the date columns.
   const cells: GridCell[] = [];
   const dateSet = new Set<string>();
@@ -200,7 +282,10 @@ export function parseMarkedGrid(matrix: any[][], opts: { month?: string } = {}):
     }
   }
 
-  return { cells, dates: [...dateSet].sort(), unrecognized: [...unrecognized] };
+  return {
+    cells, dates: [...dateSet].sort(), unrecognized: [...unrecognized],
+    weekdayMismatches, weekdaysMatchMonth,
+  };
 }
 
 /** Turn an uploaded file (buffer) into a 2-D matrix of cell values. */
@@ -271,10 +356,42 @@ export interface GridUploadResult {
  *     keeping the code authoritative (the hour-threshold catch-up pass skips punch-less
  *     days, so a grid verdict stays put).
  */
-export async function uploadMarkedGrid(buffer: Buffer, fileName: string, month?: string): Promise<GridUploadResult> {
+export async function uploadMarkedGrid(
+  buffer: Buffer, fileName: string, month?: string,
+  opts: { allowWeekdayMismatch?: boolean } = {},
+): Promise<GridUploadResult> {
   const matrix = await readGridMatrix(buffer, fileName);
-  const { cells, dates, unrecognized } = parseMarkedGrid(matrix, { month });
+  const { cells, dates, unrecognized, weekdayMismatches, weekdaysMatchMonth } =
+    parseMarkedGrid(matrix, { month });
   if (cells.length === 0) throw new ValidationError('No attendance codes were found in the sheet.');
+
+  // Stop before writing when the header's own weekday names disagree with the month being
+  // uploaded. The day NUMBER places each column, so a June sheet posted against July lands a
+  // whole register on the wrong dates and nothing downstream would notice — the codes are all
+  // valid, the employees all match, the totals all look plausible.
+  //
+  // Not silent, and not a dead end: stale weekday labels are common in these exports (the
+  // supplied template carries July 2022's), so HR is told exactly what disagrees and can upload
+  // anyway. Refusing outright would reject good files; ignoring it is what let a wrong month
+  // through unremarked.
+  if (weekdayMismatches.length && !opts.allowWeekdayMismatch) {
+    const eg = weekdayMismatches[0];
+    const scope = weekdayMismatches.length === 1
+      ? `"${eg.header}" says ${eg.claimed}, but ${eg.date} is a ${eg.actual}.`
+      : `${weekdayMismatches.length} of the ${dates.length} day columns disagree — e.g. "${eg.header}" `
+        + `says ${eg.claimed}, but ${eg.date} is a ${eg.actual}.`;
+    const hint = weekdaysMatchMonth
+      ? ` Those weekday names match ${weekdaysMatchMonth}. If this is that month's sheet, pick it above.`
+      : ' Check the month selected above matches the sheet.';
+    // AppError, not ValidationError: the client needs `weekday_mismatch` in the details to tell
+    // this apart from a real failure and offer "upload anyway" instead of a red toast.
+    throw new AppError(
+      `The weekday names in this sheet do not match the month you chose. ${scope}${hint}`
+      + ' If the labels are simply stale, upload again with "Ignore weekday names" ticked.',
+      400,
+      { weekday_mismatch: true, mismatches: weekdayMismatches.slice(0, 5), matches_month: weekdaysMatchMonth },
+    );
+  }
 
   // Resolve employees once.
   const empCodes = [...new Set(cells.map((c) => c.empCode))];

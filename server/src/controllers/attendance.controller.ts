@@ -65,7 +65,11 @@ export async function uploadMarkedGrid(req: AuthRequest, res: Response, next: Ne
   try {
     if (!req.file) return res.status(400).json({ error: 'Attendance sheet is required' });
     const month = (req.body?.month || req.query?.month || '').toString().slice(0, 7) || undefined;
-    const result = await gridService.uploadMarkedGrid(req.file.buffer, fileName || 'upload.csv', month);
+    // Set only when HR has seen the weekday warning and chosen to go ahead — never a default.
+    const allowWeekdayMismatch = String(req.body?.allow_weekday_mismatch ?? '') === 'true';
+    const result = await gridService.uploadMarkedGrid(
+      req.file.buffer, fileName || 'upload.csv', month, { allowWeekdayMismatch },
+    );
 
     const processed = result.created + result.updated;
     const status: 'success' | 'partial' =

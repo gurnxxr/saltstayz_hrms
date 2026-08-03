@@ -82,14 +82,23 @@ export default function AdminAttendancePage() {
 
   // Marked-grid dashboard upload (wide sheet of day-codes). The month for bare
   // day-number headers comes from the selected date, so HR uploads the sheet as-is.
+  // Set only after HR has been shown the weekday warning and chosen to go ahead.
+  const [ignoreWeekdays, setIgnoreWeekdays] = useState(false);
+  const [weekdayWarning, setWeekdayWarning] = useState<string | null>(null);
+  const [pendingGridFile, setPendingGridFile] = useState<File | null>(null);
+
   const gridMutation = useMutation({
-    mutationFn: (file: File) => {
+    mutationFn: ({ file, ignore }: { file: File; ignore: boolean }) => {
       const fd = new FormData();
       fd.append('file', file);
       fd.append('month', selectedDate.slice(0, 7));
+      if (ignore) fd.append('allow_weekday_mismatch', 'true');
       return api.post('/attendance/upload-grid', fd).then(r => r.data);
     },
     onSuccess: (data) => {
+      setWeekdayWarning(null);
+      setPendingGridFile(null);
+      setIgnoreWeekdays(false);
       setUploadResult(data);
       qc.invalidateQueries({ queryKey: ['attendance-property-summary'] });
       qc.invalidateQueries({ queryKey: ['attendance-property-employees'] });
@@ -97,12 +106,23 @@ export default function AdminAttendancePage() {
       qc.invalidateQueries({ queryKey: ['attendance-upload-logs'] });
       toast.success(`${data.created + data.updated} day-marks processed`);
     },
-    onError: (e: any) => toast.error(e.response?.data?.error || 'Grid upload failed'),
+    onError: (e: any) => {
+      const msg = e.response?.data?.error || 'Grid upload failed';
+      // The weekday check is a question, not a failure — keep the file so it can be sent again.
+      if (e.response?.data?.details?.weekday_mismatch) setWeekdayWarning(msg);
+      else { setPendingGridFile(null); toast.error(msg); }
+    },
   });
 
   function handleGridUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    if (file) { setUploadResult(null); gridMutation.mutate(file); }
+    if (file) {
+      setUploadResult(null);
+      setWeekdayWarning(null);
+      setIgnoreWeekdays(false);
+      setPendingGridFile(file);
+      gridMutation.mutate({ file, ignore: false });
+    }
     if (gridRef.current) gridRef.current.value = '';
   }
 
@@ -161,6 +181,39 @@ export default function AdminAttendancePage() {
               </button>
             </div>
           </div>
+
+          {weekdayWarning && (
+            <div className="mt-4 p-3 rounded-lg border border-amber-300 bg-amber-50 text-sm space-y-2">
+              <p className="font-medium text-amber-900">Check the month before this goes in</p>
+              <p className="text-amber-800">{weekdayWarning}</p>
+              <label className="flex items-center gap-2 text-amber-900">
+                <input
+                  type="checkbox"
+                  checked={ignoreWeekdays}
+                  onChange={(e) => setIgnoreWeekdays(e.target.checked)}
+                  className="rounded border-amber-400"
+                />
+                Ignore weekday names — the dates are right
+              </label>
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  disabled={!ignoreWeekdays || gridMutation.isPending || !pendingGridFile}
+                  onClick={() => pendingGridFile && gridMutation.mutate({ file: pendingGridFile, ignore: true })}
+                  className="px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-medium hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {gridMutation.isPending ? 'Importing…' : 'Upload anyway'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setWeekdayWarning(null); setPendingGridFile(null); setIgnoreWeekdays(false); }}
+                  className="px-3 py-1.5 border border-amber-300 text-amber-900 rounded-lg text-xs font-medium hover:bg-amber-100"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
 
           {uploadResult && (
             <div className="mt-4 p-3 bg-muted rounded-lg text-sm space-y-1">
