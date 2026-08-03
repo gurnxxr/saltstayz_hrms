@@ -122,6 +122,20 @@ export default function ApplyLeavePage() {
                 Balance: {remaining} day{remaining !== 1 ? 's' : ''} remaining
               </p>
             )}
+            {/*
+              An accruing type needs to explain itself. "Balance: 4 days" on a leave the handbook
+              calls twelve is the first thing an employee queries with HR, and the answer — you
+              earn a share each month, here is when the next one lands — belongs beside the number
+              rather than in a conversation.
+            */}
+            {selectedBalance?.source === 'accrual' && (
+              <p className="text-xs mt-1 text-secondary">
+                Earned so far this year: {Number(selectedBalance.accrued ?? 0).toFixed(2)} day
+                {Number(selectedBalance.accrued) === 1 ? '' : 's'} — this leave is earned month by
+                month, not given all at once.
+                {selectedBalance.next_credit_on && <> Next credit on {selectedBalance.next_credit_on}.</>}
+              </p>
+            )}
             {rules.length > 0 && (
               <div className="mt-2 rounded-lg bg-blue-50 border border-blue-200 px-3 py-2">
                 <p className="text-xs font-medium text-blue-800 mb-1">Rules for {selectedType.name}</p>

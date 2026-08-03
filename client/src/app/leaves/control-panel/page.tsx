@@ -359,6 +359,9 @@ interface TRow {
   advance_notice_days: number | string | null; document_required_after_days: number | string | null;
   half_day_allowed: boolean; after_probation_only: boolean; count_sandwich_days: boolean;
   eligibility: string; cannot_club_with: number[];
+  // Accrual. When on, "Days / year" stops being a lump sum and becomes the rate it is earned at.
+  accrual_enabled: boolean; accrual_waiting_months: number | string;
+  carry_forward_max: number | string | null; max_balance: number | string | null;
 }
 type TForm = {
   name: string; is_active: boolean; rows: TRow[]; off_day_rules: OffDay[]; department_ids: number[];
@@ -419,6 +422,11 @@ function TemplatesPanel() {
           advance_notice_days: norm(r.advance_notice_days), document_required_after_days: norm(r.document_required_after_days),
           half_day_allowed: r.half_day_allowed, after_probation_only: r.after_probation_only,
           count_sandwich_days: r.count_sandwich_days, eligibility: r.eligibility, cannot_club_with: r.cannot_club_with,
+          // This payload names every field one by one, so anything left out here is silently
+          // dropped on save — the admin ticks the box, presses Save, and nothing happens.
+          accrual_enabled: r.accrual_enabled,
+          accrual_waiting_months: Number(r.accrual_waiting_months) || 0,
+          carry_forward_max: norm(r.carry_forward_max), max_balance: norm(r.max_balance),
         })),
       };
       return selectedId === 'new' ? api.post('/leave/templates', payload) : api.put(`/leave/templates/${selectedId}`, payload);
@@ -450,6 +458,8 @@ function TemplatesPanel() {
       is_encashable: false, min_days_per_request: '', max_days_per_request: '', advance_notice_days: '',
       document_required_after_days: '', half_day_allowed: true, after_probation_only: false, count_sandwich_days: false,
       eligibility: lt.eligibility ?? 'any', cannot_club_with: [],
+      // Off by default. A new type on a plan behaves the way every type always has.
+      accrual_enabled: false, accrual_waiting_months: 0, carry_forward_max: '', max_balance: '',
     }] }));
   };
   const removeRow = (ltId: number) => setForm((p) => ({ ...p, rows: p.rows.filter((r) => r.leave_type_id !== ltId) }));
@@ -679,7 +689,7 @@ function TemplateRowEditor({ row, allRows, onChange, onRemove }: { row: TRow; al
         <button onClick={onRemove} className="p-1.5 rounded-lg text-secondary hover:text-red-600 hover:bg-red-50 transition-colors" title="Remove from template"><X size={15} /></button>
       </div>
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        {numField('default_days', 'Days / year')}
+        {numField('default_days', row.accrual_enabled ? 'Days / year (earned monthly)' : 'Days / year')}
         {numField('min_days_per_request', 'Min / request')}
         {numField('max_days_per_request', 'Max / request')}
         {numField('advance_notice_days', 'Notice (days)')}
@@ -700,6 +710,46 @@ function TemplateRowEditor({ row, allRows, onChange, onRemove }: { row: TRow; al
         {chk('after_probation_only', 'After probation only')}
         {chk('count_sandwich_days', 'Count sandwich days')}
       </div>
+
+      {/*
+        Accrual. Folded away until switched on, because it changes what "Days / year" means and
+        showing four inert fields on every leave type would invite someone to fill them in for
+        Maternity Leave (182 days), which must never be credited a fifteenth at a time.
+      */}
+      <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-3">
+        {chk('accrual_enabled', 'Earn this leave monthly instead of granting it up front')}
+        {row.accrual_enabled ? (
+          <>
+            <p className="text-xs text-secondary">
+              Credited on each employee&apos;s own joining anniversary — a 15 January joiner earns on
+              15 February, 15 March and so on, {Number(row.default_days) > 0
+                ? <>at <b className="text-foreground">{(Number(row.default_days) / 12).toFixed(2)}</b> day(s) a month.</>
+                : 'at a twelfth of the annual figure.'}{' '}
+              Balances show whole days only; the part-days are kept behind the scenes so the year
+              still adds up to {row.default_days || 0}.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {numField('accrual_waiting_months', 'Waiting period (months)')}
+              {numField('carry_forward_max', 'Carry forward limit (days)')}
+              {numField('max_balance', 'Maximum balance (days)')}
+            </div>
+            <p className="text-xs text-secondary">
+              Leave the carry forward limit blank and the balance lapses in full at the end of each
+              leave period. Leave the maximum blank for no ceiling.
+            </p>
+            <p className="text-xs text-amber-700">
+              Switching this on drops everyone to what they have earned <i>from today</i>. Run{' '}
+              <code className="font-mono">npm run leave:backfill --workspace=server</code> straight
+              afterwards to credit the service they have already done.
+            </p>
+          </>
+        ) : (
+          <p className="text-xs text-secondary">
+            Off — the full &quot;Days / year&quot; is available from the employee&apos;s first day.
+          </p>
+        )}
+      </div>
+
       {others.length > 0 && (
         <div>
           <label className="block text-xs font-medium text-secondary mb-1">Cannot be clubbed with</label>

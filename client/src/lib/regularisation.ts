@@ -41,6 +41,22 @@ export function earliestOpenDate(days: number | null, today: string): string | u
   return earliest;
 }
 
+/**
+ * Today, as the browser's own calendar sees it. A FALLBACK ONLY.
+ *
+ * The authority is the `today` the settings endpoint returns, because the server judges a request
+ * against the business timezone and only the server knows what that is. This exists for the moment
+ * before that response lands, and for the offline case the form's query swallows.
+ *
+ * `toLocaleDateString('en-CA')` rather than `toISOString().slice(0, 10)` on purpose: the latter is
+ * the UTC day, which for a user in India is still yesterday until half past five in the morning —
+ * the very bug this whole change is about. `en-CA` is the locale whose short format is already ISO,
+ * which is the same trick the server's `businessToday` uses.
+ */
+export function localToday(): string {
+  return new Date().toLocaleDateString('en-CA');
+}
+
 /** "2026-08-02" → "2 Aug 2026". Dates are TEXT everywhere, so parse as UTC to avoid a TZ shift. */
 export function fmtDeadline(date: string): string {
   return new Date(`${date}T00:00:00Z`).toLocaleDateString('en-IN', {

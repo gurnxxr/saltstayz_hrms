@@ -8,7 +8,7 @@ import Breadcrumb from '@/components/ui/Breadcrumb';
 import LoadError from '@/components/ui/LoadError';
 import api from '@/lib/api';
 import { useUnsavedChangesWarning } from '@/hooks/useUnsavedChangesWarning';
-import { cutoffDateFor, fmtDeadline } from '@/lib/regularisation';
+import { cutoffDateFor, fmtDeadline, localToday } from '@/lib/regularisation';
 import { REG_TYPE_OPTIONS } from '@/components/attendance/RaiseRegularisationDialog';
 import { SlidersHorizontal, Info, Save, Loader2, AlertTriangle } from 'lucide-react';
 
@@ -19,6 +19,8 @@ interface Settings {
   monthly_request_limit: number;
   max_range_days: number;
   allowed_types: string[];
+  /** The server's business date. Not a setting — see the controller for why it rides along. */
+  today: string;
 }
 
 // The deadline is held as a string so the field can be genuinely EMPTY. Storing it as a number
@@ -47,12 +49,17 @@ const same = (a: Edit, b: Edit) =>
 
 export default function RegularisationSettingsPage() {
   const qc = useQueryClient();
-  const today = new Date().toISOString().slice(0, 10);
 
   const { data, isLoading, isError, refetch } = useQuery<Settings>({
     queryKey: ['regularisation-settings'],
     queryFn: () => api.get('/regularisation/settings').then((r) => r.data),
   });
+
+  // The server's own date, so the "corrections for August close on …" preview names the day the
+  // server would actually enforce. Computing it here from `toISOString()` would be the UTC day,
+  // which on IST is still yesterday until 05:30 — and on the 1st of a month that previews the
+  // WRONG MONTH's deadline to the admin setting the policy.
+  const today = data?.today ?? localToday();
 
   const [edit, setEdit] = useState<Edit | null>(null);
   const [base, setBase] = useState<Edit | null>(null);

@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import api from '@/lib/api';
-import { cutoffDateFor, earliestOpenDate, fmtDeadline } from '@/lib/regularisation';
+import { cutoffDateFor, earliestOpenDate, fmtDeadline, localToday } from '@/lib/regularisation';
 import { X, Loader2, CalendarClock } from 'lucide-react';
 
 // What the employee says the day actually WAS (order shown in the form). The server maps these
@@ -38,7 +38,6 @@ const inputCls = 'w-full px-3 py-2 border border-border rounded-lg bg-background
  */
 export default function RaiseRegularisationDialog({ initialDate, onClose }: { initialDate?: string; onClose: () => void }) {
   const queryClient = useQueryClient();
-  const today = new Date().toISOString().slice(0, 10);
   const [form, setForm] = useState({
     start_date: initialDate ?? '',
     end_date: initialDate ?? '',
@@ -53,6 +52,12 @@ export default function RaiseRegularisationDialog({ initialDate, onClose }: { in
     queryFn: () => api.get('/regularisation/settings').then(r => r.data).catch(() => null),
   });
   const cutoffDays: number | null = settings?.cutoff_days_after_month_end ?? null;
+  // The server's own date, so the picker's bounds are the ones the request will be judged by.
+  // Working it out here instead would put a second clock in play: `toISOString()` is the UTC day,
+  // which on IST is still yesterday until 05:30, and the picker would go on offering a month the
+  // server had already closed. Falling back to the browser's LOCAL date — not UTC — for the brief
+  // moment before the settings land, and for the offline case the query swallows.
+  const today = settings?.today ?? localToday();
   const minDate = settings ? earliestOpenDate(cutoffDays, today) : undefined;
 
   const raiseMutation = useMutation({

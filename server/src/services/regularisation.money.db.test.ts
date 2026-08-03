@@ -6,6 +6,7 @@ import {
   refreshPayslipAfterAttendanceChange,
 } from './payslip.service';
 import { updatePaySchedule } from './paySchedule.service';
+import { getRegularisationSettings, updateRegularisationSettings } from './regularisationSettings.service';
 import { ensureStructureComponents } from '../db/structureComponents';
 
 /**
@@ -32,6 +33,7 @@ describe.skipIf(!ON_THROWAWAY)('an approved regularisation reaches the money', (
   let empId: number;
   let approverId: number;
   let structureId: number;
+  let storedCutoff: number | null;
 
   const storedNet = async () => Number(
     (await db('payslip_history').where({ employee_id: empId, month: MONTH, year: YEAR }).first())?.net_pay ?? 0,
@@ -53,6 +55,27 @@ describe.skipIf(!ON_THROWAWAY)('an approved regularisation reaches the money', (
       holidays_paid: true,
     });
     await db('pay_schedule_settings').update({ work_pattern_effective_from: null });
+
+    // Open the correction window, and hand it back in afterAll — the same set-and-restore this
+    // file already does for the pay schedule just above.
+    //
+    // This is the setting the file forgot to pin, and forgetting it made every test that files a
+    // regularisation impossible to pass. Migration 029 seeds
+    // `cutoff_days_after_month_end: 2` into every database, so April 2026 stopped accepting
+    // corrections on 2026-05-02 — before this file was even written. It is not that the tests
+    // rotted; they were authored against a fixture month whose deadline had already shut, and
+    // because the file skips unless DATABASE_URL names a throwaway database, nobody saw it.
+    //
+    // No value of the setting would have saved them: CUTOFF_CEILING is 31, so the latest April
+    // could ever stay open is 2026-05-31. A pinned past month and a live deadline cannot both
+    // hold. Null is the documented, supported "no deadline" setting (regularisation.service.ts
+    // returns early on it), and it is the honest choice here: this file is about whether an
+    // approved correction reaches the STORED payslip, not about who filed in time. The deadline
+    // has its own test at the bottom, which turns it back on.
+    storedCutoff = (await getRegularisationSettings()).cutoff_days_after_month_end;
+    await updateRegularisationSettings({ cutoff_days_after_month_end: null });
+    // Fail loudly if the pin ever stops taking, rather than quietly depending on the wall clock again.
+    expect((await getRegularisationSettings()).cutoff_days_after_month_end).toBeNull();
 
     await db('employees').whereIn('employee_code', ['RMT-001', 'RMT-MGR']).del();
     const [{ id: mgr }] = await db('employees').insert({
@@ -101,6 +124,9 @@ describe.skipIf(!ON_THROWAWAY)('an approved regularisation reaches the money', (
     await db('salary_structure_components').where('structure_id', structureId).del();
     await db('salary_structures').where('id', structureId).del();
     await db('employees').whereIn('id', [empId, approverId]).del();
+    // Back to whatever was stored, not to a hard-coded 2 — the database is shared with the other
+    // DB test files and must be left as found.
+    await updateRegularisationSettings({ cutoff_days_after_month_end: storedCutoff });
     await updatePaySchedule({
       work_week: [0, 1, 2, 3, 4, 5, 6],
       salary_calculation_method: 'actual_days',
@@ -313,9 +339,25 @@ describe.skipIf(!ON_THROWAWAY)('an approved regularisation reaches the money', (
 
   it('a clean lock records no override reason', async () => {
     // Absence of a reason has to mean "the gate was satisfied", not "somebody forgot to explain".
+    //
+    // Which means this test has to perform a genuinely clean lock, and for a long time it did not:
+    // it locked a month in which the employee had NO attendance at all, so the coverage gate saw
+    // 100% unevidenced against a 10% threshold, `confirm` waved it through, and the lock recorded
+    // "attendance evidence 100% unevidenced at lock (gate 10%) — confirmed through". That is
+    // production behaving correctly — a wave-through is exactly what the reason column is for —
+    // and the test asserting that waving something through leaves no trace.
+    //
+    // So: evidence the whole month, and lock with confirm FALSE. Nothing is waved through, because
+    // there is nothing to wave.
+    const days = Array.from({ length: 30 }, (_, i) => ({
+      employee_id: empId, date: d(i + 1), status: 'present', working_hours: 8,
+    }));
+    await db('attendance_records').insert(days);
+
     await runPayroll(MONTH, YEAR, null);
-    await lockRun(MONTH, YEAR, null, true);
+    await lockRun(MONTH, YEAR, null, false);
     const run = await db('payroll_runs').where({ month: MONTH, year: YEAR }).first();
+    expect(run.status).toBe('locked');
     expect(run.lock_override_reason).toBeNull();
   });
 
@@ -327,5 +369,39 @@ describe.skipIf(!ON_THROWAWAY)('an approved regularisation reaches the money', (
     const reg = await db('attendance_regularisations')
       .where('employee_id', empId).orderBy('id', 'desc').first();
     expect(reg.pay_refresh_status).toBe('refreshed');
+  });
+
+  it('a request past the correction deadline is refused, and nothing moves', async () => {
+    // The deadline the rest of this file switches off, exercised deliberately — end to end, which
+    // it was not anywhere in this repo before. `cutoffDateFor` has pure tests; the guard that
+    // actually turns an employee away had none, which is a large part of why nobody noticed the
+    // whole file was failing on it.
+    //
+    // Two dates and no payroll run, on purpose. `assertMonthCorrectable` is checked first, so a
+    // locked or frozen month would throw ITS message and this test would pass without the deadline
+    // ever being consulted. With no run for the month, that guard passes and control genuinely
+    // reaches the cutoff.
+    //
+    // The one clock-sensitive assertion in the file, and it can only get truer: April 2026 is
+    // already years past its deadline and every passing day puts it further past. The ceiling on
+    // the setting is 31 days, so no configuration could reopen it.
+    await updateRegularisationSettings({ cutoff_days_after_month_end: 2 });
+    try {
+      await db('attendance_records').insert({ employee_id: empId, date: d(10), status: 'absent' });
+
+      await expect(requestRegularisation(empId, {
+        start_date: d(10), end_date: d(10), requested_status: 'present', reason: 'worked',
+      })).rejects.toThrow(/can no longer be regularised/i);
+
+      // Refused at filing means nothing is written: no request to approve later, and the
+      // attendance the employee was disputing is untouched.
+      expect(await db('attendance_regularisations').where('employee_id', empId).first()).toBeUndefined();
+      const row = await db('attendance_records').where({ employee_id: empId, date: d(10) }).first();
+      expect(row.status).toBe('absent');
+      expect(row.is_regularised).toBeFalsy();
+    } finally {
+      // Hand the window back open for anything that runs after this, whatever the assertions did.
+      await updateRegularisationSettings({ cutoff_days_after_month_end: null });
+    }
   });
 });

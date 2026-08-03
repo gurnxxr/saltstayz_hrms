@@ -6,10 +6,14 @@ import { buildWorkCalendar, countWorkingDaysInRange, leaveDatesFor } from './pay
 import { findBreak } from './holidayBreak';   // date shifting uses this file's own shiftDate
 import { audienceOf, scopeHolidaysTo } from './holidayScope';
 import { LOCK, advisoryXactLock } from '../utils/locks';
+import { businessToday } from '../utils/businessDate';
 import { INDIAN_STATES } from './statutory.service';
 import {
   getTemplateRulesForEmployees, getEmployeeLeaveRule, ensureDefaultTemplate, type LeaveRule,
 } from './leaveTemplate.service';
+// accrual.service does NOT import this file — see its header. The dependency is one-way on purpose.
+import { accrualRuleOf, isAccruing } from './accrual.service';
+import { buildSchedule, round6, spendableDays } from './accrualEngine';
 
 /** Inclusive list of 'YYYY-MM-DD' dates between start and end (capped for safety). */
 function enumerateDates(start: string, end: string): string[] {
@@ -300,14 +304,89 @@ export async function createLeavePeriod(data: { name: string; start_date: string
   return db('leave_periods').where('id', id).first();
 }
 
-/** Makes one period current (exactly one at a time). */
+/**
+ * Rolls unused accrued leave from one period into the next, up to each type's carry-forward limit.
+ *
+ * Only for types whose plan says they accrue — everything else still gets its allocation the way it
+ * always did. What is left after the limit LAPSES, which is the decision taken: an employee sitting
+ * on three years of untaken casual leave is a liability nobody agreed to.
+ *
+ * The opening row is written on the new period's start date with source `'opening'`, the SAME
+ * source the backfill uses. That is not a coincidence — the unique key makes whichever runs first
+ * win and the second a no-op, so a rollover cannot be followed by a backfill that grants the limit
+ * a second time.
+ *
+ * Unused is measured from `getEffectiveBalances`, so it is the same number the employee was being
+ * shown the day before the period turned over — not a second definition that could differ from it.
+ */
+async function carryForwardInto(from: any, to: any): Promise<number> {
+  const employees = await db('employees').where('is_active', true).pluck('id');
+  if (!employees.length) return 0;
+
+  const [balances, rules] = await Promise.all([
+    getEffectiveBalances(employees, from.id),
+    getTemplateRulesForEmployees(employees),
+  ]);
+
+  const rows: any[] = [];
+  for (const b of balances) {
+    if (b.source !== 'accrual') continue;
+    const rule = rules.get(b.employee_id)?.get(b.leave_type_id);
+    const limit = rule?.carry_forward_max;
+    if (limit == null || limit <= 0) continue;             // null = nothing carries
+    // The exact accrued figure less what was spent, NOT the floored `available` — rounding down
+    // twice (once to show it, once to carry it) would quietly lose most of a day every year.
+    const unused = round6(Number(b.accrued ?? 0) - b.taken - b.pending);
+    if (unused <= 0) continue;
+    const carried = round6(Math.min(unused, limit));
+    rows.push({
+      employee_id: b.employee_id,
+      leave_type_id: b.leave_type_id,
+      leave_period_id: to.id,
+      credited_on: to.start_date,
+      days: carried,
+      source: 'opening',
+      note: `Carried forward from ${from.name ?? from.id} (${unused} unused, limit ${limit})`,
+    });
+  }
+  if (!rows.length) return 0;
+
+  // Bare ON CONFLICT DO NOTHING — the unique index is partial, which Postgres cannot infer from a
+  // column list. See migration 034 and accrual.service.writeAccruals.
+  let written = 0;
+  for (let i = 0; i < rows.length; i += 500) {
+    const inserted = await db('leave_accruals').insert(rows.slice(i, i + 500))
+      .onConflict().ignore().returning('id');
+    written += inserted.length;
+  }
+  return written;
+}
+
+/**
+ * Makes one period current (exactly one at a time), carrying accrued leave forward into it.
+ *
+ * The carry-forward runs only when the new period genuinely FOLLOWS the outgoing one. An admin
+ * flipping back to last year to look at it is not a rollover, and writing opening balances into a
+ * closed period on the strength of that would be very hard to notice and very hard to undo.
+ *
+ * It runs after the flip rather than inside the transaction because it reads through the shared
+ * connection (`getEffectiveBalances`), which cannot see an uncommitted one — the same reason
+ * `approveLeave` resolves its work calendar before opening its transaction.
+ */
 export async function setCurrentPeriod(id: number) {
   const period = await db('leave_periods').where('id', id).first();
   if (!period) throw new NotFoundError('Leave period');
+  const previous = await db('leave_periods').where('is_current', true).first();
+
   await db.transaction(async (trx) => {
     await trx('leave_periods').update({ is_current: false });
     await trx('leave_periods').where('id', id).update({ is_current: true, updated_at: trx.fn.now() });
   });
+
+  const isRollover = previous && previous.id !== id && previous.end_date < period.start_date;
+  const carried = isRollover ? await carryForwardInto(previous, period) : 0;
+  if (carried) console.log(`[leave] carried accrued leave forward into ${period.name}: ${carried} opening balance(s)`);
+
   return db('leave_periods').where('id', id).first();
 }
 
@@ -347,6 +426,25 @@ export async function getEntitlements(filters: { period_id: number; search?: str
   return employees.map((e: any) => ({ ...e, entitlements: byEmployee.get(e.id) ?? [] }));
 }
 
+/**
+ * Refuses to hand-allocate a leave type the employee's plan says they EARN.
+ *
+ * Two stores for one balance is how `used_days` and `taken` came to disagree, and this would be
+ * the same mistake with more at stake: the balance screen would show the ledger while an admin
+ * looked at the allocation grid and saw a number that changed nothing. There is a way to grant
+ * days on an accruing type — an `adjustment` row in the ledger — and the message names it.
+ */
+async function refuseIfAccruing(employeeId: number, leaveTypeId: number, leaveTypeName: string) {
+  const rule = await getEmployeeLeaveRule(employeeId, leaveTypeId);
+  if (isAccruing(rule)) {
+    throw new ValidationError(
+      `${leaveTypeName} is earned monthly on this employee's leave plan, so its balance comes from `
+      + 'the accrual ledger and a fixed allocation would be ignored. Adjust the ledger instead, or '
+      + 'turn accrual off for this type on Leave → Control Panel → Templates.',
+    );
+  }
+}
+
 /** Sets one employee's allocation for a leave type in a period. */
 export async function upsertEntitlement(data: {
   employee_id: number; leave_type_id: number; leave_period_id: number; total_days: number;
@@ -355,6 +453,7 @@ export async function upsertEntitlement(data: {
   if (!employee) throw new NotFoundError('Employee');
   const leaveType = await db('leave_types').where('id', Number(data.leave_type_id)).first();
   if (!leaveType) throw new NotFoundError('Leave type');
+  await refuseIfAccruing(employee.id, leaveType.id, leaveType.name);
   const period = await db('leave_periods').where('id', Number(data.leave_period_id)).first();
   if (!period) throw new NotFoundError('Leave period');
   const totalDays = Number(data.total_days);
@@ -395,9 +494,25 @@ export async function bulkAllocate(data: {
   let created = 0;
   let updated = 0;
   const skipped: string[] = [];
+
+  // Which of the selected employees EARN this type rather than being granted it. Resolved before
+  // the transaction and per employee, because accrual is a property of the leave template they are
+  // on — half a selection can be accruing and half not. Skipped with a reason rather than failing
+  // the whole batch: refusing to allocate to twenty people because one of them accrues would be a
+  // worse answer than telling the admin which one.
+  const uniqueIds = [...new Set(data.employee_ids.map(Number))];
+  const rulesByEmployee = await getTemplateRulesForEmployees(uniqueIds);
+  const accruingIds = new Set<number>(
+    uniqueIds.filter((id) => isAccruing(rulesByEmployee.get(id)?.get(leaveType.id))),
+  );
+
   await db.transaction(async (trx) => {
     for (const rawId of data.employee_ids) {
       const employeeId = Number(rawId);
+      if (accruingIds.has(employeeId)) {
+        skipped.push(`employee ${employeeId}: ${leaveType.name} is earned monthly on their leave plan — the accrual ledger holds the balance`);
+        continue;
+      }
       const existing = await trx('leave_entitlements')
         .where({ employee_id: employeeId, leave_type_id: leaveType.id, leave_period_id: period.id })
         .first();
@@ -422,7 +537,7 @@ export async function bulkAllocate(data: {
 
 // ─── Leave Balances ───
 
-export type BalanceSource = 'entitlement' | 'default';
+export type BalanceSource = 'entitlement' | 'default' | 'accrual';
 
 export interface EffectiveBalance {
   employee_id: number;
@@ -431,7 +546,7 @@ export interface EffectiveBalance {
   is_paid: boolean;
   /** False when the type is restricted to departments this employee isn't in (migration 070). */
   applicable: boolean;
-  /** Where `allocated` came from: an explicit entitlement row, or the type's default_days. */
+  /** Where `allocated` came from: the accrual ledger, an explicit entitlement row, or default_days. */
   source: BalanceSource;
   allocated: number;
   /** Days on approved requests starting in this period. */
@@ -442,6 +557,10 @@ export interface EffectiveBalance {
   available: number;
   /** The stored counter, when an entitlement row exists. Null otherwise. */
   used_days: number | null;
+  /** Accruing types only: days earned so far this period, fractions and all. Null otherwise. */
+  accrued: number | null;
+  /** Accruing types only: the next anniversary that credits. Null otherwise. */
+  next_credit_on: string | null;
 }
 
 /**
@@ -451,6 +570,12 @@ export interface EffectiveBalance {
  * `available` reproduces applyLeave's gate exactly, which means it is deliberately
  * asymmetric, because the underlying data is:
  *
+ *   - ACCRUAL (the template row says the type is earned over time, migration 034)
+ *     → floor(days credited to the ledger this period) − (approved + pending).
+ *     Consumption comes from leave_requests, not the `used_days` counter — see below
+ *     for why that is the safer of the two, and note the ledger WINS over an
+ *     entitlement row: `upsertEntitlement` refuses to write one for an accruing type
+ *     precisely so the two can never both be true at once.
  *   - entitlement row  → total_days − used_days. `used_days` is a stored counter
  *     bumped only on approval (approveLeave) and on encashment approval, so
  *     PENDING requests do not reduce it.
@@ -462,8 +587,13 @@ export interface EffectiveBalance {
  * and `taken` can legitimately disagree (encashment bumps the counter; an entitlement
  * created after leave was approved starts at 0).
  *
+ * The accrual branch reads leave_requests for the same reason: `used_days` is bumped
+ * against `getCurrentPeriod()` regardless of which period the leave itself falls in
+ * (approveLeave), so a January leave already debits the wrong year's counter. Summing
+ * the requests in the period's own window sidesteps that entirely.
+ *
  * Bulk by construction: a fixed number of queries regardless of how many employees
- * are passed in.
+ * are passed in. The per-employee accrual schedule is pure arithmetic, no I/O.
  */
 export async function getEffectiveBalances(
   employeeIds: number[],
@@ -473,6 +603,7 @@ export async function getEffectiveBalances(
   if (!employeeIds.length) return [];
   const period = await db('leave_periods').where('id', periodId).first();
   if (!period) throw new NotFoundError('Leave period');
+  const today = businessToday();
 
   // No leaveTypeIds = the types an employee could actually apply for (active only).
   // applyLeave passes an explicit id so it keeps gating inactive types as it always has.
@@ -480,8 +611,8 @@ export async function getEffectiveBalances(
   if (opts.leaveTypeIds) typesQuery.whereIn('id', opts.leaveTypeIds);
   else typesQuery.where('is_active', true);
 
-  const [employees, departments, leaveTypes, restrictions, entitlements, booked, templateRules] = await Promise.all([
-    db('employees').whereIn('id', employeeIds).select('id', 'dept_name', 'gender'),
+  const [employees, departments, leaveTypes, restrictions, entitlements, booked, templateRules, accrued] = await Promise.all([
+    db('employees').whereIn('id', employeeIds).select('id', 'dept_name', 'gender', 'date_of_joining'),
     db('departments').select('id', 'name'),
     typesQuery,
     db('leave_type_departments').select('leave_type_id', 'department_id'),
@@ -496,6 +627,12 @@ export async function getEffectiveBalances(
       .sum({ total: 'days' }),
     // Each employee's effective per-type rules from their assigned template (NULL → Default).
     getTemplateRulesForEmployees(employeeIds),
+    // The accrual ledger for this period. Summed in Postgres because `days` is `numeric` and its
+    // sum is exact decimal there — twelve credits of 7/12 added as JavaScript floats come to
+    // 6.999999999999999, which floors to 6 and shows an employee a day less than they earned.
+    db('leave_accruals').where('leave_period_id', periodId).whereIn('employee_id', employeeIds)
+      .groupBy('employee_id', 'leave_type_id')
+      .select('employee_id', 'leave_type_id').sum({ total: 'days' }),
   ]);
 
   // Mirror departmentIdByName: trim the employee's text, compare case-insensitively.
@@ -523,6 +660,8 @@ export async function getEffectiveBalances(
     const target = b.status === 'approved' ? takenByKey : pendingByKey;
     target.set(key(b.employee_id, b.leave_type_id), Number(b.total || 0));
   }
+  const accruedByKey = new Map<string, number>();
+  for (const a of accrued as any[]) accruedByKey.set(key(a.employee_id, a.leave_type_id), Number(a.total || 0));
 
   const out: EffectiveBalance[] = [];
   for (const emp of employees) {
@@ -540,7 +679,25 @@ export async function getEffectiveBalances(
       const taken = takenByKey.get(k) ?? 0;
       const pending = pendingByKey.get(k) ?? 0;
       const defaultDays = rule ? rule.default_days : Number(lt.default_days || 0);
-      const allocated = ent ? Number(ent.total_days) : defaultDays;
+
+      // Accrual, when the employee's plan says this type is earned rather than granted. The
+      // ledger is the allocation; `default_days` has become the ANNUAL RATE it credits at, and an
+      // entitlement row (if some older data has one) is ignored rather than blended in.
+      const accruing = isAccruing(rule);
+      const earned = accruing ? (accruedByKey.get(k) ?? 0) : 0;
+      // Only for `next_credit_on` — the balance itself comes from the ledger, never from a
+      // recomputation, so a rate change cannot move days somebody has already spent against.
+      const schedule = accruing
+        ? buildSchedule({
+          dateOfJoining: String(emp.date_of_joining ?? '').slice(0, 10),
+          rule: accrualRuleOf(rule!),
+          periodStart: period.start_date,
+          periodEnd: period.end_date,
+          asOf: today,
+        })
+        : null;
+
+      const allocated = accruing ? spendableDays(earned) : (ent ? Number(ent.total_days) : defaultDays);
       out.push({
         employee_id: emp.id,
         leave_type_id: lt.id,
@@ -551,12 +708,18 @@ export async function getEffectiveBalances(
         applicable: !!rule
           && (!allowed || (deptId !== null && allowed.has(deptId)))
           && genderAllows(rule ? rule.eligibility : lt.eligibility, emp.gender),
-        source: ent ? 'entitlement' : 'default',
+        source: accruing ? 'accrual' : (ent ? 'entitlement' : 'default'),
         allocated,
         taken,
         pending,
-        available: ent ? Number(ent.total_days) - Number(ent.used_days) : allocated - taken - pending,
-        used_days: ent ? Number(ent.used_days) : null,
+        available: accruing || !ent
+          ? allocated - taken - pending
+          : Number(ent.total_days) - Number(ent.used_days),
+        // Meaningless on an accruing type: the counter is not what the balance is read from, and
+        // showing a half-maintained number beside the real one is how the two drift unnoticed.
+        used_days: !accruing && ent ? Number(ent.used_days) : null,
+        accrued: accruing ? earned : null,
+        next_credit_on: schedule?.next_credit_on ?? null,
       });
     }
   }
