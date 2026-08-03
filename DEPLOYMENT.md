@@ -87,6 +87,22 @@ SSL is enabled automatically for any non-localhost host.
 
 Leave `PORT` unset — the host provides it and the app honours it.
 
+**Self-service password reset is built but switched off** until these are set, because nothing in
+this application can send an email without them. Until then the login screen shows no "Forgot
+password?" link and HR resets passwords from the admin screens, as today.
+
+| Variable | Value |
+|----------|-------|
+| `MAIL_PROVIDER` | `resend` |
+| `RESEND_API_KEY` | from the Resend dashboard |
+| `MAIL_FROM` | e.g. `SaltStayz HRMS <no-reply@saltstayz.com>` |
+| `OTP_PEPPER` | a second long random secret — `openssl rand -base64 32` |
+
+> Before turning it on, add Resend's **SPF and DKIM records to `saltstayz.com` DNS** and verify the
+> domain in Resend. Without them the codes go to spam, which is worse than the link not existing:
+> people will believe the reset is broken and stop trying. `OTP_PEPPER` is required in production
+> once `MAIL_PROVIDER` is anything but `none` — the server refuses to start otherwise.
+
 > ⚠️ **`CLIENT_URL` must be the stable domain**, not the long per-deployment URL Vercel shows
 > on a build page (`...-nx303osa6-....vercel.app`). Those change on every deploy. Using one
 > makes the API reject your real site with `403 {"code":"INVALID_ORIGIN"}`.

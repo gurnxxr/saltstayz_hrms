@@ -21,8 +21,13 @@ import statutoryRoutes from './statutory.routes';
 import salaryComponentRoutes from './salaryComponent.routes';
 import employeeLifecycleRoutes from './employeeLifecycle.routes';
 import regularisationRoutes from './regularisation.routes';
+import passwordResetRoutes from './passwordReset.routes';
 
 const router = Router();
+
+// Password reset — the only app-owned router WITHOUT `authenticate`, because it exists for people
+// who cannot sign in. Mounted first so it is obvious; see the file for the compensating controls.
+router.use('/password-reset', passwordResetRoutes);
 
 // Sign-in/out live under /auth/* (handled by Better Auth, mounted in app.ts before this
 // router). The client hydrates its session — user + permissions + overrides — from here.
