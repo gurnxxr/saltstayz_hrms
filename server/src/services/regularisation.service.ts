@@ -4,6 +4,7 @@ import { notifyEmployee, emit } from './notification.service';
 import { monthWriteState } from './payrollMonth.service';
 import { refreshPayslipAfterAttendanceChange, type RefreshResult } from './payslip.service';
 import { getRegularisationSettings, cutoffDateFor } from './regularisationSettings.service';
+import { businessToday } from '../utils/businessDate';
 
 // ─── Attendance regularisation ───
 //
@@ -144,7 +145,18 @@ export async function requestRegularisation(employeeId: number, data: Regularisa
   const end = String(data.end_date || start).slice(0, 10);
   if (!isDate(start) || !isDate(end)) throw new ValidationError('A valid start and end date are required');
   if (end < start) throw new ValidationError('The end date cannot be before the start date');
-  const today = new Date().toISOString().slice(0, 10);
+  // The business's date, not UTC's. Both guards below turn an employee away on a date comparison,
+  // and `new Date().toISOString()` is the UTC day — which on IST is still yesterday from midnight
+  // until half past five in the morning. For those five and a half hours the server refused to
+  // regularise "today" as a future date, and kept a correction window open a day after it should
+  // have shut. Attendance dates are typed by people in the office, so the clock that judges them
+  // has to be the office's.
+  //
+  // Only these two gates move: `today` decides who may FILE, never what anyone is paid. The
+  // monthly cap below counts by the requested dates, and the amount comes from the attendance the
+  // approval writes. That is what makes this safe to change on its own, where the twenty-odd other
+  // UTC reads businessDate.ts names are not.
+  const today = businessToday();
   if (end > today) throw new ValidationError('You cannot regularise a future date');
 
   const settings = await getRegularisationSettings();

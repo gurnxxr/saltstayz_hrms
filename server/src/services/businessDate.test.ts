@@ -60,6 +60,28 @@ describe('shift resolution uses one clock', () => {
     expect(offenders).toEqual([]);
   });
 
+  it('the regularisation deadline is judged on the business date, not UTC', () => {
+    // `today` here decides two refusals an employee meets face-on: "you cannot regularise a future
+    // date", and "corrections for that month closed on …". Taking the UTC day meant that between
+    // midnight and 05:30 IST the server refused to correct TODAY as though it were the future, and
+    // kept a window open a day after it had shut. Attendance dates are typed by people in the
+    // office; the clock that judges them has to be the office's.
+    const src = read('regularisation.service.ts');
+    expect(src).toContain('const today = businessToday();');
+
+    // There must be ONE clock on this path — the future-date guard and assertWithinCutoff share
+    // the same `today`, and a second read would let them disagree.
+    //
+    // It matches `new Date()` with NO arguments, which is the only thing that reads the wall
+    // clock. `eachDate` builds `new Date(Date.UTC(y, m, d))` from date strings the caller supplied
+    // and walks it with setUTCDate; that is arithmetic on stored text, deliberately UTC so a range
+    // cannot drift, and it must not trip this. Matching `toISOString` generally flagged it — the
+    // formatting idiom is not the hazard, reading the clock is.
+    const clockReads = src.split('\n')
+      .filter((l) => /new Date\(\s*\)/.test(l) && !l.trim().startsWith('*') && !l.trim().startsWith('//'));
+    expect(clockReads).toEqual([]);
+  });
+
   it('the resolver does not select two columns named effective_from', () => {
     // `st.*` already carries an effective_from (migration 003 renamed process_attendance_after to
     // it), so an unaliased `a.effective_from` beside it leaves the winner up to driver ordering.
