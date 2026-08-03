@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { pickAssignmentFor } from './shiftPattern';
 
 /**
@@ -75,5 +77,68 @@ describe('pickAssignmentFor — with an end date', () => {
     // The client sends '' from a cleared date input; it must not read as "ended on nothing".
     const blank = { id: 'A', effective_from: '2026-01-01', effective_to: '' };
     expect(pick([blank], '2026-12-31')).toBe('A');
+  });
+});
+
+/**
+ * HR's screen and the employee's screen must give the same answer.
+ *
+ * The assignments list used to resolve "current" with its own rule —
+ * `list.filter(a => a.effective_from <= today).pop()` — which ignored the end date entirely.
+ * So an assignment that had run out still appeared on HR's screen as the employee's current
+ * shift, while the employee's own card, which goes through pickAssignmentFor, correctly said
+ * they had none. HR would look, see a shift, and have no way to explain the complaint.
+ *
+ * The `unassigned` filter had the same hole in SQL: it counted anyone with a started assignment
+ * as assigned, so the people whose shift had ended were missing from the one list built to find
+ * people who need one.
+ */
+describe('HR and the employee resolve a shift the same way', () => {
+  const ENDED = { id: 'ENDED', effective_from: '2026-01-01', effective_to: '2026-07-01' };
+
+  it('an assignment that has run out is nobody\'s current shift', () => {
+    // The old HR rule, reproduced: started, so it survived the filter and .pop() returned it.
+    const oldHrRule = [ENDED].filter((a) => a.effective_from <= TODAY).pop() ?? null;
+    expect(oldHrRule).toBe(ENDED); // what HR used to be shown
+
+    // The rule both screens now share.
+    expect(pickAssignmentFor([ENDED], TODAY, TODAY)).toBeNull();
+  });
+
+  it('the two screens agree across every window case', () => {
+    const cases: Array<[string, any[]]> = [
+      ['open-ended', [A]],
+      ['superseded', [A, B]],
+      ['ended', [ENDED]],
+      ['ended then replaced', [ENDED, B]],
+      ['future only', [{ id: 'F', effective_from: '2026-12-01', effective_to: null }]],
+      ['none', []],
+    ];
+    for (const [name, rows] of cases) {
+      const employeeCard = pickAssignmentFor(rows, TODAY, TODAY);
+      const hrList = pickAssignmentFor(rows, TODAY, TODAY); // same function now — that is the point
+      expect(hrList, name).toBe(employeeCard);
+    }
+  });
+
+  /** Function body with `//` lines stripped — the comments quote the old rule verbatim. */
+  const bodyOf = (marker: string) => {
+    const src = readFileSync(join(__dirname, 'shift.service.ts'), 'utf-8');
+    const fn = src.split(marker)[1]?.split('\n}')[0] ?? '';
+    return fn.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+  };
+
+  it('the assignments list actually calls the shared rule', () => {
+    // A source guard: the bug was a second hand-rolled rule, and a comment promising otherwise
+    // would not have caught it.
+    const code = bodyOf('async function resolveAssignmentRows');
+    expect(code).toContain('pickAssignmentFor(list, today, today)');
+    expect(code).not.toMatch(/filter\([^)]*effective_from[^)]*\)\s*\.pop\(\)/);
+    // It cannot apply the end date without selecting it.
+    expect(code).toContain("'a.effective_to'");
+  });
+
+  it('the unassigned filter counts an ended assignment as unassigned', () => {
+    expect(bodyOf('function applyAssignmentFilters')).toContain('a2.effective_to');
   });
 });

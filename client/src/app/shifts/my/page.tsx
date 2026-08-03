@@ -50,8 +50,12 @@ export default function MyShiftsPage() {
 
   const [form, setForm] = useState({ date: todayStr(), target: '', reason: '' });
 
+  // Its own key, NOT the dashboard card's 'my-shift'. React Query caches by key alone, so when
+  // both used that name whichever screen loaded first filled the slot — land on the dashboard,
+  // open this page, and it was handed a reply with no `current` in it and said "No shift
+  // assigned yet" to someone who had one.
   const { data, isError, refetch } = useQuery({
-    queryKey: ['my-shift'],
+    queryKey: ['my-shift-overview'],
     queryFn: () => api.get('/shifts/me/shift').then(r => r.data),
     enabled: hasProfile,
   });

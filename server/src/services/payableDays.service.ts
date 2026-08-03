@@ -9,6 +9,7 @@ import {
   isOffDay, parseOffDayRules, pickAssignmentFor, rulesInForceOn, shiftLengthHours, type OffDayRule,
 } from './shiftPattern';
 import type { AttendanceContext } from './payslip.calc';
+import { businessToday } from '../utils/businessDate';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Payable-days engine.
@@ -217,7 +218,10 @@ export async function buildWorkCalendar(
     offRules: parseOffDayRules(a.weekly_off_days),
   }));
 
-  const today = new Date().toISOString().slice(0, 10);
+  // The BUSINESS date, matching the other two callers of pickAssignmentFor — otherwise, for the
+  // five and a half hours a day when IST and UTC disagree, this and shift.service could pick
+  // different assignments for the same employee on the same date.
+  const today = businessToday();
   /** The shift in effect on a date — same rule as everywhere else. */
   const shiftOn = (date: string) => pickAssignmentFor(prepared, date, today);
 

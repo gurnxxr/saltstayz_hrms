@@ -86,7 +86,10 @@ function AssignDialog({ employee, onClose }: { employee: any; onClose: () => voi
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['shift-assignments'] });
     qc.invalidateQueries({ queryKey: ['shift-assignment-history', employee.id] });
+    // Both employee-facing views of "my shift" — the dashboard card and the My Shift page. They
+    // are separate cache entries, so refreshing one leaves the other showing the old answer.
     qc.invalidateQueries({ queryKey: ['my-shift'] });
+    qc.invalidateQueries({ queryKey: ['my-shift-overview'] });
   };
 
   const assign = useMutation({

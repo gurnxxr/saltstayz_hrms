@@ -1,7 +1,9 @@
 import db from '../config/database';
 import { NotFoundError, ValidationError, ForbiddenError } from '../utils/errors';
 import { notifyEmployee, emit } from './notification.service';
-import { assignShift, resolveShiftForEmployee, getEmployeeShiftHistory } from './shift.service';
+import {
+  assignShift, resolveShiftForEmployee, getEmployeeShiftHistory, currentShiftView,
+} from './shift.service';
 
 /**
  * Shift change requests.
@@ -26,16 +28,8 @@ export async function getMyShiftOverview(employeeId: number) {
   const history = await getEmployeeShiftHistory(employeeId);
   const now = today();
   return {
-    current: current ? {
-      shift_type_id: current.id,
-      name: current.name,
-      start_time: hhmm(current.start_time),
-      end_time: hhmm(current.end_time),
-      ends_next_day: !!current.ends_next_day,
-      office_hour_time: hhmm(current.office_hour_time),
-      weekly_off_days: current.weekly_off_days,
-      effective_from: String(current.effective_from ?? '').slice(0, 10) || null,
-    } : null,
+    // Built by the shared view so this and the dashboard card cannot drift apart again.
+    current: currentShiftView(current),
     upcoming: history
       .filter((h: any) => String(h.effective_from).slice(0, 10) > now)
       .map((h: any) => ({

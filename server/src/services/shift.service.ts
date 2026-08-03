@@ -3,6 +3,7 @@ import { NotFoundError, ValidationError } from '../utils/errors';
 import { notifyEmployee } from './notification.service';
 import { pickAssignmentFor, parseOffDayRules } from './shiftPattern';
 import { buildCsv, parseCsv } from '../utils/csv';
+import { businessToday } from '../utils/businessDate';
 
 const DAYS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -310,7 +311,12 @@ export async function deleteShiftType(id: number) {
 // ─── Employee → shift mapping ───
 
 const isoDate = (v: any) => String(v ?? '').slice(0, 10);
-const todayIso = () => new Date().toISOString().slice(0, 10);
+/**
+ * The business's date, not UTC's. The assignment form writes the browser's local date, so a
+ * shift assigned before 05:30 IST used to read as future-dated here and vanish from the
+ * employee's screen until mid-morning. See utils/businessDate.ts.
+ */
+const todayIso = () => businessToday();
 
 /**
  * Which shift a person was on, on a date — for one employee at a time.
@@ -323,9 +329,30 @@ export async function resolveShiftForEmployee(employeeId: number, date: string) 
   const rows = await db('employee_shift_assignments as a')
     .join('shift_types as st', 'st.id', 'a.shift_type_id')
     .where('a.employee_id', employeeId)
-    .select('st.*', 'a.effective_from', 'a.effective_to', 'a.id as assignment_id')
+    // The assignment's dates are aliased out of the way. `st.*` already emits an
+    // `effective_from` of its own — migration 003 renamed `process_attendance_after` to that —
+    // so selecting `a.effective_from` beside it puts TWO columns of the same name in one row and
+    // which survives is down to driver ordering. It happens to be the assignment's today, which
+    // is why this works; reorder the select and the shift TYPE's date would silently start
+    // deciding which assignment applies, and that feeds payable days. attendance.service.ts:71
+    // avoids the same clash by naming the shift's copy `shift_effective_from`.
+    .select(
+      'st.*',
+      'a.effective_from as assignment_effective_from',
+      'a.effective_to as assignment_effective_to',
+      'a.id as assignment_id',
+    )
     .orderBy('a.effective_from');
-  const chosen = pickAssignmentFor(rows as any[], isoDate(date) || todayIso(), todayIso());
+
+  // pickAssignmentFor reads `effective_from`/`effective_to`. Hand it the ASSIGNMENT's, by name.
+  const dated = (rows as any[]).map((r) => ({
+    ...r,
+    shift_effective_from: r.effective_from,
+    effective_from: r.assignment_effective_from,
+    effective_to: r.assignment_effective_to,
+  }));
+
+  const chosen = pickAssignmentFor(dated, isoDate(date) || todayIso(), todayIso());
   return chosen ? mapShiftType(chosen) : null;
 }
 
@@ -378,10 +405,15 @@ function applyAssignmentFilters(q: any, filters: ShiftAssignmentFilters, today: 
   }
   if (filters.property) q.where('e.branch_name', filters.property);
   if (filters.unassigned) {
+    // "In force today" means started AND not ended. Without the second half, somebody whose
+    // assignment ran out last week counts as assigned and is missing from the one list HR uses
+    // to find people who need a shift — while their own screen correctly says they have none.
+    // End dates only became possible with migration 031, so this had no teeth until now.
     q.whereNotExists(function (this: any) {
       this.select(db.raw('1')).from('employee_shift_assignments as a2')
         .whereRaw('a2.employee_id = e.id')
-        .where('a2.effective_from', '<=', today);
+        .where('a2.effective_from', '<=', today)
+        .where((w: any) => w.whereNull('a2.effective_to').orWhere('a2.effective_to', '>=', today));
     });
   }
   return q;
@@ -393,9 +425,10 @@ async function resolveAssignmentRows(employees: any[], today: string) {
   const assignments = await db('employee_shift_assignments as a')
     .join('shift_types as st', 'st.id', 'a.shift_type_id')
     .whereIn('a.employee_id', employees.map((e: any) => e.id))
-    .select('a.id as assignment_id', 'a.employee_id', 'a.effective_from',
+    .select('a.id as assignment_id', 'a.employee_id', 'a.effective_from', 'a.effective_to',
       'st.id as shift_type_id', 'st.name as shift_name', 'st.start_time', 'st.end_time',
       'st.ends_next_day', 'st.weekly_off_days')
+    // Ascending within each employee — pickAssignmentFor requires it.
     .orderBy(['a.employee_id', 'a.effective_from']);
 
   const byEmp = new Map<number, any[]>();
@@ -406,7 +439,12 @@ async function resolveAssignmentRows(employees: any[], today: string) {
 
   return employees.map((e: any) => {
     const list = byEmp.get(e.id) ?? [];
-    const current = list.filter((a: any) => isoDate(a.effective_from) <= today).pop() ?? null;
+    // THE SAME RULE the employee's own screen uses. This used to be
+    // `list.filter(a => a.effective_from <= today).pop()`, which ignored the end date entirely —
+    // so an assignment that had run out still showed here as the employee's current shift while
+    // their My Shift card correctly said they had none. Two rules over one table, opposite
+    // answers, and HR with no way to see why the employee was complaining.
+    const current = pickAssignmentFor(list, today, today);
     const upcoming = list.find((a: any) => isoDate(a.effective_from) > today) ?? null;
     return {
       ...e,
@@ -666,18 +704,40 @@ export async function removeShiftAssignment(id: number) {
   return { id, employee_id: row.employee_id };
 }
 
-export async function getMyShift(employeeId: number | null | undefined) {
-  if (!employeeId) return null;
-  const shift = await resolveShiftForEmployee(employeeId, todayIso());
+const hhmm = (t: any) => (t ? String(t).slice(0, 5) : null);
+
+/**
+ * The one description of "the shift I am on today", shared by both endpoints that answer that
+ * question — `/shifts/me` (the dashboard card) and `/shifts/me/shift` (the My Shift page).
+ *
+ * It exists because those two used to describe the same thing differently: one returned the shift
+ * bare, the other wrapped it in `current`, and the two spelled the times differently as well.
+ * Both replies are cached in the browser under a key derived from the question, so a screen that
+ * received the other one's answer found no `current` in it and told the employee they had no
+ * shift — while the database held two assignments and the server resolved them correctly.
+ *
+ * One builder, one shape. A screen handed the wrong reply now still finds the shift in it.
+ */
+export function currentShiftView(shift: any) {
   if (!shift) return null;
   return {
     shift_type_id: shift.id,
     name: shift.name,
-    start_time: shift.start_time,
-    end_time: shift.end_time,
-    ends_next_day: shift.ends_next_day,
+    start_time: hhmm(shift.start_time),
+    end_time: hhmm(shift.end_time),
+    ends_next_day: !!shift.ends_next_day,
+    office_hour_time: hhmm(shift.office_hour_time),
     weekly_off_days: shift.weekly_off_days,
-    office_hour_time: shift.office_hour_time,
+    effective_from: String(shift.effective_from ?? '').slice(0, 10) || null,
   };
+}
+
+/**
+ * The dashboard card's shift. Same envelope as getMyShiftOverview — `current` is null when the
+ * employee genuinely has none, which is a different thing from the request having failed.
+ */
+export async function getMyShift(employeeId: number | null | undefined) {
+  if (!employeeId) return { current: null };
+  return { current: currentShiftView(await resolveShiftForEmployee(employeeId, todayIso())) };
 }
 

@@ -29,7 +29,9 @@ export default function ShiftChangeRequestsPage() {
       qc.invalidateQueries({ queryKey: ['shift-change-requests'] });
       // The approval writes a dated assignment, so every view of the mapping is now stale.
       qc.invalidateQueries({ queryKey: ['shift-assignments'] });
+      // Both employee-facing views — separate cache entries, so both need clearing.
       qc.invalidateQueries({ queryKey: ['my-shift'] });
+      qc.invalidateQueries({ queryKey: ['my-shift-overview'] });
     },
     onError: (e: any) => toast.error(e.response?.data?.error || 'Could not update the request'),
   });

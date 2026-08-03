@@ -8,6 +8,7 @@ import { getPaySchedule } from './paySchedule.service';
 import { overnightHours, judgeDay } from './attendance.calc';
 import { pickAssignmentFor } from './shiftPattern';
 import { buildWorkCalendar } from './payableDays.service';
+import { businessToday } from '../utils/businessDate';
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
@@ -76,7 +77,10 @@ export async function autoMarkAttendance(date?: string) {
     if (!byEmp.has(a.employee_id)) byEmp.set(a.employee_id, []);
     byEmp.get(a.employee_id)!.push(a);
   }
-  const shiftFor = (employeeId: number) => applicableRules(byEmp.get(employeeId), target, todayStr());
+  // businessToday(), not todayStr(): the shift window rule compares business dates, and the two
+  // disagree for five and a half hours a day. The other uses of todayStr() in this file compare
+  // `created_at::date` and are deliberately left alone.
+  const shiftFor = (employeeId: number) => applicableRules(byEmp.get(employeeId), target, businessToday());
 
   let updated = 0;
   let scanned = 0;
@@ -300,7 +304,7 @@ export async function uploadAttendanceCsv(csvContent: string) {
     if (!assignmentsByEmp.has(a.employee_id)) assignmentsByEmp.set(a.employee_id, []);
     assignmentsByEmp.get(a.employee_id)!.push(a);
   }
-  const today = todayStr();
+  const today = businessToday(); // business date — see the note on the other shiftFor above
   /** Which shift they were on — used for the punch window (start/end times). */
   const shiftFor = (employeeId: number, date: string) =>
     pickAssignmentFor(assignmentsByEmp.get(employeeId) ?? [], date, today);

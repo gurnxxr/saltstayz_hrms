@@ -18,10 +18,15 @@ export default function EmployeeDashboard() {
     queryFn: () => api.get('/analytics/me/overview').then(r => r.data).catch(() => null),
   });
 
-  const { data: myShift } = useQuery({
+  // No .catch here on purpose. Swallowing the error turned every failure into "no shift", which
+  // is a different fact and the one thing an employee cannot act on — and because this answer is
+  // cached under the same key the My Shift page reads, that swallowed null was handed to that
+  // page too, where it printed "No shift assigned yet" for someone who had one.
+  const { data: myShift, isError: myShiftError } = useQuery({
     queryKey: ['my-shift'],
-    queryFn: () => api.get('/shifts/me').then(r => r.data).catch(() => null),
+    queryFn: () => api.get('/shifts/me').then(r => r.data),
   });
+  const currentShift = myShift?.current ?? null;
 
   // Direct reports. Self-scoped on the server, so this is safe for every role — it simply
   // comes back empty for anyone who isn't a reporting manager, and the card stays hidden.
@@ -138,9 +143,12 @@ export default function EmployeeDashboard() {
           </div>
           <div>
             <p className="text-sm text-secondary">My Shift</p>
-            {myShift ? (
+            {myShiftError ? (
+              // Not the same as having no shift, so it must not read like it.
+              <p className="text-lg font-bold text-foreground">Couldn&apos;t load your shift</p>
+            ) : currentShift ? (
               <p className="text-lg font-bold text-foreground">
-                {myShift.name} <span className="text-sm font-normal text-secondary">({fmt(myShift.start_time)}–{fmt(myShift.end_time)})</span>
+                {currentShift.name} <span className="text-sm font-normal text-secondary">({fmt(currentShift.start_time)}–{fmt(currentShift.end_time)})</span>
               </p>
             ) : (
               <p className="text-lg font-bold text-foreground">No shift assigned</p>
