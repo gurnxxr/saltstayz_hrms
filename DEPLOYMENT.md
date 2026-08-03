@@ -44,7 +44,7 @@ SSL is enabled automatically for any non-localhost host.
 |---------|-------|
 | Root Directory | `server` |
 | Build Command | `npm install --include=dev && npm run build` |
-| Start Command | `npm start` |
+| Start Command | `npm run start:prod` |
 | Instance Type | Free is sufficient |
 
 > ⚠️ **`--include=dev` is required.** With `NODE_ENV=production` set, npm skips
@@ -52,8 +52,28 @@ SSL is enabled automatically for any non-localhost host.
 > Without the flag the build fails with dozens of `TS7016: Could not find a declaration file`
 > errors.
 
-> Use `npm start`, **not** `npm run start:prod`. The latter runs migrations first, which
-> needs dev dependencies at runtime and isn't needed once the schema exists.
+> ⚠️ **`start:prod`, not `start`.** `start:prod` runs pending migrations and then boots;
+> `start` boots only. This document used to say the opposite, and that is what broke the
+> employees page on 2026-08-03: the schema had never moved past migration 001 while the code
+> had reached 033, so `employees.pan_number` — added by 007 — did not exist and every request
+> to `/employees` returned a bare 500. **No deploy had ever run a migration.**
+>
+> The old advice said migrations "need dev dependencies at runtime". That was true; `tsx` has
+> since been moved into `dependencies` precisely so this command works. See below for why the
+> migrations cannot simply be compiled instead.
+
+> **Do not compile the migrations to `dist/` and run them with plain `node`.** knex records each
+> applied migration by FILENAME, and every row in production's `knex_migrations` ends in `.ts`.
+> Running the compiled `.js` files would leave knex comparing `001_baseline_postgres.js` against
+> a recorded `001_baseline_postgres.ts`, concluding all thirty-three are pending, and replaying
+> the entire history onto a database that already has it. `server/src/services/schemaVersion.test.ts`
+> fails if anyone changes the migrations away from `.ts` for this reason.
+
+> **Multiple instances:** `start:prod` migrates on every boot. knex takes an advisory lock
+> (`knex_migrations_lock`), so concurrent instances serialise rather than collide — but if you
+> scale beyond one instance, prefer Render's **Pre-Deploy Command** (`npm run db:migrate`) and
+> set Start Command back to `npm start`, so migrations run once per deploy rather than once per
+> boot.
 
 ### Environment variables (on Render)
 
@@ -89,8 +109,18 @@ variable alone does nothing.
 ## 4. Create the schema and load data
 
 ```bash
-npm run db:migrate --workspace=server     # creates the whole schema (one baseline migration)
+npm run db:migrate --workspace=server     # applies every pending migration
 ```
+
+> This is the same command `start:prod` runs on each deploy, so after the first install you
+> should rarely need it by hand. It is **not** a one-time step: the baseline creates the schema,
+> and every later migration moves it forward. Run it whenever you deploy code from a branch that
+> added one, or point `DATABASE_URL` at the target database and run it directly.
+>
+> **How to tell whether a database is behind:** the server says so in its first line of log —
+> `[schema] up to date — 33 migration(s) applied`, or a boxed warning naming each missing one.
+> `GET /health` reports the same thing as `{ "schema": { "applied": 33, "pending": 0 } }` and
+> answers `"status": "degraded"` when it is behind.
 
 Then either:
 

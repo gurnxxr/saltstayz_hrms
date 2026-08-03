@@ -14,6 +14,9 @@
     "declarationMap": false,
     "sourceMap": true
   },
+  // Everything, tests included — this file is what `tsc --noEmit` checks, and vitest only
+  // transpiles, so if the tests were dropped here nothing would type-check them at all.
+  // The BUILD uses tsconfig.build.json, which excludes them from the emitted output.
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
 }

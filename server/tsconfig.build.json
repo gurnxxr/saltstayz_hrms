@@ -1,0 +1,11 @@
+{
+  // The BUILD config. tsconfig.json includes the tests so `tsc --noEmit` type-checks them —
+  // vitest only transpiles, so dropping them there would leave them unchecked entirely. This
+  // one is what `npm run build` uses, and it keeps them out of the shipped output.
+  //
+  // Compiling tests into dist/ put ~30 *.test.js beside the server code: test code in the
+  // production image, and `npm run build` followed by vitest collecting every suite twice —
+  // the dist copies failing outright on "Vitest cannot be imported in a CommonJS module".
+  "extends": "./tsconfig.json",
+  "exclude": ["node_modules", "dist", "**/*.test.ts"]
+}

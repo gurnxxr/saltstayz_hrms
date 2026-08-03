@@ -20,5 +20,11 @@ export default defineConfig({
      * run normally; this only stops two files racing for the same rows.
      */
     fileParallelism: false,
+    /**
+     * Never collect from the build output. tsconfig no longer emits tests there, but a dist/ left
+     * over from before that change still holds them, and vitest's default glob would pick both
+     * copies up — reporting every suite twice and failing the compiled ones outright.
+     */
+    exclude: ['**/node_modules/**', '**/dist/**'],
   },
 });

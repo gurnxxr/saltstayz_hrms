@@ -3,9 +3,14 @@ import { env } from './config/env';
 import { runBackup } from './services/backup.service';
 import { autoMarkAttendance } from './services/attendance.service';
 import { emit } from './services/notification.service';
+import { logSchemaState } from './utils/schemaVersion';
 
 const server = app.listen(env.SERVER_PORT, () => {
   console.log(`Server running on http://localhost:${env.SERVER_PORT}`);
+  // First thing in the deploy log: whether this build's migrations have actually been applied.
+  // A schema left behind is invisible until a page 500s — which is exactly how it went unnoticed
+  // for the whole of the employees list. Never fatal; see utils/schemaVersion.ts for why.
+  void logSchemaState();
 });
 
 // Fail loudly and clearly if the port is taken (a stale/duplicate instance) instead of crashing

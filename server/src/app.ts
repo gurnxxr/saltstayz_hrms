@@ -11,6 +11,7 @@ import db from './config/database';
 import { errorHandler } from './middleware/errorHandler';
 import { auditLogger } from './middleware/audit';
 import routes from './routes';
+import { getCachedSchemaState } from './utils/schemaVersion';
 
 const app = express();
 
@@ -53,9 +54,16 @@ app.use('/uploads', express.static('uploads'));
 const healthHandler = async (_req: express.Request, res: express.Response) => {
   try {
     await db.raw('SELECT 1');
+    // A reachable database is not the same as a USABLE one. When the schema is behind the build,
+    // every query naming a newer column fails while this endpoint cheerfully reports "ok" — which
+    // is what it did all the while the employees page was returning 500s.
+    const schema = await getCachedSchemaState();
     res.json({
-      status: 'ok',
+      status: schema.ok ? 'ok' : 'degraded',
       db: 'up',
+      schema: schema.error
+        ? { verified: false, why: schema.error }
+        : { verified: true, applied: schema.applied, pending: schema.pending.length, behind_by: schema.pending },
       uptime: Math.round(process.uptime()),
       timestamp: new Date().toISOString(),
     });

@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "start": "node dist/index.js",
     "start:prod": "npm run db:migrate && node dist/index.js",
     "db:create": "tsx src/db/create-local-db.ts",
@@ -41,6 +41,7 @@
     "multer": "^1.4.5-lts.1",
     "pdfkit": "^0.19.1",
     "pg": "^8.22.0",
+    "tsx": "^4.19.2",
     "zod": "^3.24.1"
   },
   "devDependencies": {
@@ -55,7 +56,6 @@
     "@types/node": "^22.10.0",
     "@types/pdfkit": "^0.17.6",
     "@types/pg": "^8.20.0",
-    "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^4.1.9"
   }
