@@ -2,6 +2,7 @@ import app from './app';
 import { env } from './config/env';
 import { runBackup } from './services/backup.service';
 import { autoMarkAttendance } from './services/attendance.service';
+import { runDailyAccrual } from './services/accrual.service';
 import { emit } from './services/notification.service';
 import { logSchemaState } from './utils/schemaVersion';
 
@@ -78,5 +79,36 @@ if (env.NODE_ENV === 'production' || process.env.AUTO_ATTENDANCE_ENABLED === 'tr
       });
     });
   setTimeout(tick, 90 * 1000).unref();   // first run ~1.5 min after boot
+  setInterval(tick, DAY).unref();         // then every 24h
+}
+
+// Daily leave accrual: credits anyone whose joining anniversary has come round on a leave type
+// their plan says is EARNED rather than granted. Same enablement pattern as the two jobs above.
+//
+// It recomputes the whole current period every time rather than tracking where it got to, and the
+// ledger's unique index makes a repeat credit a no-op — so running it twice, or after a week of
+// downtime, lands in exactly the same place. Nothing happens at all until an admin switches
+// accrual on for a leave type; `accrual_enabled` defaults to false.
+if (env.NODE_ENV === 'production' || process.env.LEAVE_ACCRUAL_ENABLED === 'true') {
+  const DAY = 24 * 60 * 60 * 1000;
+  const tick = () => runDailyAccrual()
+    .then((r) => {
+      if (r.skipped_no_period) return console.warn('[leave-accrual] no current leave period — nothing credited');
+      console.log(`[leave-accrual] ${r.period} as of ${r.as_of}: ${r.credited} credit(s) across ${r.employees} employee(s)`);
+    })
+    .catch((e) => {
+      console.error('[leave-accrual] failed:', e.message);
+      // A silent failure here is a month in which nobody's leave grew, discovered when an employee
+      // is refused leave they should have had. Admins are told, like the other two jobs.
+      void emit('system.leave_accrual_failed', {
+        payload: {
+          type: 'leave_accrual_failed',
+          title: 'Leave accrual job failed',
+          message: `Monthly leave credits were not applied: ${e.message}`,
+          link: '/leaves/control-panel',
+        },
+      });
+    });
+  setTimeout(tick, 120 * 1000).unref();  // first run ~2 min after boot, behind the other two
   setInterval(tick, DAY).unref();         // then every 24h
 }

@@ -1,7 +1,8 @@
 import db from '../config/database';
 import { NotFoundError, ValidationError, AppError } from '../utils/errors';
 import { getMonthlyBreakdown } from './payslip.service';
-import { getCurrentPeriod } from './leave.service';
+import { getCurrentPeriod, getEffectiveBalances } from './leave.service';
+import { isAccruing } from './accrual.service';
 import { getEmployeeLeaveRules } from './leaveTemplate.service';
 import { notifyEmployee, emit } from './notification.service';
 import { notifyReplacementNeeded } from './manpower.service';
@@ -206,16 +207,32 @@ async function remainingLeaveBalance(employeeId: number): Promise<number> {
     const period = await getCurrentPeriod();
     // Encashable leave types are now per the employee's assigned template, not the global type.
     const rules = await getEmployeeLeaveRules(employeeId);
-    const encashableTypeIds = [...rules.values()].filter((r) => r.is_encashable).map((r) => r.leave_type_id);
-    if (!encashableTypeIds.length) return 0;
-    const row = await db('leave_entitlements')
-      .where('employee_id', employeeId)
-      .where('leave_period_id', period.id)
-      .whereIn('leave_type_id', encashableTypeIds)
-      .sum({ total: 'total_days' })
-      .sum({ used: 'used_days' })
-      .first();
-    const bal = Number((row as any)?.total ?? 0) - Number((row as any)?.used ?? 0);
+    const encashable = [...rules.values()].filter((r) => r.is_encashable);
+    if (!encashable.length) return 0;
+
+    // Split by how the type holds its balance. An ACCRUING type has no entitlement row by
+    // construction, so the query below would settle it at zero and quietly underpay somebody their
+    // earned leave on the way out. The entitlement sum is left exactly as it was for every other
+    // type, so no existing settlement figure moves.
+    const accruingIds = encashable.filter(isAccruing).map((r) => r.leave_type_id);
+    const entitlementIds = encashable.filter((r) => !isAccruing(r)).map((r) => r.leave_type_id);
+
+    let bal = 0;
+    if (entitlementIds.length) {
+      const row = await db('leave_entitlements')
+        .where('employee_id', employeeId)
+        .where('leave_period_id', period.id)
+        .whereIn('leave_type_id', entitlementIds)
+        .sum({ total: 'total_days' })
+        .sum({ used: 'used_days' })
+        .first();
+      bal += Number((row as any)?.total ?? 0) - Number((row as any)?.used ?? 0);
+    }
+    if (accruingIds.length) {
+      const balances = await getEffectiveBalances([employeeId], period.id, { leaveTypeIds: accruingIds });
+      // Per type, floored at zero: one type in deficit must not eat another's payout.
+      bal += balances.reduce((sum, b) => sum + Math.max(0, b.available), 0);
+    }
     return Math.max(0, bal);
   } catch {
     return 0;

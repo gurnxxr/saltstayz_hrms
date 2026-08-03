@@ -17,6 +17,7 @@
     "db:backup": "tsx src/db/backup.ts",
     "baseline:capture": "tsx src/db/capture-shift-baseline.ts",
     "patterns:report": "tsx src/db/derive-work-weeks.ts",
+    "leave:backfill": "tsx src/db/backfill-leave-accrual.ts",
     "baseline:verify": "tsx src/db/verify-payslips-unchanged.ts",
     "spec:price": "tsx src/db/price-salary-spec.ts",
     "test": "vitest run",

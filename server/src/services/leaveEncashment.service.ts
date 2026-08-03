@@ -1,6 +1,8 @@
 import db from '../config/database';
 import { NotFoundError, ValidationError } from '../utils/errors';
-import { getCurrentPeriod } from './leave.service';
+import { getCurrentPeriod, getEffectiveBalances } from './leave.service';
+import { isAccruing } from './accrual.service';
+import { businessToday } from '../utils/businessDate';
 import { getEmployeeLeaveRule } from './leaveTemplate.service';
 import { getMonthlyBreakdown } from './payslip.service';
 import { notifyEmployee, emit } from './notification.service';
@@ -58,11 +60,19 @@ export async function createEncashment(
   if (!Number.isFinite(days) || days <= 0 || days > 100) throw new ValidationError('Days must be a positive number');
 
   const period = await getCurrentPeriod();
-  const entitlement = await db('leave_entitlements')
-    .where({ employee_id: employeeId, leave_type_id: leaveTypeId, leave_period_id: period.id })
-    .first();
-  if (!entitlement) throw new ValidationError('No entitlement for this leave type in the current period');
-  const balance = num(entitlement.total_days) - num(entitlement.used_days);
+  const accruing = isAccruing(rule);
+  // Two balance sources, kept apart on purpose. An accruing type has no entitlement row at all —
+  // `upsertEntitlement` refuses to create one — so the old check would refuse every request. The
+  // entitlement path below is untouched, so nothing about a non-accruing type moves.
+  const balance = accruing
+    ? ((await getEffectiveBalances([employeeId], period.id, { leaveTypeIds: [leaveTypeId] }))[0]?.available ?? 0)
+    : await (async () => {
+      const entitlement = await db('leave_entitlements')
+        .where({ employee_id: employeeId, leave_type_id: leaveTypeId, leave_period_id: period.id })
+        .first();
+      if (!entitlement) throw new ValidationError('No entitlement for this leave type in the current period');
+      return num(entitlement.total_days) - num(entitlement.used_days);
+    })();
   if (days > balance) {
     throw new ValidationError(`Only ${balance} day(s) remaining — cannot encash ${days}`);
   }
@@ -95,21 +105,50 @@ export async function approveEncashment(id: number, userId?: number | null) {
   if (!enc) throw new NotFoundError('Encashment');
   if (enc.status !== 'pending') throw new ValidationError('This encashment has already been processed');
 
+  const rule = await getEmployeeLeaveRule(enc.employee_id, enc.leave_type_id);
+  const accruing = isAccruing(rule);
+  // Resolved before the transaction because getEffectiveBalances reads through the shared
+  // connection, which cannot see an uncommitted one. That leaves the same width of race the
+  // entitlement path has always had here (a concurrent leave approval landing between the check
+  // and the debit) — not a new one, and encashment is an HR action taken one at a time.
+  const accrualBalance = accruing
+    ? ((await getEffectiveBalances([enc.employee_id], enc.leave_period_id, { leaveTypeIds: [enc.leave_type_id] }))[0]?.available ?? 0)
+    : 0;
+
   await db.transaction(async (trx) => {
-    // Re-check the balance inside the transaction (leave may have been taken since).
-    const entitlement = await trx('leave_entitlements')
-      .where({
+    if (accruing) {
+      if (num(enc.days) > accrualBalance) {
+        throw new ValidationError(`Only ${accrualBalance} day(s) remaining — cannot encash ${num(enc.days)}`);
+      }
+      // The ledger IS the allocation for an accruing type, so spending against it is a negative
+      // entry rather than a counter somewhere else. Written as an `adjustment`, which is
+      // deliberately outside the partial unique index — two encashments of the same leave type on
+      // one day are two real debits, and a constraint that deduplicated them would lose one.
+      await trx('leave_accruals').insert({
         employee_id: enc.employee_id,
         leave_type_id: enc.leave_type_id,
         leave_period_id: enc.leave_period_id,
-      })
-      .first();
-    if (!entitlement) throw new ValidationError('Entitlement no longer exists');
-    const balance = num(entitlement.total_days) - num(entitlement.used_days);
-    if (num(enc.days) > balance) {
-      throw new ValidationError(`Only ${balance} day(s) remaining — cannot encash ${num(enc.days)}`);
+        credited_on: businessToday(),
+        days: -num(enc.days),
+        source: 'adjustment',
+        note: `Encashed (request #${id})`,
+      });
+    } else {
+      // Re-check the balance inside the transaction (leave may have been taken since).
+      const entitlement = await trx('leave_entitlements')
+        .where({
+          employee_id: enc.employee_id,
+          leave_type_id: enc.leave_type_id,
+          leave_period_id: enc.leave_period_id,
+        })
+        .first();
+      if (!entitlement) throw new ValidationError('Entitlement no longer exists');
+      const balance = num(entitlement.total_days) - num(entitlement.used_days);
+      if (num(enc.days) > balance) {
+        throw new ValidationError(`Only ${balance} day(s) remaining — cannot encash ${num(enc.days)}`);
+      }
+      await trx('leave_entitlements').where('id', entitlement.id).increment('used_days', num(enc.days));
     }
-    await trx('leave_entitlements').where('id', entitlement.id).increment('used_days', num(enc.days));
     await trx('leave_encashments').where('id', id).update({
       status: 'approved', approved_by: userId ?? null,
       approved_at: trx.fn.now(), updated_at: trx.fn.now(),

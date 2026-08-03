@@ -30,11 +30,25 @@ export interface LeaveRule {
   eligibility: string;
   after_probation_only: boolean;
   count_sandwich_days: boolean;
+  /**
+   * Accrual (migration 034). When on, `default_days` stops being a lump sum available on day one
+   * and becomes the ANNUAL figure, credited a twelfth at a time on each joining anniversary. Off
+   * by default, so a template that has never been touched behaves exactly as it always did.
+   */
+  accrual_enabled: boolean;
+  /** Completed months that earn nothing. 0 = earning starts at the first anniversary. */
+  accrual_waiting_months: number;
+  /** Days that survive into the next period. null = the balance lapses in full. */
+  carry_forward_max: number | null;
+  /** Ceiling on what one period can hold. null = no ceiling. */
+  max_balance: number | null;
   /** cannot-club-with leave_type_ids — only loaded by getEmployeeLeaveRule (the apply gate). */
   conflicts?: number[];
 }
 
 const BOOL = (v: any) => v === true || v === 1 || v === '1' || v === 'true';
+/** Postgres hands `numeric` back as a string, so every read of one goes through this. */
+const NUM_OR_NULL = (v: any) => (v === null || v === undefined || v === '' ? null : Number(v));
 
 function normalizeRule(r: any): LeaveRule {
   return {
@@ -50,10 +64,20 @@ function normalizeRule(r: any): LeaveRule {
     eligibility: r.eligibility ?? 'any',
     after_probation_only: BOOL(r.after_probation_only),
     count_sandwich_days: BOOL(r.count_sandwich_days),
+    accrual_enabled: BOOL(r.accrual_enabled),
+    accrual_waiting_months: Number(r.accrual_waiting_months) || 0,
+    carry_forward_max: NUM_OR_NULL(r.carry_forward_max),
+    max_balance: NUM_OR_NULL(r.max_balance),
   };
 }
 
-/** The per-leave-type setting columns shared by leave_types and leave_template_rows. */
+/**
+ * The per-leave-type setting columns shared by leave_types and leave_template_rows.
+ *
+ * The four accrual columns (migration 034) are deliberately absent: `ensureDefaultTemplate` copies
+ * every column named here OFF a `leave_types` row, and `leave_types` has no accrual columns to copy
+ * — adding them would write `undefined` into a NOT NULL column. Accrual is a template-only setting.
+ */
 export const TEMPLATE_ROW_COLUMNS = [
   'default_days', 'is_paid', 'is_encashable', 'min_days_per_request', 'max_days_per_request',
   'advance_notice_days', 'half_day_allowed', 'document_required_after_days', 'eligibility',
@@ -368,6 +392,21 @@ function policyInt(v: any): number | null {
   const n = Math.trunc(Number(v));
   return Number.isFinite(n) && n > 0 ? n : null;
 }
+
+/**
+ * A nullable day count for the accrual limits — unlike `policyInt`, ZERO IS A REAL VALUE here.
+ *
+ * `carry_forward_max: 0` means "nothing carries over"; `null` means the same thing today but reads
+ * as "not configured", and the two want to stay distinguishable on screen. Running these through
+ * `policyInt` would have quietly turned an explicit 0 into null, which is harmless now and would be
+ * a silent behaviour change the day the two stop meaning the same thing.
+ */
+function limitDays(v: any, label: string): number | null {
+  if (v === '' || v === null || v === undefined) return null;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0 || n > 366) throw new ValidationError(`${label} must be between 0 and 366`);
+  return Math.round(n * 100) / 100;
+}
 function rethrowDuplicate(e: any): never {
   if (e && e.code === '23505') throw new ValidationError('A leave template with this name already exists');
   throw e;
@@ -432,6 +471,10 @@ export async function getTemplate(id: number) {
       advance_notice_days: r.advance_notice_days, half_day_allowed: !!r.half_day_allowed,
       document_required_after_days: r.document_required_after_days, eligibility: r.eligibility,
       after_probation_only: !!r.after_probation_only, count_sandwich_days: !!r.count_sandwich_days,
+      accrual_enabled: !!r.accrual_enabled,
+      accrual_waiting_months: Number(r.accrual_waiting_months) || 0,
+      carry_forward_max: NUM_OR_NULL(r.carry_forward_max),
+      max_balance: NUM_OR_NULL(r.max_balance),
       cannot_club_with: (byRow.get(r.id) ?? []).sort((a, b) => a - b),
     })),
   };
@@ -501,6 +544,21 @@ async function validateTemplateInput(data: any, excludeId?: number): Promise<Tem
     const min = policyInt(rr.min_days_per_request);
     const max = policyInt(rr.max_days_per_request);
     if (min != null && max != null && min > max) throw new ValidationError('Min days per request cannot exceed max days');
+
+    // Accrual. Saving a template REPLACES its rows wholesale (see updateTemplate), so anything not
+    // read here is lost on the next save — an accruing type would silently revert to a lump sum.
+    const accrualEnabled = !!rr.accrual_enabled;
+    const waitingMonths = Math.trunc(Number(rr.accrual_waiting_months ?? 0)) || 0;
+    if (waitingMonths < 0 || waitingMonths > 120) throw new ValidationError('Waiting period must be between 0 and 120 months');
+    const carryForwardMax = limitDays(rr.carry_forward_max, 'Carry forward limit');
+    const maxBalance = limitDays(rr.max_balance, 'Maximum balance');
+    if (accrualEnabled && dd <= 0) {
+      throw new ValidationError('A type that accrues needs a positive "Days / year" — that figure is the annual rate it earns at.');
+    }
+    if (maxBalance != null && carryForwardMax != null && maxBalance < carryForwardMax) {
+      throw new ValidationError('The maximum balance cannot be lower than the carry forward limit — the carried days would be trimmed the moment they arrived.');
+    }
+
     rows.push({
       leave_type_id: leaveTypeId,
       default_days: dd,
@@ -514,6 +572,10 @@ async function validateTemplateInput(data: any, excludeId?: number): Promise<Tem
       eligibility: ELIGIBILITY_OPTS.includes(rr.eligibility) ? rr.eligibility : 'any',
       after_probation_only: !!rr.after_probation_only,
       count_sandwich_days: !!rr.count_sandwich_days,
+      accrual_enabled: accrualEnabled,
+      accrual_waiting_months: waitingMonths,
+      carry_forward_max: carryForwardMax,
+      max_balance: maxBalance,
       cannot_club_with: [...new Set((rr.cannot_club_with || []).map(Number).filter((n: number) => typeSet.has(n) && n !== leaveTypeId))],
     });
   }

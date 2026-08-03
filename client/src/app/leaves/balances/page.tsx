@@ -219,11 +219,17 @@ export default function LeaveBalancesPage() {
                             <td
                               key={lt.id}
                               className="px-2 py-2 text-center"
-                              title={`${b.taken} taken · ${b.pending} pending${b.source === 'default' ? ' · from default days (no allocation)' : ''}`}
+                              title={`${b.taken} taken · ${b.pending} pending${
+                                b.source === 'default' ? ' · from default days (no allocation)' : ''
+                              }${b.source === 'accrual'
+                                ? ` · earned ${Number(b.accrued ?? 0).toFixed(2)} day(s) so far${
+                                  b.next_credit_on ? `, next credit ${b.next_credit_on}` : ''}`
+                                : ''}`}
                             >
                               <span className={`font-medium ${b.available <= 0 ? 'text-red-600' : 'text-foreground'}`}>{b.available}</span>
                               <span className="text-secondary"> / {b.allocated}</span>
                               {b.source === 'default' && <span className="text-amber-600" title="From default days">*</span>}
+                              {b.source === 'accrual' && <span className="text-blue-600" title="Earned monthly">†</span>}
                               {b.pending > 0 && (
                                 <span className="block text-[11px] text-blue-600">{b.pending} pending</span>
                               )}
@@ -251,9 +257,15 @@ export default function LeaveBalancesPage() {
                               <td key={lt.id} className="px-2 py-2 text-center text-[11px] text-secondary space-y-0.5">
                                 <p>{b.taken} taken</p>
                                 <p>{b.pending} pending</p>
-                                <p className={b.source === 'default' ? 'text-amber-600' : ''}>
-                                  {b.source === 'default' ? 'default days' : 'allocated'}
+                                <p className={b.source === 'default' ? 'text-amber-600' : b.source === 'accrual' ? 'text-blue-600' : ''}>
+                                  {b.source === 'default' ? 'default days' : b.source === 'accrual' ? 'earned monthly' : 'allocated'}
                                 </p>
+                                {b.source === 'accrual' && (
+                                  <>
+                                    <p>{Number(b.accrued ?? 0).toFixed(2)} earned</p>
+                                    {b.next_credit_on && <p>next {b.next_credit_on}</p>}
+                                  </>
+                                )}
                               </td>
                             );
                           })}
@@ -278,6 +290,12 @@ export default function LeaveBalancesPage() {
 
         <div className="text-xs text-secondary space-y-1">
           <p><span className="text-amber-600">*</span> Balance comes from the leave type&apos;s default days — this employee has no explicit allocation for the period.</p>
+          <p>
+            <span className="text-blue-600">†</span> This leave is <em>earned</em>: a share of the
+            annual figure is credited on each joining anniversary, so the allocation grows through
+            the year rather than starting full. Expand a row to see the exact days earned and when
+            the next credit lands.
+          </p>
           <p><span className="text-foreground">—</span> The leave type is restricted to departments this employee isn&apos;t in, so it cannot be applied for.</p>
           <p>
             Pending days are shown separately because they don&apos;t reduce <em>available</em> for employees with an

@@ -167,6 +167,16 @@ Then either:
   request takes 30–60 seconds to wake it. A paid instance removes this.
 - **Backups.** `npm run db:backup --workspace=server` shells out to `pg_dump` (set `PG_DUMP`
   if it isn't on PATH). Neon also takes automatic backups — the recommended safety net.
+- **Leave accrual.** A daily job credits earned leave on each employee's joining anniversary. It is
+  automatic in production (set `LEAVE_ACCRUAL_ENABLED=true` to run it elsewhere), and does nothing
+  at all until an admin ticks "Earn this leave monthly" for a leave type on
+  **Leave → Control Panel → Templates**. Turning that on drops everyone to what they have earned
+  *from that day*, so run the one-time catch-up straight afterwards:
+  ```bash
+  npm run leave:backfill --workspace=server
+  ```
+  It reports and writes a CSV first; add `--apply` once the figures have been reviewed. Both the
+  job and the backfill are safe to re-run — a credit already in the ledger is never made twice.
 - **Uploads.** Uploaded files (checklist documents) are still written to local disk, so on an
   ephemeral host they are lost on redeploy. Moving them to object storage is follow-up work;
   it does not affect login or any database-backed feature.
