@@ -31,15 +31,17 @@ const PORT = parseInt(process.env.PORT || process.env.SERVER_PORT || '5000', 10)
 /**
  * How outbound mail leaves this process. `none` — the default — means it does not.
  *
- *   none    no provider configured. Self-service password reset stays switched OFF and the login
- *           screen does not offer it, because a "check your email" that never arrives is worse
- *           than no button at all.
+ *   none    no provider configured. The login screen still offers "Forgot password?", but the two
+ *           reset endpoints do nothing: no code is generated and none is sent.
+ *   smtp    an ordinary mailbox — Google Workspace, Microsoft 365, or any SMTP server. Needs
+ *           SMTP_HOST, SMTP_USER and SMTP_PASSWORD. No new vendor and no DNS change, which is why
+ *           it is the shortest path from "built" to "working".
  *   resend  HTTPS to Resend. Needs MAIL_FROM on a domain whose SPF and DKIM you control.
  *   log     DEVELOPMENT ONLY. Prints the message, code included, to the server console so the
  *           flow can be walked through locally. Refused in production, loudly — see mailer.ts.
  *   memory  TESTS ONLY. Keeps the last message in memory for assertions. Sends nothing.
  */
-const MAIL_PROVIDER = (process.env.MAIL_PROVIDER || 'none') as 'none' | 'resend' | 'log' | 'memory';
+const MAIL_PROVIDER = (process.env.MAIL_PROVIDER || 'none') as 'none' | 'resend' | 'smtp' | 'log' | 'memory';
 
 if (NODE_ENV === 'production' && (MAIL_PROVIDER === 'log' || MAIL_PROVIDER === 'memory')) {
   throw new Error(`MAIL_PROVIDER='${MAIL_PROVIDER}' is a development aid and must never run in production`);
@@ -60,7 +62,9 @@ const OTP_PEPPER = process.env.OTP_PEPPER || BETTER_AUTH_SECRET;
 // meant a staging or UAT box (NODE_ENV=staging, or unset) sending real codes to real mailboxes
 // while the HMAC key protecting them was public, making every live code in `verification`
 // recoverable. If mail can actually leave the process, the pepper must be set explicitly.
-if (MAIL_PROVIDER === 'resend' && !process.env.OTP_PEPPER) {
+const SENDS_REAL_MAIL = MAIL_PROVIDER === 'resend' || MAIL_PROVIDER === 'smtp';
+
+if (SENDS_REAL_MAIL && !process.env.OTP_PEPPER) {
   throw new Error('OTP_PEPPER environment variable is required whenever MAIL_PROVIDER can send real mail');
 }
 
@@ -81,9 +85,17 @@ export const env = {
   DATABASE_PATH: process.env.DATABASE_PATH || path.join(__dirname, '../../data/hrms.db'),
   CLIENT_URL: process.env.CLIENT_URL || 'http://localhost:3000',
   NODE_ENV,
-  // Outbound mail — see MAIL_PROVIDER above. `none` keeps password reset switched off end to end.
+  // Outbound mail — see MAIL_PROVIDER above. `none` means no code can be sent.
   MAIL_PROVIDER,
   MAIL_FROM: process.env.MAIL_FROM || 'SaltStayz HRMS <no-reply@saltstayz.com>',
   RESEND_API_KEY: process.env.RESEND_API_KEY || '',
+  // SMTP. 587 with STARTTLS is what Google Workspace and Microsoft 365 both want; set SMTP_SECURE
+  // only for implicit TLS on 465. SMTP_PASSWORD on Workspace must be an APP password — a normal
+  // account password is refused once two-factor authentication is on, which it should be.
+  SMTP_HOST: process.env.SMTP_HOST || '',
+  SMTP_PORT: parseInt(process.env.SMTP_PORT || '587', 10),
+  SMTP_USER: process.env.SMTP_USER || '',
+  SMTP_PASSWORD: process.env.SMTP_PASSWORD || '',
+  SMTP_SECURE: process.env.SMTP_SECURE === 'true',
   OTP_PEPPER,
 };

@@ -47,7 +47,14 @@ const parse = <T>(schema: z.ZodSchema<T>, body: unknown, uniformMessage?: string
 /** The one thing `confirm` ever says when anything at all goes wrong — schema included. */
 const CONFIRM_REJECT = 'That code is not valid or has expired. Request a new one.';
 
-/** Whether the login screen should offer the link at all. Booleans only — no configuration leaks. */
+/**
+ * Whether a code can actually be sent from this box. An operator diagnostic, not a UI gate.
+ *
+ * The login screen used to ask this before offering the link, and hid it when the answer was false.
+ * It no longer does — the link is always shown — so this exists to answer "is mail wired up here?"
+ * without reading the deployment's environment. Booleans only: it says whether a provider is
+ * configured, never which one or with what.
+ */
 export async function capabilities(_req: Request, res: Response, next: NextFunction) {
   try {
     res.json({ password_reset: isMailConfigured() });

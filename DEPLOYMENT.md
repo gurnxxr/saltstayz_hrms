@@ -87,9 +87,34 @@ SSL is enabled automatically for any non-localhost host.
 
 Leave `PORT` unset — the host provides it and the app honours it.
 
-**Self-service password reset is built but switched off** until these are set, because nothing in
-this application can send an email without them. Until then the login screen shows no "Forgot
-password?" link and HR resets passwords from the admin screens, as today.
+**Self-service password reset needs a way to send email.** The login screen always shows the
+"Forgot password?" link, but until one of the two options below is configured the reset endpoints do
+nothing — somebody who uses it is told a code is on its way and none arrives. Until then, HR resets
+passwords from **Admin → User Credentials**, as today.
+
+**Option A — your own mailbox (start here).** No new vendor, no new bill, no DNS change. Any Google
+Workspace or Microsoft 365 account works.
+
+| Variable | Value |
+|----------|-------|
+| `MAIL_PROVIDER` | `smtp` |
+| `SMTP_HOST` | `smtp.gmail.com` for Workspace · `smtp.office365.com` for Microsoft 365 |
+| `SMTP_PORT` | `587` |
+| `SMTP_USER` | the mailbox the codes come from, e.g. `hr@saltstayz.com` |
+| `SMTP_PASSWORD` | a 16-character **app password**, *not* the account password |
+| `MAIL_FROM` | e.g. `SaltStayz HRMS <hr@saltstayz.com>` |
+| `OTP_PEPPER` | a second long random secret — `openssl rand -base64 32` |
+
+> Generate the app password at **myaccount.google.com → Security → 2-Step Verification → App
+> passwords** (Microsoft 365: **My Account → Security info**). A normal account password is refused
+> once two-factor authentication is on, which it should be. Port 587 upgrades to TLS via STARTTLS;
+> set `SMTP_SECURE=true` only for implicit TLS on 465.
+>
+> Half-configured SMTP counts as **not** configured — with a host but no password the server sends
+> nothing rather than promising a code it cannot deliver.
+
+**Option B — Resend.** Worth it at volume, or when you want delivery reporting. Needs a DNS change
+first.
 
 | Variable | Value |
 |----------|-------|
@@ -98,11 +123,13 @@ password?" link and HR resets passwords from the admin screens, as today.
 | `MAIL_FROM` | e.g. `SaltStayz HRMS <no-reply@saltstayz.com>` |
 | `OTP_PEPPER` | a second long random secret — `openssl rand -base64 32` |
 
-> Before turning it on, add Resend's **SPF and DKIM records to `saltstayz.com` DNS** and verify the
-> domain in Resend. Without them the codes go to spam, which is worse than the link not existing:
-> people will believe the reset is broken and stop trying. `OTP_PEPPER` is required whenever
-> `MAIL_PROVIDER=resend` in **any** environment, staging included — the server refuses to start
-> without it, because its fallback is a literal in the repository.
+> Add Resend's **SPF and DKIM records to `saltstayz.com` DNS** and verify the domain in Resend
+> before switching over. Without them the codes go to spam, which is worse than not offering the
+> feature: people conclude the reset is broken and stop trying.
+
+`OTP_PEPPER` is required for **both** options, in **any** environment, staging included — the server
+refuses to start without it, because its fallback is a literal in this repository and every live
+code in `verification` would be recoverable by anyone who can read the source.
 
 > ⚠️ **`CLIENT_URL` must be the stable domain**, not the long per-deployment URL Vercel shows
 > on a build page (`...-nx303osa6-....vercel.app`). Those change on every deploy. Using one
