@@ -14,7 +14,7 @@ path, not just the happy one.
 | # | File | Where in the app | Notes |
 |---|------|------------------|-------|
 | 1 | `01_employees.csv` | **Employees** (or Employee Lifecycle) → **Bulk Upload** | New staff + Monthly CTC (salary). Cap-enforced. |
-| 2 | `02_properties.csv` | **Admin → Organization → Properties → Upload CSV** | Reads Name, Hotel ID, City, Address, Category. **State isn't read here** — set it in the UI after. |
+| 2 | `02_properties.csv` | **Admin → Organization → Properties → Upload CSV** | Reads Name, Hotel ID, City, **State**, Address, Category. State is required — it decides Professional Tax, Labour Welfare Fund and minimum wage for everyone at that property. |
 | 3 | `03_attendance.csv` | **Admin → Attendance → Upload** | Biometric-style: `DD-MM-YYYY` dates, `HH:MM` times, dates in an unlocked month (Jul 2026). |
 | 4 | `04_shift_assignments.csv` | **Shifts → Assignments → Bulk Upload** | `Shift` = General / Morning / Evening / Night. |
 | 5 | `05_holidays.csv` | **Leaves → Holidays → Upload CSV** | Pick the **scope** (National or a state) in the dialog. Replaces that scope. |

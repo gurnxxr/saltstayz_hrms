@@ -1,0 +1,151 @@
+Employee Code,First Name,Last Name,Email,Phone,Date of Birth,Date of Joining,Father Name,Aadhaar Number,PAN Number,Department,Branch Name,Job Title,Reporting Manager Code,Status,Monthly CTC
+TD-0001,Myra,Mehta,myra.mehta1@saltstayz.test,9813523540,2001-02-09,2019-07-21,Anika Mehta,104356211703,BIOPE0037G,Kitchen,SaltStayz Cyber Hub,HR Manager,,Active,94451
+TD-0002,Nikhil,Kumar,nikhil.kumar2@saltstayz.test,9879224245,2000-04-19,2024-12-13,Manish Kumar,246192586352,CJPPF0074H,Security,SaltStayz Sohna Road,Housekeeping Attendant,,Active,50999
+TD-0003,Sneha,Kapoor,sneha.kapoor3@saltstayz.test,9850185772,1978-12-24,2021-04-05,Kavya Kapoor,603085572551,DKQPG0111I,Kitchen,SaltStayz Aerocity,Property Manager,,Active,53799
+TD-0004,Karan,Bansal,karan.bansal4@saltstayz.test,9872166682,1985-05-26,2019-02-10,Kabir Bansal,906840699678,ELRPH0148J,Security,SaltStayz Saket,Front Office Manager,,Active,51739
+TD-0005,Rohan,Kapoor,rohan.kapoor5@saltstayz.test,9894168863,1996-08-23,2019-12-24,Rohan Kapoor,199474985781,FMSPI0185K,Kitchen,SaltStayz Sector 17,HR Executive,,Active,113073
+TD-0006,Rahul,Agarwal,rahul.agarwal6@saltstayz.test,9883052756,2003-10-04,2023-04-23,Vihaan Agarwal,580865939543,GNTPJ0222L,Kitchen,SaltStayz Sector 62,F&B Server,,Active,99908
+TD-0007,Ananya,Kumar,ananya.kumar7@saltstayz.test,9826843222,1991-11-03,2021-11-03,Pooja Kumar,456037762179,HOUPK0259M,Kitchen,SaltStayz Agra Fort,Front Office Manager,,Active,118927
+TD-0008,Sanjay,Singh,sanjay.singh8@saltstayz.test,9850191402,1999-07-02,2025-09-24,Vivaan Singh,447727664466,IPVPL0296N,Front Desk,SaltStayz Rishikesh,HR Executive,,Active,69669
+TD-0009,Payal,Verma,payal.verma9@saltstayz.test,9869944053,1979-02-16,2023-02-24,Vivaan Verma,954527324321,JQWPM0333O,Housekeeping,SaltStayz Indiranagar,HR Executive,,Active,60550
+TD-0010,Divya,Kapoor,divya.kapoor10@saltstayz.test,9823787819,1997-12-08,2019-06-05,Aadhya Kapoor,512001999211,KRXPN0370P,Food & Beverage,SaltStayz Whitefield,Front Office Manager,,Active,59462
+TD-0011,Aadhya,Mehta,aadhya.mehta11@saltstayz.test,9881735922,1976-03-27,2025-05-22,Saanvi Mehta,911109526478,LSYPO0407Q,Housekeeping,SaltStayz Cyber Hub,HR Executive,,Active,66237
+TD-0012,Shreya,Reddy,shreya.reddy12@saltstayz.test,9886235179,1996-12-12,2023-10-13,Meera Reddy,369627742120,MTZPP0444R,Food & Beverage,SaltStayz Sohna Road,Property Manager,,Active,65132
+TD-0013,Diya,Bansal,diya.bansal13@saltstayz.test,9869392210,2003-01-27,2021-12-19,Sneha Bansal,786162509652,NUAPQ0481S,Food & Beverage,SaltStayz Aerocity,Housekeeping Supervisor,TD-0001,Active,31691
+TD-0014,Karan,Bansal,karan.bansal14@saltstayz.test,9850117313,1975-09-15,2021-03-22,Krishna Bansal,320750819961,OVBPR0518T,Food & Beverage,SaltStayz Saket,Property Manager,TD-0002,Active,25317
+TD-0015,Anika,Joshi,anika.joshi15@saltstayz.test,9868606743,1996-11-27,2021-08-17,Pooja Joshi,308902438660,PWCPS0555U,Housekeeping,SaltStayz Sector 17,Finance Executive,TD-0003,Active,14647
+TD-0016,Myra,Sharma,myra.sharma16@saltstayz.test,9899768191,1998-01-10,2022-01-17,Neha Sharma,817597170337,QXDPT0592V,Kitchen,SaltStayz Sector 62,Front Office Manager,TD-0004,Active,14625
+TD-0017,Riya,Menon,riya.menon17@saltstayz.test,9865533046,2004-12-22,2025-05-21,Vihaan Menon,337720839981,RYEPU0629W,Management,SaltStayz Agra Fort,Finance Executive,TD-0005,Active,31532
+TD-0018,Myra,Rao,myra.rao18@saltstayz.test,9899967102,2002-02-26,2023-04-23,Amit Rao,831387337483,SZFPV0666X,Food & Beverage,SaltStayz Rishikesh,F&B Manager,TD-0006,Active,34749
+TD-0019,Saanvi,Kumar,saanvi.kumar19@saltstayz.test,9843397023,1994-02-16,2022-09-24,Neha Kumar,194980653724,TAGPW0703Y,Security,SaltStayz Indiranagar,CHRO,TD-0007,Active,32079
+TD-0020,Neha,Pillai,neha.pillai20@saltstayz.test,9876074670,1998-07-02,2022-11-17,Meera Pillai,329938544635,UBHPX0740Z,Food & Beverage,SaltStayz Whitefield,HR Executive,TD-0008,Active,16854
+TD-0021,Arjun,Kapoor,arjun.kapoor21@saltstayz.test,9861321624,1977-10-12,2023-07-09,Anjali Kapoor,816660758364,VCIPY0777A,Front Desk,SaltStayz Cyber Hub,CHRO,TD-0009,Active,21877
+TD-0022,Saanvi,Patel,saanvi.patel22@saltstayz.test,9883055322,1986-04-07,2023-12-01,Arjun Patel,525521384994,WDJPZ0814B,Kitchen,SaltStayz Sohna Road,Property Manager,TD-0010,Active,29714
+TD-0023,Reyansh,Kumar,reyansh.kumar23@saltstayz.test,9816950512,2004-11-21,2024-07-16,Vikram Kumar,941057156655,XEKPA0851C,Front Desk,SaltStayz Aerocity,Property Manager,TD-0011,Active,17685
+TD-0024,Shreya,Bansal,shreya.bansal24@saltstayz.test,9878044971,1999-08-01,2024-10-19,Payal Bansal,259491245402,YFLPB0888D,Housekeeping,SaltStayz Saket,Front Desk Executive,TD-0012,Active,14512
+TD-0025,Rajesh,Bansal,rajesh.bansal25@saltstayz.test,9833239802,1975-01-19,2020-04-14,Arjun Bansal,822444679960,ZGMPC0925E,Front Desk,SaltStayz Sector 17,Front Desk Executive,TD-0001,Active,14842
+TD-0026,Rohan,Nair,rohan.nair26@saltstayz.test,9853358401,1991-02-10,2021-01-04,Diya Nair,216620275378,AHNPD0962F,Front Desk,SaltStayz Sector 62,HR Manager,TD-0002,Active,31497
+TD-0027,Priya,Nair,priya.nair27@saltstayz.test,9865582815,1993-08-24,2022-11-09,Vivaan Nair,869767393381,BIOPE0999G,Management,SaltStayz Agra Fort,HR Manager,TD-0003,Active,31967
+TD-0028,Meera,Bansal,meera.bansal28@saltstayz.test,9880245530,1987-12-25,2023-11-28,Saanvi Bansal,864921259228,CJPPF1036H,Security,SaltStayz Rishikesh,F&B Server,TD-0004,Active,38201
+TD-0029,Ananya,Mehta,ananya.mehta29@saltstayz.test,9894222573,1990-05-10,2025-06-26,Rahul Mehta,744946397002,DKQPG1073I,Security,SaltStayz Indiranagar,HR Manager,TD-0005,Active,12731
+TD-0030,Rohan,Reddy,rohan.reddy30@saltstayz.test,9844538039,2002-08-16,2019-09-13,Vivaan Reddy,153006456186,ELRPH1110J,Management,SaltStayz Whitefield,Front Desk Executive,TD-0006,Active,16874
+TD-0031,Pooja,Iyer,pooja.iyer31@saltstayz.test,9894304002,1977-12-05,2022-07-22,Anika Iyer,585260538267,FMSPI1147K,Front Desk,SaltStayz Cyber Hub,Housekeeping Supervisor,TD-0007,Active,18117
+TD-0032,Vikram,Sinha,vikram.sinha32@saltstayz.test,9874959669,1996-01-04,2023-11-12,Riya Sinha,599735658406,GNTPJ1184L,Kitchen,SaltStayz Sohna Road,F&B Manager,TD-0008,Active,28254
+TD-0033,Arjun,Kapoor,arjun.kapoor33@saltstayz.test,9869522334,1996-03-08,2025-03-17,Divya Kapoor,839377444726,HOUPK1221M,Kitchen,SaltStayz Aerocity,F&B Manager,TD-0009,Active,16757
+TD-0034,Krishna,Singh,krishna.singh34@saltstayz.test,9859300484,1978-09-16,2019-11-15,Aadhya Singh,972948961728,IPVPL1258N,Management,SaltStayz Saket,HR Executive,TD-0010,Active,38641
+TD-0035,Aditya,Patel,aditya.patel35@saltstayz.test,9895131046,1996-01-17,2023-08-21,Pooja Patel,739276831387,JQWPM1295O,Housekeeping,SaltStayz Sector 17,F&B Manager,TD-0011,Active,23010
+TD-0036,Manish,Kapoor,manish.kapoor36@saltstayz.test,9866275185,1985-05-24,2023-03-22,Vivaan Kapoor,684411500208,KRXPN1332P,Food & Beverage,SaltStayz Sector 62,Housekeeping Supervisor,TD-0012,Active,18050
+TD-0037,Vihaan,Rao,vihaan.rao37@saltstayz.test,9884173593,1979-12-04,2021-02-20,Pooja Rao,373124192259,LSYPO1369Q,Kitchen,SaltStayz Agra Fort,HR Executive,TD-0001,Active,29454
+TD-0038,Amit,Verma,amit.verma38@saltstayz.test,9874926445,1989-08-20,2019-12-12,Ritu Verma,478282154072,MTZPP1406R,Housekeeping,SaltStayz Rishikesh,HR Manager,TD-0002,Active,13297
+TD-0039,Rajesh,Nair,rajesh.nair39@saltstayz.test,9836158153,1995-04-04,2021-08-16,Diya Nair,408822714514,NUAPQ1443S,Food & Beverage,SaltStayz Indiranagar,Front Office Manager,TD-0003,Active,21019
+TD-0040,Ritu,Sharma,ritu.sharma40@saltstayz.test,9868055391,1993-07-10,2024-02-01,Payal Sharma,719918595300,OVBPR1480T,Kitchen,SaltStayz Whitefield,HR Executive,TD-0004,Active,15873
+TD-0041,Anika,Gupta,anika.gupta41@saltstayz.test,9845392726,1979-01-25,2020-10-08,Vihaan Gupta,384912272472,PWCPS1517U,Food & Beverage,SaltStayz Cyber Hub,Front Desk Executive,TD-0005,Active,15189
+TD-0042,Aarav,Malhotra,aarav.malhotra42@saltstayz.test,9866165180,2004-05-16,2021-01-19,Anjali Malhotra,490853632520,QXDPT1554V,Food & Beverage,SaltStayz Sohna Road,F&B Server,TD-0006,Active,22874
+TD-0043,Shreya,Reddy,shreya.reddy43@saltstayz.test,9868539416,1981-05-06,2019-05-24,Anika Reddy,173259384790,RYEPU1591W,Food & Beverage,SaltStayz Aerocity,Front Desk Executive,TD-0007,Active,12403
+TD-0044,Ananya,Pillai,ananya.pillai44@saltstayz.test,9816820160,1987-12-28,2021-12-25,Riya Pillai,464476968860,SZFPV1628X,Security,SaltStayz Saket,Property Manager,TD-0008,Active,28002
+TD-0045,Suresh,Patel,suresh.patel45@saltstayz.test,9857050150,1985-01-28,2022-03-02,Kabir Patel,821790607157,TAGPW1665Y,Front Desk,SaltStayz Sector 17,F&B Server,TD-0009,Active,19757
+TD-0046,Vihaan,Nair,vihaan.nair46@saltstayz.test,9849432579,1976-02-15,2022-11-28,Shreya Nair,105364186898,UBHPX1702Z,Housekeeping,SaltStayz Sector 62,Housekeeping Attendant,TD-0010,Active,31298
+TD-0047,Kavya,Bansal,kavya.bansal47@saltstayz.test,9895204547,1979-07-26,2020-03-02,Vivaan Bansal,642371309432,VCIPY1739A,Front Desk,SaltStayz Agra Fort,HR Executive,TD-0011,Active,32219
+TD-0048,Reyansh,Iyer,reyansh.iyer48@saltstayz.test,9892187270,1994-04-14,2019-12-04,Meera Iyer,425298133725,WDJPZ1776B,Front Desk,SaltStayz Rishikesh,Front Desk Executive,TD-0012,Active,25364
+TD-0049,Saanvi,Gupta,saanvi.gupta49@saltstayz.test,9811875129,1980-11-16,2020-06-21,Pooja Gupta,909453715244,XEKPA1813C,Management,SaltStayz Indiranagar,Finance Executive,TD-0001,Active,28290
+TD-0050,Kabir,Pillai,kabir.pillai50@saltstayz.test,9822720434,1980-08-25,2020-11-17,Riya Pillai,163473480776,YFLPB1850D,Kitchen,SaltStayz Whitefield,Front Office Manager,TD-0002,Active,41548
+TD-0051,Rahul,Kapoor,rahul.kapoor51@saltstayz.test,9883482062,1991-11-13,2023-03-25,Karan Kapoor,274393064132,ZGMPC1887E,Housekeeping,SaltStayz Cyber Hub,Finance Executive,TD-0003,Active,22533
+TD-0052,Diya,Sinha,diya.sinha52@saltstayz.test,9833932295,1984-03-27,2023-04-27,Vivaan Sinha,869006945844,AHNPD1924F,Management,SaltStayz Sohna Road,F&B Server,TD-0004,Active,14243
+TD-0053,Suresh,Chopra,suresh.chopra53@saltstayz.test,9835164119,1980-08-08,2021-01-22,Nikhil Chopra,970184048893,BIOPE1961G,Housekeeping,SaltStayz Aerocity,Housekeeping Attendant,TD-0005,Active,34562
+TD-0054,Aadhya,Malhotra,aadhya.malhotra54@saltstayz.test,9858183409,2001-01-06,2023-04-06,Vihaan Malhotra,445957937091,CJPPF1998H,Kitchen,SaltStayz Saket,Front Desk Executive,TD-0006,Active,15710
+TD-0055,Saanvi,Mehta,saanvi.mehta55@saltstayz.test,9866710483,1993-08-26,2025-10-13,Shreya Mehta,952076284424,DKQPG2035I,Kitchen,SaltStayz Sector 17,Finance Executive,TD-0007,Active,20228
+TD-0056,Kavya,Singh,kavya.singh56@saltstayz.test,9854394239,1985-04-24,2019-07-23,Vihaan Singh,327302779117,ELRPH2072J,Housekeeping,SaltStayz Sector 62,Property Manager,TD-0008,Active,34145
+TD-0057,Rohan,Sharma,rohan.sharma57@saltstayz.test,9894054383,1982-06-01,2020-04-25,Neha Sharma,974704229691,FMSPI2109K,Food & Beverage,SaltStayz Agra Fort,Housekeeping Supervisor,TD-0009,Active,19028
+TD-0058,Aarav,Singh,aarav.singh58@saltstayz.test,9880686461,1977-07-09,2022-10-07,Kavya Singh,923657262767,GNTPJ2146L,Housekeeping,SaltStayz Rishikesh,HR Executive,TD-0010,Active,30855
+TD-0059,Saanvi,Reddy,saanvi.reddy59@saltstayz.test,9891740399,1987-04-20,2025-02-08,Suresh Reddy,701468109688,HOUPK2183M,Front Desk,SaltStayz Indiranagar,CHRO,TD-0011,Active,19263
+TD-0060,Sanjay,Iyer,sanjay.iyer60@saltstayz.test,9834547008,1998-04-03,2021-12-07,Shreya Iyer,137648429325,IPVPL2220N,Management,SaltStayz Whitefield,Front Desk Executive,TD-0012,Active,31034
+TD-0061,Amit,Reddy,amit.reddy61@saltstayz.test,9890618439,1976-07-19,2021-10-01,Manish Reddy,706260907906,JQWPM2257O,Front Desk,SaltStayz Cyber Hub,F&B Server,TD-0001,Active,13442
+TD-0062,Aadhya,Patel,aadhya.patel62@saltstayz.test,9848854982,1997-07-21,2020-08-22,Vihaan Patel,353016554727,KRXPN2294P,Kitchen,SaltStayz Sohna Road,Housekeeping Attendant,TD-0002,Active,29534
+TD-0063,Payal,Verma,payal.verma63@saltstayz.test,9860109440,2000-03-21,2023-01-19,Rahul Verma,837187397596,LSYPO2331Q,Housekeeping,SaltStayz Aerocity,Property Manager,TD-0003,Active,39443
+TD-0064,Ishaan,Chopra,ishaan.chopra64@saltstayz.test,9857881354,1994-06-11,2020-03-16,Aadhya Chopra,986837803153,MTZPP2368R,Management,SaltStayz Saket,Front Desk Executive,TD-0004,Active,32088
+TD-0065,Swati,Sharma,swati.sharma65@saltstayz.test,9891212633,2000-03-09,2021-04-12,Nikhil Sharma,481852635485,NUAPQ2405S,Security,SaltStayz Sector 17,F&B Manager,TD-0005,Active,14556
+TD-0066,Diya,Sharma,diya.sharma66@saltstayz.test,9820641625,2002-10-26,2025-08-16,Diya Sharma,832067389157,OVBPR2442T,Food & Beverage,SaltStayz Sector 62,HR Executive,TD-0006,Active,12276
+TD-0067,Manish,Singh,manish.singh67@saltstayz.test,9885780718,2000-10-09,2025-12-07,Karan Singh,230181545531,PWCPS2479U,Kitchen,SaltStayz Agra Fort,Housekeeping Supervisor,TD-0007,Active,37049
+TD-0068,Ritu,Chopra,ritu.chopra68@saltstayz.test,9863194098,1978-12-27,2019-07-19,Pooja Chopra,234096579323,QXDPT2516V,Housekeeping,SaltStayz Rishikesh,HR Executive,TD-0008,Active,26056
+TD-0069,Arjun,Pillai,arjun.pillai69@saltstayz.test,9828602814,1986-02-17,2023-08-16,Nisha Pillai,265980229643,RYEPU2553W,Housekeeping,SaltStayz Indiranagar,Property Manager,TD-0009,Active,32165
+TD-0070,Rajesh,Sinha,rajesh.sinha70@saltstayz.test,9841604490,1978-07-10,2019-05-11,Myra Sinha,988436745479,SZFPV2590X,Kitchen,SaltStayz Whitefield,Finance Executive,TD-0010,Active,30800
+TD-0071,Aadhya,Chopra,aadhya.chopra71@saltstayz.test,9858505943,1994-09-01,2020-04-24,Payal Chopra,486890702228,TAGPW2627Y,Housekeeping,SaltStayz Cyber Hub,Finance Executive,TD-0011,Active,36584
+TD-0072,Deepak,Chopra,deepak.chopra72@saltstayz.test,9893376627,1999-04-21,2025-12-13,Aadhya Chopra,164989104471,UBHPX2664Z,Kitchen,SaltStayz Sohna Road,Front Desk Executive,TD-0012,Active,27162
+TD-0073,Diya,Singh,diya.singh73@saltstayz.test,9873453755,2002-10-18,2022-05-10,Ananya Singh,543944002455,VCIPY2701A,Front Desk,SaltStayz Aerocity,F&B Manager,TD-0001,Active,28274
+TD-0074,Vihaan,Verma,vihaan.verma74@saltstayz.test,9872347877,2002-01-08,2019-11-20,Krishna Verma,314975614077,WDJPZ2738B,Kitchen,SaltStayz Saket,Housekeeping Attendant,TD-0002,Active,12873
+TD-0075,Saanvi,Iyer,saanvi.iyer75@saltstayz.test,9863681735,1987-12-15,2024-12-06,Aditya Iyer,233692918810,XEKPA2775C,Housekeeping,SaltStayz Sector 17,Front Office Manager,TD-0003,Active,17894
+TD-0076,Payal,Kapoor,payal.kapoor76@saltstayz.test,9872100399,2001-12-04,2024-03-19,Krishna Kapoor,498374351928,YFLPB2812D,Front Desk,SaltStayz Sector 62,Housekeeping Attendant,TD-0004,Active,12784
+TD-0077,Karan,Iyer,karan.iyer77@saltstayz.test,9863814351,1993-07-17,2020-01-11,Myra Iyer,848630546568,ZGMPC2849E,Housekeeping,SaltStayz Agra Fort,F&B Server,TD-0005,Active,23306
+TD-0078,Nisha,Iyer,nisha.iyer78@saltstayz.test,9858199392,1986-02-25,2020-03-26,Rohan Iyer,736173090594,AHNPD2886F,Management,SaltStayz Rishikesh,Property Manager,TD-0006,Active,21612
+TD-0079,Saanvi,Iyer,saanvi.iyer79@saltstayz.test,9891747978,1995-01-08,2020-01-25,Nisha Iyer,162961371010,BIOPE2923G,Front Desk,SaltStayz Indiranagar,F&B Server,TD-0007,Active,22971
+TD-0080,Swati,Gupta,swati.gupta80@saltstayz.test,9811708637,1991-01-10,2025-08-15,Anika Gupta,636937362467,CJPPF2960H,Kitchen,SaltStayz Whitefield,Housekeeping Supervisor,TD-0008,Active,20732
+TD-0081,Shreya,Reddy,shreya.reddy81@saltstayz.test,9835250874,1989-11-18,2023-10-14,Divya Reddy,504609979735,DKQPG2997I,Front Desk,SaltStayz Cyber Hub,F&B Server,TD-0009,Active,19322
+TD-0082,Nikhil,Sinha,nikhil.sinha82@saltstayz.test,9855872533,1976-04-13,2022-07-28,Rohan Sinha,490845701773,ELRPH3034J,Management,SaltStayz Sohna Road,Finance Executive,TD-0010,Active,40444
+TD-0083,Shreya,Nair,shreya.nair83@saltstayz.test,9848177818,1980-07-02,2022-09-12,Riya Nair,505258183320,FMSPI3071K,Front Desk,SaltStayz Aerocity,CHRO,TD-0011,Active,13905
+TD-0084,Sanjay,Gupta,sanjay.gupta84@saltstayz.test,9858149733,1990-04-23,2022-06-25,Myra Gupta,620856125722,GNTPJ3108L,Food & Beverage,SaltStayz Saket,Front Office Manager,TD-0012,Active,29397
+TD-0085,Shreya,Sinha,shreya.sinha85@saltstayz.test,9850669586,1977-11-10,2020-05-13,Aadhya Sinha,425747731886,HOUPK3145M,Kitchen,SaltStayz Sector 17,Housekeeping Supervisor,TD-0001,Active,24445
+TD-0086,Meera,Kapoor,meera.kapoor86@saltstayz.test,9845382431,1983-08-13,2025-01-27,Riya Kapoor,150605074875,IPVPL3182N,Kitchen,SaltStayz Sector 62,Front Desk Executive,TD-0002,Active,21294
+TD-0087,Anjali,Reddy,anjali.reddy87@saltstayz.test,9856893191,1979-07-24,2021-07-05,Anjali Reddy,924147366895,JQWPM3219O,Housekeeping,SaltStayz Agra Fort,CHRO,TD-0003,Active,40946
+TD-0088,Ishaan,Pillai,ishaan.pillai88@saltstayz.test,9845214934,1976-01-01,2020-10-04,Ananya Pillai,565843981737,KRXPN3256P,Security,SaltStayz Rishikesh,HR Executive,TD-0004,Active,33791
+TD-0089,Karan,Joshi,karan.joshi89@saltstayz.test,9883482169,2001-09-08,2025-07-08,Aarav Joshi,826202004053,LSYPO3293Q,Housekeeping,SaltStayz Indiranagar,CHRO,TD-0005,Active,39050
+TD-0090,Swati,Sharma,swati.sharma90@saltstayz.test,9839005364,1995-08-28,2022-10-28,Karan Sharma,650030541466,MTZPP3330R,Kitchen,SaltStayz Whitefield,Housekeeping Supervisor,TD-0006,Active,14905
+TD-0091,Shreya,Nair,shreya.nair91@saltstayz.test,9893805408,1985-04-24,2020-05-06,Kabir Nair,874947953526,NUAPQ3367S,Security,SaltStayz Cyber Hub,Finance Executive,TD-0007,Active,26236
+TD-0092,Anjali,Verma,anjali.verma92@saltstayz.test,9890339838,2004-05-05,2025-06-06,Neha Verma,958183882851,OVBPR3404T,Front Desk,SaltStayz Sohna Road,Housekeeping Supervisor,TD-0008,Active,41210
+TD-0093,Riya,Kapoor,riya.kapoor93@saltstayz.test,9889282286,2001-01-05,2023-01-26,Priya Kapoor,473790555982,PWCPS3441U,Food & Beverage,SaltStayz Aerocity,F&B Manager,TD-0009,Active,32806
+TD-0094,Deepak,Singh,deepak.singh94@saltstayz.test,9835440890,1982-03-06,2019-02-16,Priya Singh,474266831646,QXDPT3478V,Security,SaltStayz Saket,Front Desk Executive,TD-0010,Active,21172
+TD-0095,Riya,Verma,riya.verma95@saltstayz.test,9864412235,1996-08-20,2025-02-08,Priya Verma,760170191875,RYEPU3515W,Management,SaltStayz Sector 17,CHRO,TD-0011,Active,16723
+TD-0096,Rajesh,Iyer,rajesh.iyer96@saltstayz.test,9853707751,1994-04-14,2025-09-20,Reyansh Iyer,817624075198,SZFPV3552X,Front Desk,SaltStayz Sector 62,Finance Executive,TD-0012,Active,15171
+TD-0097,Shreya,Menon,shreya.menon97@saltstayz.test,9891604634,1984-05-14,2019-09-16,Anjali Menon,359007128793,TAGPW3589Y,Security,SaltStayz Agra Fort,CHRO,TD-0001,Active,35554
+TD-0098,Kavya,Verma,kavya.verma98@saltstayz.test,9844636057,1998-11-14,2023-01-05,Vikram Verma,167249350878,UBHPX3626Z,Food & Beverage,SaltStayz Rishikesh,CHRO,TD-0002,Active,22431
+TD-0099,Nisha,Gupta,nisha.gupta99@saltstayz.test,9845775888,1998-02-12,2019-03-26,Swati Gupta,408303204574,VCIPY3663A,Housekeeping,SaltStayz Indiranagar,F&B Manager,TD-0003,Active,23638
+TD-0100,Aarav,Singh,aarav.singh100@saltstayz.test,9865344812,2001-06-27,2023-02-14,Nikhil Singh,985099266516,WDJPZ3700B,Security,SaltStayz Whitefield,Finance Executive,TD-0004,Active,19181
+TD-0101,Pooja,Sinha,pooja.sinha101@saltstayz.test,9893940340,1987-07-13,2020-05-21,Anjali Sinha,796785403066,XEKPA3737C,Front Desk,SaltStayz Cyber Hub,Housekeeping Supervisor,TD-0005,Active,23607
+TD-0102,Amit,Nair,amit.nair102@saltstayz.test,9866323991,1983-07-22,2024-08-07,Neha Nair,849650036403,YFLPB3774D,Housekeeping,SaltStayz Sohna Road,F&B Manager,TD-0006,Active,14697
+TD-0103,Sneha,Patel,sneha.patel103@saltstayz.test,9849435469,1981-05-04,2024-04-22,Divya Patel,617211823421,ZGMPC3811E,Management,SaltStayz Aerocity,F&B Server,TD-0007,Active,38208
+TD-0104,Shreya,Iyer,shreya.iyer104@saltstayz.test,9845748271,2004-03-17,2020-10-23,Nisha Iyer,628552274382,AHNPD3848F,Housekeeping,SaltStayz Saket,HR Executive,TD-0008,Active,18270
+TD-0105,Arjun,Agarwal,arjun.agarwal105@saltstayz.test,9859732813,1980-08-20,2025-05-18,Vikram Agarwal,393217277759,BIOPE3885G,Food & Beverage,SaltStayz Sector 17,F&B Server,TD-0009,Active,20461
+TD-0106,Anjali,Gupta,anjali.gupta106@saltstayz.test,9833729433,2002-06-23,2021-10-07,Rahul Gupta,946892230282,CJPPF3922H,Management,SaltStayz Sector 62,Front Office Manager,TD-0010,Active,32918
+TD-0107,Kabir,Rao,kabir.rao107@saltstayz.test,9891985328,1999-02-10,2024-12-06,Sneha Rao,634118367708,DKQPG3959I,Housekeeping,SaltStayz Agra Fort,Housekeeping Attendant,TD-0011,Active,16516
+TD-0108,Amit,Chopra,amit.chopra108@saltstayz.test,9891572604,1999-05-14,2021-06-03,Pooja Chopra,795750612905,ELRPH3996J,Front Desk,SaltStayz Rishikesh,Front Desk Executive,TD-0012,Active,25033
+TD-0109,Vikram,Kapoor,vikram.kapoor109@saltstayz.test,9852098881,1990-08-22,2024-12-17,Sanjay Kapoor,756151508516,FMSPI4033K,Management,SaltStayz Indiranagar,Housekeeping Attendant,TD-0001,Active,36735
+TD-0110,Deepak,Agarwal,deepak.agarwal110@saltstayz.test,9827496028,1988-09-12,2021-08-27,Vikram Agarwal,572931326786,GNTPJ4070L,Management,SaltStayz Whitefield,F&B Manager,TD-0002,Active,37744
+TD-0111,Swati,Chopra,swati.chopra111@saltstayz.test,9862983076,1984-02-28,2023-12-11,Krishna Chopra,656938340701,HOUPK4107M,Management,SaltStayz Cyber Hub,Front Desk Executive,TD-0003,Active,12932
+TD-0112,Rajesh,Verma,rajesh.verma112@saltstayz.test,9835983438,1992-01-17,2020-11-18,Kavya Verma,740469717024,IPVPL4144N,Security,SaltStayz Sohna Road,HR Executive,TD-0004,Active,32960
+TD-0113,Vivaan,Sharma,vivaan.sharma113@saltstayz.test,9868073746,1985-07-02,2022-07-11,Saanvi Sharma,643590639973,JQWPM4181O,Front Desk,SaltStayz Aerocity,Finance Executive,TD-0005,Active,26383
+TD-0114,Sneha,Rao,sneha.rao114@saltstayz.test,9856712526,1975-05-27,2024-02-27,Neha Rao,383448724285,KRXPN4218P,Management,SaltStayz Saket,Housekeeping Supervisor,TD-0006,Active,41430
+TD-0115,Ishaan,Singh,ishaan.singh115@saltstayz.test,9892403819,1988-05-01,2021-12-05,Rahul Singh,368030937178,LSYPO4255Q,Security,SaltStayz Sector 17,Front Office Manager,TD-0007,Active,41592
+TD-0116,Vivaan,Bansal,vivaan.bansal116@saltstayz.test,9825833100,1978-01-24,2019-09-12,Vivaan Bansal,578319221059,MTZPP4292R,Housekeeping,SaltStayz Sector 62,Finance Executive,TD-0008,Active,29600
+TD-0117,Kavya,Sharma,kavya.sharma117@saltstayz.test,9891160116,1985-10-07,2020-08-09,Ritu Sharma,568562803533,NUAPQ4329S,Management,SaltStayz Agra Fort,Front Desk Executive,TD-0009,Active,16176
+TD-0118,Priya,Menon,priya.menon118@saltstayz.test,9829283092,1982-03-25,2022-10-24,Anjali Menon,263190456293,OVBPR4366T,Security,SaltStayz Rishikesh,CHRO,TD-0010,Active,14943
+TD-0119,Vikram,Sinha,vikram.sinha119@saltstayz.test,9844915028,1996-05-06,2021-07-05,Ananya Sinha,924568702746,PWCPS4403U,Security,SaltStayz Indiranagar,Housekeeping Supervisor,TD-0011,Active,23852
+TD-0120,Pooja,Kumar,pooja.kumar120@saltstayz.test,9899323308,1996-05-22,2023-04-08,Vihaan Kumar,489926475426,QXDPT4440V,Kitchen,SaltStayz Whitefield,Housekeeping Attendant,TD-0012,Active,28336
+TD-0121,Payal,Malhotra,payal.malhotra121@saltstayz.test,9831159010,2001-09-26,2023-10-18,Arjun Malhotra,655168715794,RYEPU4477W,Kitchen,SaltStayz Cyber Hub,Housekeeping Supervisor,TD-0001,Active,16901
+TD-0122,Priya,Sinha,priya.sinha122@saltstayz.test,9885405528,1992-09-26,2025-01-26,Vihaan Sinha,823909095465,SZFPV4514X,Kitchen,SaltStayz Sohna Road,Finance Executive,TD-0002,Active,36485
+TD-0123,Pooja,Sinha,pooja.sinha123@saltstayz.test,9825460135,2003-02-20,2019-06-17,Aditya Sinha,470925040403,TAGPW4551Y,Kitchen,SaltStayz Aerocity,HR Manager,TD-0003,Active,33581
+TD-0124,Sneha,Iyer,sneha.iyer124@saltstayz.test,9882012854,1985-04-26,2023-11-15,Arjun Iyer,636980188335,UBHPX4588Z,Front Desk,SaltStayz Saket,Finance Executive,TD-0004,Active,35953
+TD-0125,Anika,Sharma,anika.sharma125@saltstayz.test,9835179698,1975-12-22,2022-06-14,Diya Sharma,458167278557,VCIPY4625A,Security,SaltStayz Sector 17,Front Desk Executive,TD-0005,Active,14966
+TD-0126,Ritu,Joshi,ritu.joshi126@saltstayz.test,9872872790,1991-12-28,2019-10-23,Vikram Joshi,895805667038,WDJPZ4662B,Security,SaltStayz Sector 62,HR Manager,TD-0006,Active,34751
+TD-0127,Vikram,Nair,vikram.nair127@saltstayz.test,9872123927,1987-02-16,2019-01-05,Sneha Nair,841067208745,XEKPA4699C,Food & Beverage,SaltStayz Agra Fort,F&B Server,TD-0007,Active,41630
+TD-0128,Reyansh,Sinha,reyansh.sinha128@saltstayz.test,9853889439,1987-01-28,2020-12-27,Manish Sinha,486453927331,YFLPB4736D,Food & Beverage,SaltStayz Rishikesh,HR Manager,TD-0008,Active,13006
+TD-0129,Kabir,Verma,kabir.verma129@saltstayz.test,9826335681,1986-10-09,2024-02-14,Myra Verma,100187718588,ZGMPC4773E,Housekeeping,SaltStayz Indiranagar,Housekeeping Attendant,TD-0009,Active,33525
+TD-0130,Pooja,Rao,pooja.rao130@saltstayz.test,9877385142,1975-08-27,2022-08-11,Anjali Rao,216106928861,AHNPD4810F,Front Desk,SaltStayz Whitefield,Front Office Manager,TD-0010,Active,19953
+TD-0131,Diya,Bansal,diya.bansal131@saltstayz.test,9857751472,1998-06-14,2022-07-28,Ritu Bansal,521077557257,BIOPE4847G,Kitchen,SaltStayz Cyber Hub,Housekeeping Attendant,TD-0011,Active,25655
+TD-0132,Myra,Iyer,myra.iyer132@saltstayz.test,9815907468,1984-02-09,2021-01-03,Ananya Iyer,450406360626,CJPPF4884H,Kitchen,SaltStayz Sohna Road,F&B Manager,TD-0012,Active,34226
+TD-0133,Rahul,Bansal,rahul.bansal133@saltstayz.test,9817447710,1989-09-13,2024-04-18,Deepak Bansal,972054117708,DKQPG4921I,Front Desk,SaltStayz Aerocity,Finance Executive,TD-0001,Active,26043
+TD-0134,Arjun,Agarwal,arjun.agarwal134@saltstayz.test,9858832365,1996-10-22,2022-01-12,Shreya Agarwal,569474187353,ELRPH4958J,Front Desk,SaltStayz Saket,Housekeeping Supervisor,TD-0002,Active,33624
+TD-0135,Payal,Menon,payal.menon135@saltstayz.test,9840563803,1991-06-12,2023-10-05,Sanjay Menon,617765808757,FMSPI4995K,Security,SaltStayz Sector 17,Property Manager,TD-0003,Active,39076
+TD-0136,Neha,Kumar,neha.kumar136@saltstayz.test,9888464647,1994-08-03,2019-07-15,Sanjay Kumar,359295371756,GNTPJ5032L,Kitchen,SaltStayz Sector 62,Front Desk Executive,TD-0004,Active,18580
+TD-0137,Priya,Kumar,priya.kumar137@saltstayz.test,9857084644,1997-11-24,2025-02-16,Vivaan Kumar,793833548435,HOUPK5069M,Housekeeping,SaltStayz Nowhere,Front Desk Executive,TD-0005,Active,25823
+TD-0138,Vivaan,Joshi,vivaan.joshi138@saltstayz.test,9846059961,1984-11-14,2019-08-24,Karan Joshi,359391999593,IPVPL5106N,Kitchen,SaltStayz Rishikesh,HR Executive,TD-0006,Active,185000
+TD-0139,Karan,Pillai,karan.pillai139@saltstayz.test,9817984310,2000-02-15,2025-04-22,Nikhil Pillai,756747270305,JQWPM5143O,Management,SaltStayz Indiranagar,F&B Manager,TD-0007,Active,9500
+TD-0140,Swati,Menon,swati.menon140@saltstayz.test,9851733825,2004-01-21,2025-08-08,Ishaan Menon,427236755192,KRXPN5180P,Food & Beverage,SaltStayz Whitefield,F&B Server,TD-0008,Active,21719
+TD-0141,Suresh,Pillai,suresh.pillai141@saltstayz.test,9811627911,1979-02-08,2019-02-24,Deepak Pillai,530977990338,LSYPO5217Q,Housekeeping,SaltStayz Cyber Hub,CHRO,TD-0009,Active,37366
+TD-0142,Aadhya,Malhotra,aadhya.malhotra142@saltstayz.test,9898769744,1993-04-15,2026-07-21,Riya Malhotra,681070254417,MTZPP5254R,Food & Beverage,SaltStayz Sohna Road,Finance Executive,TD-0010,Active,25952
+TD-0143,Pooja,Malhotra,pooja.malhotra143@saltstayz.test,9820604900,1997-07-09,2026-06-12,Kavya Malhotra,234973139897,NUAPQ5291S,Kitchen,SaltStayz Aerocity,CHRO,TD-0011,Active,26077
+TD-0144,Meera,Singh,meera.singh144@saltstayz.test,9833128809,1979-01-28,2026-05-16,Sneha Singh,598659810959,OVBPR5328T,Front Desk,SaltStayz Saket,Finance Executive,TD-0012,Active,13455
+TD-0145,Ritu,Gupta,ritu.gupta145@saltstayz.test,9829738855,1992-04-24,2022-02-18,Sanjay Gupta,248778492328,PWCPS5365U,Food & Beverage,SaltStayz Sector 17,Front Office Manager,TD-0001,Active,15001
+TD-0146,Manish,Bansal,manish.bansal146@saltstayz.test,9850563128,1978-11-02,2022-03-15,Divya Bansal,727698641363,QXDPT5402V,Food & Beverage,SaltStayz Sector 62,F&B Server,TD-0002,Active,15000
+TD-0147,Kabir,Gupta,kabir.gupta147@saltstayz.test,9898198984,1988-11-20,2023-02-14,Kabir Gupta,927876355755,RYEPU5439W,Security,SaltStayz Agra Fort,HR Manager,TD-0003,Active,14999
+TD-0148,Reyansh,Pillai,reyansh.pillai148@saltstayz.test,9895965000,2002-12-15,2019-09-07,Aditya Pillai,896943593584,SZFPV5476X,Front Desk,SaltStayz Rishikesh,CHRO,TD-0004,Active,21001
+TD-0149,Nikhil,Rao,nikhil.rao149@saltstayz.test,9830889052,2002-05-11,2020-09-14,Shreya Rao,984779982850,TAGPW5513Y,Kitchen,SaltStayz Indiranagar,CHRO,TD-0005,Active,21000
+TD-0150,Amit,Rao,amit.rao150@saltstayz.test,9828253612,1993-12-02,2024-12-19,Kavya Rao,365939799649,UBHPX5550Z,Front Desk,SaltStayz Whitefield,Front Office Manager,TD-0006,Active,20999
