@@ -101,13 +101,20 @@ export async function getUser(id: number) {
   return user;
 }
 
+/**
+ * Login emails are stored lowercase — Better Auth resolves an account by comparing `users.email`
+ * to the lowercased input, so any other casing is an account nothing can find. See migration 037.
+ */
+const normaliseEmail = (email: string) => email.trim().toLowerCase();
+
 export async function createUser(data: {
   email: string;
   password: string;
   role_id: number;
   employee_id?: number | null;
 }) {
-  const existing = await db('users').where('email', data.email).first();
+  const email = normaliseEmail(data.email);
+  const existing = await db('users').where('email', email).first();
   if (existing) throw new ValidationError('A user with this email already exists');
 
   if (data.employee_id) {
@@ -117,7 +124,7 @@ export async function createUser(data: {
 
   const hash = await bcrypt.hash(data.password, 12);
   const [{ id }] = await db('users').insert({
-    email: data.email,
+    email,
     password_hash: hash, // legacy mirror; auth reads the account credential below
     role_id: data.role_id,
     employee_id: data.employee_id || null,
@@ -139,8 +146,9 @@ export async function updateUser(id: number, data: {
   const user = await db('users').where('id', id).first();
   if (!user) throw new NotFoundError('User');
 
-  if (data.email && data.email !== user.email) {
-    const existing = await db('users').where('email', data.email).whereNot('id', id).first();
+  const nextEmail = data.email === undefined ? undefined : normaliseEmail(data.email);
+  if (nextEmail && nextEmail !== user.email) {
+    const existing = await db('users').where('email', nextEmail).whereNot('id', id).first();
     if (existing) throw new ValidationError('A user with this email already exists');
   }
 
@@ -150,7 +158,7 @@ export async function updateUser(id: number, data: {
   }
 
   const updates: Record<string, any> = { updated_at: db.fn.now() };
-  if (data.email !== undefined) updates.email = data.email;
+  if (nextEmail !== undefined) updates.email = nextEmail;
   if (data.role_id !== undefined) updates.role_id = data.role_id;
   if (data.employee_id !== undefined) updates.employee_id = data.employee_id || null;
   if (data.is_active !== undefined) updates.is_active = data.is_active;

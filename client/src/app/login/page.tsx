@@ -1,8 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import Link from 'next/link';
+import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/lib/auth';
 import { Loader2 } from 'lucide-react';
+import api from '@/lib/api';
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -10,6 +13,24 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [justReset, setJustReset] = useState(false);
+
+  /**
+   * Whether to offer the reset link at all. The server answers false while no mail provider is
+   * configured, because a "check your email" that can never arrive is worse than no link: the user
+   * waits, then calls HR anyway, having been told the system was handling it.
+   */
+  const { data: capabilities } = useQuery({
+    queryKey: ['auth-capabilities'],
+    queryFn: () => api.get('/password-reset/capabilities').then((r) => r.data),
+    staleTime: Infinity,
+    retry: false,
+  });
+
+  // Read from location rather than useSearchParams so this page needs no Suspense boundary.
+  useEffect(() => {
+    setJustReset(new URLSearchParams(window.location.search).get('reset') === '1');
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -38,6 +59,12 @@ export default function LoginPage() {
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-5">
+            {justReset && !error && (
+              <div className="bg-green-50 text-green-700 text-sm p-3 rounded-lg border border-green-200">
+                Your password has been updated. Sign in with your new password.
+              </div>
+            )}
+
             {error && (
               <div className="bg-red-50 text-danger text-sm p-3 rounded-lg border border-red-200">
                 {error}
@@ -60,9 +87,16 @@ export default function LoginPage() {
             </div>
 
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-foreground mb-1.5">
-                Password
-              </label>
+              <div className="flex items-baseline justify-between mb-1.5">
+                <label htmlFor="password" className="block text-sm font-medium text-foreground">
+                  Password
+                </label>
+                {capabilities?.password_reset && (
+                  <Link href="/forgot-password" className="text-sm text-primary hover:underline">
+                    Forgot password?
+                  </Link>
+                )}
+              </div>
               <input
                 id="password"
                 type="password"

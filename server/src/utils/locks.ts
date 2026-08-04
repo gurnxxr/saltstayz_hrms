@@ -36,6 +36,14 @@ export const LOCK = {
    * one this lock was added for. Do not read this constant as "the month is serialised".
    */
   PAYROLL_MONTH: 811006,
+  /**
+   * One account's password-reset budget (issue count and failure count, keyed by user id).
+   *
+   * Without it two simultaneous requests each read the state from before the other and both issue
+   * a code — which is exactly the multiplier the per-account window exists to stop, since every
+   * fresh code hands the attacker a new set of guesses.
+   */
+  PASSWORD_RESET: 811007,
 } as const;
 
 /**
