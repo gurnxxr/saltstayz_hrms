@@ -100,8 +100,9 @@ password?" link and HR resets passwords from the admin screens, as today.
 
 > Before turning it on, add Resend's **SPF and DKIM records to `saltstayz.com` DNS** and verify the
 > domain in Resend. Without them the codes go to spam, which is worse than the link not existing:
-> people will believe the reset is broken and stop trying. `OTP_PEPPER` is required in production
-> once `MAIL_PROVIDER` is anything but `none` — the server refuses to start otherwise.
+> people will believe the reset is broken and stop trying. `OTP_PEPPER` is required whenever
+> `MAIL_PROVIDER=resend` in **any** environment, staging included — the server refuses to start
+> without it, because its fallback is a literal in the repository.
 
 > ⚠️ **`CLIENT_URL` must be the stable domain**, not the long per-deployment URL Vercel shows
 > on a build page (`...-nx303osa6-....vercel.app`). Those change on every deploy. Using one

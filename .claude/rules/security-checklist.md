@@ -22,15 +22,33 @@ people who need it are precisely the ones who cannot sign in. It is the only una
 state-changing surface in the application, so it carries its own controls instead — check these
 whenever it is touched:
 
-- **Says nothing.** Every `POST /request` returns the same 202 and the same sentence; every failure
-  of `POST /confirm` returns the same 400. Unknown address, deactivated leaver, wrong code, expired
-  code, attempt-capped code and weak password are indistinguishable from outside. This is what stops
-  it being a membership oracle for a staff directory.
-- **Two budgets.** A per-IP limiter in `app.ts` (10 / 15 min, shared across both endpoints) and the
-  per-ACCOUNT budget in `passwordResetThrottle.service.ts` — 1/min, 3 per 15 min, 15 failures per
-  hour. The account budget is the one that binds; an IP limit is worth little to someone with more
-  than one address. Better Auth's own five-attempts-per-code is not a bound on its own, because
-  asking for a new code resets it.
+- **Says nothing, and takes the same time to say it.** Every `POST /request` returns the same 202
+  and the same sentence; every failure of `POST /confirm` returns the same 400 — schema failures
+  included, which is why `parse` takes a uniform message on that endpoint. Unknown address,
+  deactivated leaver, wrong code, expired code, attempt-capped code and weak password are
+  indistinguishable from outside.
+  *Wording alone is not enough.* `/request` answers BEFORE it looks anything up (the work is
+  detached; `whenRequestSettled` exists only so tests can await it), because otherwise a registered
+  address cost a locked transaction plus a round-trip to the mail provider while an unknown one cost
+  one indexed `SELECT` — a hundredfold gap that one probe could read. `/confirm` must return a real
+  verdict, so it holds every response to a 250ms floor instead.
+- **Three budgets.** In `app.ts`: a per-ADDRESS limiter (10 / 15 min, keyed on IP + a hash of the
+  email, shared across both endpoints) so colleagues on one office connection cannot spend each
+  other's allowance, behind a per-CONNECTION ceiling (400 / 15 min) that no real office reaches but
+  that stops one machine mailing the whole staff directory. Then the per-ACCOUNT budget in
+  `passwordResetThrottle.service.ts` — 1/min, 3 codes per 15 min, 15 failures per SLIDING hour
+  (two-bucket, so timing a burst against the boundary does not hand back a second full budget).
+  The account budget is the one that binds. Better Auth's own five-attempts-per-code is not a bound
+  on its own, because asking for a new code resets it.
+- **A failure is only charged against a live code.** Otherwise the budget is a weapon: anyone who
+  knew a colleague's address could post fifteen junk codes and deny that person recovery for an
+  hour, repeatedly.
+- **One canonical spelling per path.** Express matches the raw pathname; Better Auth re-parses with
+  the WHATWG parser, which decodes `%2e` and collapses dot segments. Guards mounted on Express's
+  view were therefore bypassable — `/api/v1/auth/%2e/email-otp/reset-password` reached the plugin's
+  own reset handler, and `/api/v1/password-reset//confirm` slipped the rate limiter. `isAmbiguousPath`
+  refuses dot segments, empty inner segments and encoded separators once, ahead of all routing.
+  **Do not add a guard that normalises for itself instead** — that is how this happened.
 - **Codes are never stored recoverably.** `storeOTP.hash` in `config/auth.ts` is an HMAC keyed on
   `OTP_PEPPER`. The plugin's own `"hashed"` option is an unsalted SHA-256 — six digits is a
   one-million-entry rainbow table — and bcrypt cannot be used here because verification re-hashes

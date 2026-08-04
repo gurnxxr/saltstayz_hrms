@@ -291,6 +291,10 @@ describe.skipIf(!ON_THROWAWAY)('password reset', () => {
     // it into a denial-of-service: anyone who knew a colleague's address could spend it and lock
     // that person out of recovery for an hour.
     for (let i = 0; i < 15; i += 1) {
+      // Clear the per-address budget each time: that limiter would refuse the 11th probe, which is
+      // it working correctly but would stop this case reaching the 15-failure account cap it is
+      // actually about.
+      rateStore.resetAll();
       await req().post('/api/v1/password-reset/confirm')
         .send({ email: EMAIL, otp: '000000', newPassword: NEW_PASSWORD });
     }
@@ -305,20 +309,49 @@ describe.skipIf(!ON_THROWAWAY)('password reset', () => {
     expect(lastSentMail()?.to).toBe(EMAIL);
   });
 
-  it('cuts off one address after ten attempts, whatever it asks about', async () => {
-    // The outer envelope. It is per-IP and therefore weak on its own — anyone with a second address
-    // walks around it, which is why the per-account budget above exists — but it is what stops one
-    // machine grinding through the endpoint, and it is off by one config line, so it gets a test.
+  it('limits per address, so one person cannot use up a colleague\'s allowance', async () => {
+    // Everyone at a hotel shares one internet connection. Keyed on IP alone, a couple of people
+    // fumbling their code spent the allowance the rest of the property needed — so the budget a
+    // person actually feels is keyed on their own address.
     for (let i = 0; i < 10; i += 1) {
       const res = await req().post('/api/v1/password-reset/request').send({ email: UNKNOWN });
       expect(res.status, `attempt ${i + 1}`).toBe(202);
     }
     const blocked = await req().post('/api/v1/password-reset/request').send({ email: UNKNOWN });
     expect(blocked.status).toBe(429);
-    // And it covers the confirm endpoint from the same budget, not a separate one.
+
+    // Same connection, different address: unaffected. This is the whole point of the change.
+    const colleague = await req().post('/api/v1/password-reset/request')
+      .send({ email: 'someone-else@saltstayz.test' });
+    expect(colleague.status).toBe(202);
+
+    // One address's budget covers BOTH endpoints — otherwise an attacker gets two bites per address.
     const confirm = await req().post('/api/v1/password-reset/confirm')
-      .send({ email: EMAIL, otp: '123456', newPassword: NEW_PASSWORD });
+      .send({ email: UNKNOWN, otp: '123456', newPassword: NEW_PASSWORD });
     expect(confirm.status).toBe(429);
+  });
+
+  it('takes the same time to refuse a real account as an unknown one', async () => {
+    // `/request` closed its timing gap by answering before doing any account work. `/confirm` has
+    // to return a real verdict, so it gets a floor instead: an unknown address throws after one
+    // query while a real one runs a Better Auth verification and a transaction, and that difference
+    // is a second, quieter way to ask whether someone works here.
+    const time = async (email: string) => {
+      const started = Date.now();
+      const res = await req().post('/api/v1/password-reset/confirm')
+        .send({ email, otp: '000000', newPassword: NEW_PASSWORD });
+      expect(res.status).toBe(400);
+      return Date.now() - started;
+    };
+    await askForCode(EMAIL); // give the real account a live code, so it takes its slowest path
+    const real = await time(EMAIL);
+    const unknown = await time(UNKNOWN);
+
+    // Asserting on the floor rather than on the gap between them: a direct comparison is flaky on a
+    // loaded CI box, whereas without the floor the unknown path returns in single-digit
+    // milliseconds and fails this outright.
+    expect(unknown, `unknown address answered in ${unknown}ms`).toBeGreaterThanOrEqual(240);
+    expect(real, `real account answered in ${real}ms`).toBeGreaterThanOrEqual(240);
   });
 
   // ─── One canonical spelling per path ───
@@ -373,6 +406,38 @@ describe.skipIf(!ON_THROWAWAY)('password reset', () => {
     expect(await db('users').whereRaw("lower(email) = 'intruder@nowhere.test'").first()).toBeUndefined();
   });
 
+  it('caps the body on the Better Auth routes, which express.json cannot reach', async () => {
+    // Better Auth parses its own bodies, so it is mounted ahead of express.json({ limit: '10kb' }).
+    // The side effect was that every /api/v1/auth/* route took an unbounded unauthenticated
+    // payload while the rest of the API was capped.
+    const huge = { email: EMAIL, password: 'x'.repeat(11 * 1024) };
+    expect((await rawPost('/api/v1/auth/sign-in/email', huge)).status).toBe(413);
+    // An ordinary body is untouched — 401/400 from Better Auth is fine here, anything but 413.
+    expect((await rawPost('/api/v1/auth/sign-in/email', { email: EMAIL, password: 'nope' })).status)
+      .not.toBe(413);
+  });
+
+  it('stores login emails lowercase, so Better Auth can find the account', async () => {
+    // Better Auth resolves an account by comparing users.email to the LOWERCASED input, so a row
+    // stored with any uppercase is an account nothing can find — and reset silently did nothing
+    // for that person while spending one of their three codes. Migration 037 normalised the table;
+    // this keeps new writes in line with it.
+    const roleId = (await db('roles').orderBy('id').first())!.id;
+    const { createUser } = await import('./user.service');
+    const mixed = 'MiXeD.Case@saltstayz.test';
+    const created: any = await createUser({ email: mixed, password: 'a-long-enough-password', role_id: roleId });
+    const id = created.id ?? created.user_id;
+    try {
+      const row = await db('users').where('id', id).first();
+      expect(row.email).toBe(mixed.toLowerCase());
+      // And nothing in the table is left in mixed case after the migration.
+      expect(await db('users').whereRaw('email <> lower(email)').first()).toBeUndefined();
+    } finally {
+      await db('account').where('userId', id).del();
+      await db('users').where('id', id).del();
+    }
+  });
+
   it('does not expose the plugin routes that bypass our throttle and audit', async () => {
     for (const path of ['/api/v1/auth/email-otp/send-verification-otp',
       '/api/v1/auth/email-otp/reset-password',
@@ -404,8 +469,13 @@ describe.skipIf(!ON_THROWAWAY)('password reset', () => {
     const meta = typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata;
     expect(meta.otp).toBe('[redacted]');
     expect(meta.newPassword).toBe('[redacted]');
+    // The address goes too — the owner's call, on the grounds that the security checklist says PII
+    // is never logged and an email in a request body is PII. The cost is accepted knowingly: this
+    // row now records that a reset was attempted and from where, but not against whose account.
+    expect(meta.email).toBe('[redacted]');
     expect(JSON.stringify(row)).not.toContain(otp);
     expect(JSON.stringify(row)).not.toContain(NEW_PASSWORD);
+    expect(JSON.stringify(row)).not.toContain(EMAIL);
 
     await askForCode(EMAIL);
     await req().post('/api/v1/password-reset/confirm')

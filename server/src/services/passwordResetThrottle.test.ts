@@ -85,17 +85,37 @@ describe('failed confirmations', () => {
     expect(isLockedOut(s, T0)).toBe(true);
   });
 
-  it('frees the account once the hour has rolled over', () => {
+  it('frees the account gradually, not on a cliff at the hour mark', () => {
     const s = state({ failed_window_started_at: T0, failed_in_hour: MAX_FAILURES_PER_HOUR });
     expect(isLockedOut(s, at(FAILURE_WINDOW_MS - 1))).toBe(true);
-    expect(isLockedOut(s, at(FAILURE_WINDOW_MS))).toBe(false);
+    // The moment the window rolls, the whole of the last hour still sits inside the trailing hour.
+    // The old fixed window dropped it to zero here, which is what handed an attacker a second full
+    // budget by waiting a minute.
+    expect(isLockedOut(s, at(FAILURE_WINDOW_MS))).toBe(true);
+    // Half a window later, half of it has aged out: 15 × 0.5 = 7.5, under the cap of 15.
+    expect(isLockedOut(s, at(FAILURE_WINDOW_MS * 1.5))).toBe(false);
+    // And two clear windows later nothing carries at all.
+    expect(isLockedOut(s, at(FAILURE_WINDOW_MS * 2))).toBe(false);
   });
 
-  it('re-anchors the hour rather than extending it', () => {
+  it('does not hand back a second full budget to someone who straddles the boundary', () => {
+    // The defect this design exists to close. Burn the hour's budget, wait just past the boundary,
+    // and try to burn it again: the carried count must keep the account locked well into the next
+    // window rather than resetting to zero the instant the clock ticks over.
+    let s = state();
+    for (let i = 0; i < MAX_FAILURES_PER_HOUR; i += 1) s = evaluateFailure(s, at(FAILURE_WINDOW_MS - 1000));
+    expect(isLockedOut(s, at(FAILURE_WINDOW_MS + 1000))).toBe(true);
+    expect(isLockedOut(s, at(FAILURE_WINDOW_MS + 60_000))).toBe(true);
+  });
+
+  it('re-anchors the hour in whole windows, carrying the previous count', () => {
     const s = state({ failed_window_started_at: T0, failed_in_hour: 9 });
     const next = evaluateFailure(s, at(FAILURE_WINDOW_MS + 1000));
     expect(next.failed_in_hour).toBe(1);
-    expect(next.failed_window_started_at).toEqual(at(FAILURE_WINDOW_MS + 1000));
+    expect(next.failed_in_prev_window).toBe(9);
+    // Anchored to T0 + one window, NOT to the moment of the request. Re-anchoring to `now` would
+    // let an attacker walk the window forward for ever by spacing failures just past the boundary.
+    expect(next.failed_window_started_at).toEqual(at(FAILURE_WINDOW_MS));
   });
 
   it('leaves the issuance counters alone', () => {

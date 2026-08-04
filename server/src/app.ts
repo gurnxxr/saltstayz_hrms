@@ -3,7 +3,8 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
-import rateLimit, { MemoryStore } from 'express-rate-limit';
+import rateLimit, { MemoryStore, ipKeyGenerator } from 'express-rate-limit';
+import { createHash } from 'crypto';
 import { toNodeHandler } from 'better-auth/node';
 import { env } from './config/env';
 import { auth } from './config/auth';
@@ -82,29 +83,6 @@ const authLimiter = rateLimit({
 });
 app.use('/api/v1/auth/sign-in/email', authLimiter);
 
-// Password reset is unauthenticated and changes credentials, so it gets its own per-IP budget.
-// Tighter than sign-in: a legitimate user needs two requests, not fifteen. This is only the OUTER
-// limit — the per-ACCOUNT budget that actually bounds an attacker lives in passwordResetThrottle,
-// because an IP limit is worth little to someone with more than one address.
-//
-// The store is built explicitly and exported so the test suite can clear it between cases. The
-// alternative — switching the limiter off under NODE_ENV=test — would mean the only thing standing
-// between a stranger and this endpoint is never exercised by a single test. Every request in a
-// suite arrives from one address, so without a reset the tests spend the real budget on each other
-// and then measure 429s instead of the logic; with it, the limiter runs in its production shape and
-// gets a test of its own.
-export const passwordResetRateStore = new MemoryStore();
-const passwordResetLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
-  message: { error: 'Too many attempts. Please try again in 15 minutes.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-  store: passwordResetRateStore,
-});
-app.use('/api/v1/password-reset/request', passwordResetLimiter);
-app.use('/api/v1/password-reset/confirm', passwordResetLimiter);
-
 /**
  * Shut the plugin's own OTP routes before Better Auth's catch-all can serve them.
  *
@@ -122,6 +100,24 @@ app.use('/api/v1/password-reset/confirm', passwordResetLimiter);
 app.use(['/api/v1/auth/email-otp', '/api/v1/auth/sign-in/email-otp', '/api/v1/auth/forget-password/email-otp'],
   (_req, res) => { res.status(404).json({ error: 'Not found' }); });
 
+/**
+ * Cap the body on the Better Auth routes, which `express.json({ limit: '10kb' })` cannot reach.
+ *
+ * Better Auth parses its own bodies, so it is deliberately mounted ahead of the JSON parser — with
+ * the side effect that every /api/v1/auth/* route accepted an unbounded unauthenticated payload
+ * while the rest of the API was capped at 10kb. Checked by header only: reading the stream here
+ * would consume it, and Better Auth needs it. A lying Content-Length is not a hole worth chasing —
+ * Node's own limits apply beyond this, and no legitimate sign-in body is anywhere near 10kb.
+ */
+const AUTH_BODY_LIMIT_BYTES = 10 * 1024;
+app.use('/api/v1/auth', (req, res, next) => {
+  if (Number(req.headers['content-length'] || 0) > AUTH_BODY_LIMIT_BYTES) {
+    res.status(413).json({ error: 'Request body too large' });
+    return;
+  }
+  next();
+});
+
 // Better Auth handles all /api/v1/auth/* routes (sign-in, sign-out, session, admin user mgmt).
 // It MUST be mounted BEFORE express.json() — it parses its own request bodies.
 app.all('/api/v1/auth/*', toNodeHandler(auth));
@@ -130,6 +126,61 @@ app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ limit: '10kb', extended: false }));
 app.use(cookieParser());
 app.use('/uploads', express.static('uploads'));
+
+/**
+ * Two per-IP budgets for password reset. Mounted HERE, after express.json(), because the inner one
+ * needs the address out of the request body.
+ *
+ * It used to be one budget of 10 per 15 minutes keyed on IP alone. Everyone at a hotel shares one
+ * connection, so that was about three staff per property per quarter-hour before the fourth
+ * colleague was told to come back later — and a couple of people fumbling their code used up the
+ * allowance the rest needed.
+ *
+ * So the budget people actually feel is now PER ADDRESS: your own attempts are the only ones that
+ * can exhaust it. That alone would let one machine walk the whole staff directory, since each
+ * address brings a fresh allowance, so a much higher per-connection ceiling sits behind it. The
+ * ceiling is far above any real office — 40 staff all resetting at once is ~120 requests against a
+ * limit of 400 — and far below what mailing 400 people repeatedly would need.
+ *
+ * Neither of these is the protection that matters. The per-ACCOUNT budget in
+ * passwordResetThrottle — 1/min, 3 per 15 min, 15 failures per sliding hour — is what bounds an
+ * attacker, and it does not care which connection the requests arrive on.
+ *
+ * The address is hashed into the key rather than stored raw: this is an in-memory map keyed by
+ * something a stranger supplies, and there is no reason for it to hold a list of staff emails.
+ */
+export const passwordResetRateStore = new MemoryStore();
+export const passwordResetCeilingStore = new MemoryStore();
+
+const perAddressKey = (req: express.Request): string => {
+  const ip = ipKeyGenerator(req.ip ?? '');
+  const raw = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase().slice(0, 254) : '';
+  if (!raw) return `${ip}|-`; // malformed body: the schema will reject it, but it still costs a slot
+  return `${ip}|${createHash('sha256').update(raw).digest('base64url').slice(0, 22)}`;
+};
+
+const perAddressLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: 'Too many attempts for this email address. Please try again in 15 minutes.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: perAddressKey,
+  store: passwordResetRateStore,
+});
+
+const perConnectionCeiling = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 400,
+  message: { error: 'Too many attempts. Please try again in 15 minutes.' },
+  standardHeaders: false, // the per-address limiter owns the RateLimit-* headers; two sets would confuse
+  legacyHeaders: false,
+  store: passwordResetCeilingStore,
+});
+
+for (const path of ['/api/v1/password-reset/request', '/api/v1/password-reset/confirm']) {
+  app.use(path, perConnectionCeiling, perAddressLimiter);
+}
 
 // ─── Health check (public, lightweight, with a DB ping) ───
 const healthHandler = async (_req: express.Request, res: express.Response) => {

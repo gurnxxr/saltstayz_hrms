@@ -7,6 +7,13 @@ const TABLE = 'audit_logs';
 const SENSITIVE_KEYS = [
   'password', 'password_hash', 'token', 'secret', 'otp',
   'aadhaar', 'pan', 'bank_account', 'account_number', 'ifsc', 'cvv', 'card',
+  // 'email' matches as a substring, so personal_email and login_email go too. This is the owner's
+  // decision, taken because the security checklist says PII is never logged and an email in a
+  // request body is PII. It costs something real: the password-reset endpoint is unauthenticated,
+  // so its audit row now says an attempt happened and from which IP, but not whose account was
+  // being probed. The `actor_email` COLUMN is unaffected — that records who was signed in and
+  // performed the change, which is the audit trail's whole purpose, not payload data.
+  'email',
 ];
 
 function isSensitive(key: string): boolean {

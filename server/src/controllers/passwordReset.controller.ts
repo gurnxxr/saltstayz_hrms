@@ -64,9 +64,33 @@ export async function requestReset(req: Request, res: Response, next: NextFuncti
   } catch (err) { next(err); }
 }
 
+/**
+ * Every confirmation takes at least this long, whatever it decides.
+ *
+ * `/request` closed its timing gap by answering before doing any account work. `/confirm` cannot —
+ * it has to return a real verdict — and the two paths are not the same length: an unknown or
+ * deactivated address throws after one query, while a real account runs a Better Auth verification
+ * and a committing transaction. Left alone that is a second, quieter membership oracle. A floor
+ * comfortably above the slow path makes both indistinguishable; 250ms is imperceptible to someone
+ * typing a code and is well clear of the ~100ms the real path takes locally.
+ */
+const CONFIRM_FLOOR_MS = 250;
+
+const holdUntilFloor = async (startedAt: number): Promise<void> => {
+  const remaining = CONFIRM_FLOOR_MS - (Date.now() - startedAt);
+  if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
+};
+
 export async function confirmReset(req: Request, res: Response, next: NextFunction) {
+  const startedAt = Date.now();
   try {
     const { email, otp, newPassword } = parse(confirmSchema, req.body, CONFIRM_REJECT);
-    res.json(await service.confirmReset(email, otp, newPassword));
-  } catch (err) { next(err); }
+    const result = await service.confirmReset(email, otp, newPassword);
+    await holdUntilFloor(startedAt);
+    res.json(result);
+  } catch (err) {
+    // The failure paths are the fast ones, so this is the branch that most needs the floor.
+    await holdUntilFloor(startedAt);
+    next(err);
+  }
 }

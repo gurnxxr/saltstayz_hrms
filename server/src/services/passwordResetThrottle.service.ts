@@ -15,7 +15,7 @@ export const COOLDOWN_SECONDS = 60;
 /** Codes per window, and the window. This is the dial that bounds an attacker's total guesses. */
 export const MAX_PER_WINDOW = 3;
 export const ISSUE_WINDOW_MS = 15 * 60 * 1000;
-/** Failed confirmations before the account stops accepting codes for the rest of the hour. */
+/** Failed confirmations allowed per hour, measured over a SLIDING hour — see `rollFailures`. */
 export const MAX_FAILURES_PER_HOUR = 15;
 export const FAILURE_WINDOW_MS = 60 * 60 * 1000;
 
@@ -25,6 +25,7 @@ export interface ThrottleState {
   issued_in_window: number;
   failed_window_started_at: Date | null;
   failed_in_hour: number;
+  failed_in_prev_window: number;
 }
 
 export const EMPTY_STATE: ThrottleState = {
@@ -33,14 +34,55 @@ export const EMPTY_STATE: ThrottleState = {
   issued_in_window: 0,
   failed_window_started_at: null,
   failed_in_hour: 0,
+  failed_in_prev_window: 0,
 };
 
 const elapsed = (from: Date | null, now: Date) => (from ? now.getTime() - from.getTime() : Infinity);
 
+/**
+ * Advance the failure buckets to `now` without recording anything.
+ *
+ * The failure budget used to be a FIXED window anchored on the first failure and reset wholesale
+ * when it expired, which handed an attacker who timed a burst against the boundary roughly double
+ * the intended guesses back to back: fifteen at 59 minutes, the window resets, fifteen more at 61.
+ * Two buckets — this window and the one before it — let the count decay smoothly instead.
+ *
+ * Note the anchor moves in whole windows (`start + FAILURE_WINDOW_MS`), not to `now`. Re-anchoring
+ * to the moment of the request would let an attacker walk the window forward indefinitely by
+ * spacing failures just over the boundary, which is the same defect in a different costume.
+ */
+function rollFailures(state: ThrottleState, now: Date): { start: Date | null; prev: number; current: number } {
+  const start = state.failed_window_started_at;
+  if (!start) return { start: null, prev: 0, current: 0 };
+
+  const since = now.getTime() - start.getTime();
+  if (since < FAILURE_WINDOW_MS) {
+    return { start, prev: state.failed_in_prev_window, current: state.failed_in_hour };
+  }
+  if (since < 2 * FAILURE_WINDOW_MS) {
+    // Exactly one window has passed: what was current becomes the previous bucket.
+    return { start: new Date(start.getTime() + FAILURE_WINDOW_MS), prev: state.failed_in_hour, current: 0 };
+  }
+  return { start: null, prev: 0, current: 0 }; // two clear windows — nothing carries
+}
+
+/**
+ * Failures over the trailing hour, counting the previous bucket in proportion to how much of it
+ * still falls inside that hour. The standard two-bucket approximation — the same shape
+ * `express-rate-limit` uses — chosen over storing one row per attempt because it is a fixed amount
+ * of state and cannot grow under attack.
+ */
+function weightedFailures(state: ThrottleState, now: Date): number {
+  const { start, prev, current } = rollFailures(state, now);
+  if (!start) return current;
+  const intoWindow = now.getTime() - start.getTime();
+  const carry = Math.max(0, 1 - intoWindow / FAILURE_WINDOW_MS);
+  return current + prev * carry;
+}
+
 /** True when this account has burned its hourly failure budget. Checked before a code is accepted. */
 export function isLockedOut(state: ThrottleState, now: Date): boolean {
-  if (elapsed(state.failed_window_started_at, now) >= FAILURE_WINDOW_MS) return false; // window rolled
-  return state.failed_in_hour >= MAX_FAILURES_PER_HOUR;
+  return weightedFailures(state, now) >= MAX_FAILURES_PER_HOUR;
 }
 
 export type IssueRefusal = 'cooldown' | 'window' | 'locked_out';
@@ -75,11 +117,12 @@ export function evaluateIssue(
 
 /** The state to store after a failed confirmation. */
 export function evaluateFailure(state: ThrottleState, now: Date): ThrottleState {
-  const expired = elapsed(state.failed_window_started_at, now) >= FAILURE_WINDOW_MS;
+  const { start, prev, current } = rollFailures(state, now);
   return {
     ...state,
-    failed_window_started_at: expired ? now : state.failed_window_started_at,
-    failed_in_hour: (expired ? 0 : state.failed_in_hour) + 1,
+    failed_window_started_at: start ?? now,
+    failed_in_prev_window: start ? prev : 0,
+    failed_in_hour: current + 1,
   };
 }
 
@@ -95,6 +138,7 @@ function toState(row: any): ThrottleState {
     issued_in_window: Number(row.issued_in_window) || 0,
     failed_window_started_at: row.failed_window_started_at ? new Date(row.failed_window_started_at) : null,
     failed_in_hour: Number(row.failed_in_hour) || 0,
+    failed_in_prev_window: Number(row.failed_in_prev_window) || 0,
   };
 }
 
@@ -120,6 +164,7 @@ export async function reserveIssue(userId: number, now = new Date()): Promise<{ 
       issued_in_window: verdict.next.issued_in_window,
       failed_window_started_at: verdict.next.failed_window_started_at,
       failed_in_hour: verdict.next.failed_in_hour,
+      failed_in_prev_window: verdict.next.failed_in_prev_window,
       updated_at: trx.fn.now(),
     }).onConflict('user_id').merge();
 
@@ -145,12 +190,22 @@ export async function recordFailure(userId: number, now = new Date()): Promise<v
       issued_in_window: next.issued_in_window,
       failed_window_started_at: next.failed_window_started_at,
       failed_in_hour: next.failed_in_hour,
+      failed_in_prev_window: next.failed_in_prev_window,
       updated_at: trx.fn.now(),
     }).onConflict('user_id').merge();
   });
 }
 
-/** Clear a user's budget after a successful reset — they have proved control of the mailbox. */
+/**
+ * Clear a user's budget after a successful reset — they have proved control of the mailbox.
+ *
+ * Takes the same lock as its neighbours. Without it the delete does not serialise against an
+ * in-flight `recordFailure`, which re-inserts the row afterwards and re-locks an account the reset
+ * had just freed — leaving someone who has genuinely recovered their password unable to try again.
+ */
 export async function clearThrottle(userId: number): Promise<void> {
-  await db(TABLE).where('user_id', userId).del();
+  await db.transaction(async (trx) => {
+    await advisoryXactLock(trx, LOCK.PASSWORD_RESET, userId);
+    await trx(TABLE).where('user_id', userId).del();
+  });
 }
