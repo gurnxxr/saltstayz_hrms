@@ -69,6 +69,38 @@ details* are UI-only.
 Vacancies, salary structures, bank details, leave templates/entitlements, and single
 departments/job-titles are added through their screens.
 
+## Monthly attendance grid — `attendance-grid-YYYY-MM.csv`
+
+A whole month of attendance for every employee, in the layout the biometric dashboard exports:
+one row per person, one column per day. Uploaded at **Admin → Attendance** (a different screen from
+the daily biometric import), with the month picker set to the **same month as the file**.
+
+Generated, not hand-written — re-run it for any month:
+
+```bash
+npm run attendance:grid --workspace=server -- --month=2026-08
+```
+
+The generator (`server/src/db/generate-attendance-grid.ts`) is deterministic, so the same month
+always produces the same sheet. It covers every employee code the repo knows about: the active roster
+in whichever database it is pointed at, plus the codes in `db/import-csv.ts`. Codes the target
+environment does not recognise are reported back as `unmatched` and skipped — harmless — so one file
+can be uploaded to more than one environment.
+
+**The attendance itself is invented.** It is shaped to look plausible (~62% present, with a tail of
+absences, half days, short and missed punches) so that payroll, reports and the coverage gate have
+realistic volume to chew on. It is not a record of anything that happened.
+
+Two things that surprise people on first upload:
+
+- Marks landing on someone's **weekly off or a company holiday write nothing** and are counted as
+  `off_calendar`. The work calendar wins over the sheet — by design.
+- Days in a **locked payroll month** are skipped and listed under `locked_months`.
+
+Codes: `P` present · `A` absent · `HD` half day · `SP` short present · `MP` missed punch ·
+`NP` no punch · `HHD` half-day-with-leave. The seven summary columns are for humans — the importer
+ignores them — but they are generated from the row's own cells, so they always agree with it.
+
 ## Format tips
 
 - Files **1, 2, 3, 5** are parsed by a simple comma split — **no commas inside a field** there.
