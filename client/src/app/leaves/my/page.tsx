@@ -24,10 +24,10 @@ export default function LeavesPage() {
   return (
     <AppShell>
       <div className="space-y-6">
-        {/* Apply lives in the header, beside the title, on all three tabs — the same place
-            Encashment puts "New Encashment". It used to sit inside the My Leave tab body in its
-            own right-aligned row, so the module's primary action moved depending on which tab you
-            were on, and a manager reviewing Approvals had to change tab before they could apply. */}
+        {/* Apply lives in the header, beside the title, on all three tabs. It used to sit inside
+            the My Leave tab body in its own right-aligned row, so the module's primary action moved
+            depending on which tab you were on, and a manager reviewing Approvals had to change tab
+            before they could apply. */}
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
             <h1 className="text-2xl font-bold text-foreground">Leaves</h1>

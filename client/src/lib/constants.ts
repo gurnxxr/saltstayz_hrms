@@ -74,7 +74,7 @@ export const NAVIGATION: NavItem[] = [
     // The children deliberately carry NO `module` key. Sidebar's visible() returns roleAllowed
     // untouched when a child has no module — add `module: 'leave'` and an employee with a
     // `granted: ['leave']` override (exactly how HR switches leave on for one person) would see
-    // Balances, Encashment and Control Panel and get a 403 from every one. Denial still works:
+    // Balances and Control Panel and get a 403 from both. Denial still works:
     // the parent carries the module, and a filtered-out parent drops the whole group.
     label: 'Leaves',
     href: '/leaves/balances',
@@ -83,7 +83,6 @@ export const NAVIGATION: NavItem[] = [
     module: 'leave',
     children: [
       { label: 'Balances', href: '/leaves/balances', icon: 'Scale', roles: ['admin', 'chro', 'hr'] },
-      { label: 'Encashment', href: '/leaves/encashment', icon: 'Coins', roles: ['admin', 'chro', 'hr'] },
       // Publishing the holiday calendar and reading it are two halves of one feature. The API
       // already agrees — every endpoint that screen calls is /leave/* under authorize('leave', …).
       // The Admin dashboard card stays where it is; two doors to one URL cost nothing.

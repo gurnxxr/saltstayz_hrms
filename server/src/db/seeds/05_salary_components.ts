@@ -50,7 +50,7 @@ export async function seed(knex: Knex): Promise<void> {
     earning('Gratuity', { earningType: 'variable', calc: 'flat' }),
     earning('Bonus', { earningType: 'variable', calc: 'flat' }),
     earning('Commission', { earningType: 'variable', calc: 'flat', status: 'inactive' }),
-    earning('Leave Encashment', { earningType: 'variable', calc: 'flat' }),
+    // No 'Leave Encashment' earning: unused leave is not paid out anywhere in this system.
     earning('Notice Pay', { earningType: 'variable', calc: 'flat' }),
     earning('Hold Salary (Non Taxable)', { earningType: 'variable', calc: 'flat', taxable: false, status: 'inactive' }),
     // ── Deductions ──

@@ -62,7 +62,11 @@ export default function OffboardingDetailPage({ params }: { params: Promise<{ id
   const completed = c.status === 'completed';
   const grouped = items.reduce((acc: Record<string, any[]>, it) => { (acc[it.category] ||= []).push(it); return acc; }, {});
 
-  // Recompute net live as HR edits components
+  // Recompute net live as HR edits components.
+  //
+  // `leave_encashment` is only ever present on a settlement SAVED before leave encashment was
+  // removed — computeFnF no longer returns it. It stays in this sum, and in the row below, so an
+  // old settlement still adds up to the total stored against it. New ones simply have no such key.
   const net = fnf ? (Number(fnf.prorated_salary || 0) + Number(fnf.leave_encashment || 0) + Number(fnf.gratuity || 0) - Number(fnf.deductions || 0)) : 0;
   const setF = (k: string, v: any) => setFnf((p: any) => ({ ...p, [k]: v === '' ? 0 : Number(v), net_payable: 0 }));
 
@@ -137,7 +141,11 @@ export default function OffboardingDetailPage({ params }: { params: Promise<{ id
             ) : (
               <div className="p-5 space-y-3">
                 <FnfRow label={`Salary — ${fnf.days_worked}/${fnf.days_in_month} days`} value={fnf.prorated_salary} onChange={(v) => setF('prorated_salary', v)} disabled={completed} />
-                <FnfRow label={`Leave encashment (${fnf.leave_balance_days} d)`} value={fnf.leave_encashment} onChange={(v) => setF('leave_encashment', v)} disabled={completed} />
+                {/* Legacy only — see the `net` comment above. Unused leave is no longer paid out,
+                    so this row appears solely on settlements saved before that changed. */}
+                {Number(fnf.leave_encashment || 0) !== 0 && (
+                  <FnfRow label="Leave encashment (no longer paid)" value={fnf.leave_encashment} onChange={(v) => setF('leave_encashment', v)} disabled={completed} />
+                )}
                 <FnfRow label={`Gratuity${fnf.gratuity_eligible ? '' : ' (n/a <5y)'}`} value={fnf.gratuity} onChange={(v) => setF('gratuity', v)} disabled={completed} />
                 <FnfRow label="Deductions (advances/notice)" value={fnf.deductions} onChange={(v) => setF('deductions', v)} disabled={completed} negative />
                 <div className="border-t border-border pt-3 flex items-center justify-between">

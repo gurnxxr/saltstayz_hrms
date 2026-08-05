@@ -196,7 +196,7 @@ function LeaveTypesCard() {
         <div className="flex gap-2 rounded-lg bg-muted/50 border border-border p-3 text-xs text-secondary">
           <AlertTriangle size={14} className="shrink-0 mt-0.5" />
           <span>
-            A leave type is just a name and where it applies. Paid/unpaid, encashable, per-request
+            A leave type is just a name and where it applies. Paid/unpaid, per-request
             limits and clubbing are set <span className="font-medium text-foreground">per template</span> under the
             Templates tab — so different employees can get different rules for the same type.
           </span>
@@ -242,7 +242,7 @@ function LeaveTypesCard() {
         title="Delete leave type?"
         danger
         confirmLabel="Delete"
-        message={confirmDelete ? <>This permanently removes <span className="font-medium text-foreground">{confirmDelete.name}</span>. A type that has any leave requests, allocations or encashments can&apos;t be deleted — deactivate it instead.</> : undefined}
+        message={confirmDelete ? <>This permanently removes <span className="font-medium text-foreground">{confirmDelete.name}</span>. A type that has any leave requests or allocations can&apos;t be deleted — deactivate it instead.</> : undefined}
         loading={deleteMutation.isPending}
         onConfirm={() => confirmDelete && deleteMutation.mutate(confirmDelete.id)}
         onCancel={() => setConfirmDelete(null)}
@@ -370,7 +370,7 @@ function LeavePeriodsCard() {
 
 interface TRow {
   leave_type_id: number; leave_type_name: string;
-  default_days: number | string; is_paid: boolean; is_encashable: boolean;
+  default_days: number | string; is_paid: boolean;
   min_days_per_request: number | string | null; max_days_per_request: number | string | null;
   advance_notice_days: number | string | null; document_required_after_days: number | string | null;
   half_day_allowed: boolean; after_probation_only: boolean; count_sandwich_days: boolean;
@@ -433,7 +433,7 @@ function TemplatesPanel() {
         department_ids: form.department_ids,
         rows: form.rows.map((r) => ({
           leave_type_id: r.leave_type_id, default_days: Number(r.default_days) || 0,
-          is_paid: r.is_paid, is_encashable: r.is_encashable,
+          is_paid: r.is_paid,
           min_days_per_request: norm(r.min_days_per_request), max_days_per_request: norm(r.max_days_per_request),
           advance_notice_days: norm(r.advance_notice_days), document_required_after_days: norm(r.document_required_after_days),
           half_day_allowed: r.half_day_allowed, after_probation_only: r.after_probation_only,
@@ -471,7 +471,7 @@ function TemplatesPanel() {
     const lt = leaveTypes.find((t: any) => t.id === ltId); if (!lt) return;
     setForm((p) => ({ ...p, rows: [...p.rows, {
       leave_type_id: lt.id, leave_type_name: lt.name, default_days: lt.default_days ?? 0, is_paid: !!lt.is_paid,
-      is_encashable: false, min_days_per_request: '', max_days_per_request: '', advance_notice_days: '',
+      min_days_per_request: '', max_days_per_request: '', advance_notice_days: '',
       document_required_after_days: '', half_day_allowed: true, after_probation_only: false, count_sandwich_days: false,
       eligibility: lt.eligibility ?? 'any', cannot_club_with: [],
       // Off by default. A new type on a plan behaves the way every type always has.
@@ -731,7 +731,6 @@ function TemplateRowEditor({ row, allRows, onChange, onRemove }: { row: TRow; al
       </div>
       <div className="flex flex-wrap gap-x-6 gap-y-2">
         {chk('is_paid', 'Paid')}
-        {chk('is_encashable', 'Encashable')}
         {chk('half_day_allowed', 'Half-day allowed')}
         {chk('after_probation_only', 'After probation only')}
         {chk('count_sandwich_days', 'Count sandwich days')}

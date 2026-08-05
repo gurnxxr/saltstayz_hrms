@@ -2,7 +2,6 @@ import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../types';
 import { ValidationError } from '../utils/errors';
 import * as leaveService from '../services/leave.service';
-import * as encashmentService from '../services/leaveEncashment.service';
 import * as templateService from '../services/leaveTemplate.service';
 
 /**
@@ -176,28 +175,6 @@ export async function upsertEntitlement(req: AuthRequest, res: Response, next: N
 
 export async function bulkAllocate(req: AuthRequest, res: Response, next: NextFunction) {
   try { res.json(await leaveService.bulkAllocate(req.body)); } catch (err) { next(err); }
-}
-
-// ─── Leaves module (admin): encashments ───
-
-export async function listEncashments(req: AuthRequest, res: Response, next: NextFunction) {
-  try { res.json(await encashmentService.listEncashments({ status: req.query.status as string })); } catch (err) { next(err); }
-}
-
-export async function createEncashment(req: AuthRequest, res: Response, next: NextFunction) {
-  try { res.status(201).json(await encashmentService.createEncashment(req.body, req.user?.userId ?? null)); } catch (err) { next(err); }
-}
-
-export async function approveEncashment(req: AuthRequest, res: Response, next: NextFunction) {
-  try { res.json(await encashmentService.approveEncashment(Number(req.params.id), req.user?.userId ?? null)); } catch (err) { next(err); }
-}
-
-export async function rejectEncashment(req: AuthRequest, res: Response, next: NextFunction) {
-  try {
-    res.json(await encashmentService.rejectEncashment(
-      Number(req.params.id), req.user?.userId ?? null, req.body?.rejection_reason,
-    ));
-  } catch (err) { next(err); }
 }
 
 // ─── Regions ───

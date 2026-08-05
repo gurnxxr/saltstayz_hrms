@@ -10,14 +10,14 @@ export async function seed(knex: Knex): Promise<void> {
 
   // The four everyday categories (Phase 4) + statutory Maternity/Paternity.
   await knex('leave_types').insert([
-    { name: 'Casual Leave', default_days: 12, is_paid: true, is_encashable: false },
-    { name: 'Sick Leave', default_days: 12, is_paid: true, is_encashable: false },
-    { name: 'Privilege Leave', default_days: 15, is_paid: true, is_encashable: true },
+    { name: 'Casual Leave', default_days: 12, is_paid: true },
+    { name: 'Sick Leave', default_days: 12, is_paid: true },
+    { name: 'Privilege Leave', default_days: 15, is_paid: true },
     // Gender-restricted: eligibility is matched strictly against employees.gender,
     // so an employee with no gender recorded can take neither.
-    { name: 'Maternity Leave', default_days: 182, is_paid: true, is_encashable: false, eligibility: 'female' },
-    { name: 'Paternity Leave', default_days: 15, is_paid: true, is_encashable: false, eligibility: 'male' },
-    { name: 'Loss of Pay', default_days: 365, is_paid: false, is_encashable: false },
+    { name: 'Maternity Leave', default_days: 182, is_paid: true, eligibility: 'female' },
+    { name: 'Paternity Leave', default_days: 15, is_paid: true, eligibility: 'male' },
+    { name: 'Loss of Pay', default_days: 365, is_paid: false },
   ]);
 
   await knex('leave_periods').insert([

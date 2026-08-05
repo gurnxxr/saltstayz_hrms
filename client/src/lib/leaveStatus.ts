@@ -2,9 +2,8 @@
 // Canonical leave-request status vocabulary — the single source of truth for the leaves module.
 //
 // Before this file the same four states were declared five times: byte-identical maps in the My
-// Leave tab and in Approvals, a three-state copy in Encashment with its own fallback, and geometry
-// that disagreed at every call site. None of them capitalised, so `pending` — the raw column value
-// — is what an employee actually read.
+// Leave tab and in Approvals, and geometry that disagreed at every call site. None of them
+// capitalised, so `pending` — the raw column value — is what an employee actually read.
 //
 // Deliberately NOT added to lib/attendanceCodes.ts. That file states its own contract at the top:
 // it holds exactly the set stored in attendance_records.status and exactly the set getMonthSummary
@@ -20,9 +19,6 @@ import type { Tone } from '@/components/ui/StatusPill';
 
 export const LEAVE_STATUSES = ['pending', 'approved', 'rejected', 'cancelled'] as const;
 export type LeaveStatus = typeof LEAVE_STATUSES[number];
-
-/** Encashments have no withdraw path — a row is approved or rejected, never cancelled. */
-export const ENCASHMENT_STATUSES = ['pending', 'approved', 'rejected'] as const;
 
 const META: Record<LeaveStatus, { label: string; tone: Tone }> = {
   pending:   { label: 'Pending',   tone: 'warning' },
@@ -43,8 +39,7 @@ export function leaveStatusMeta(status?: string | null): { label: string; tone: 
 }
 
 /**
- * For the status <select> on My Leave, Approvals and Encashment, which each hardcoded their own
- * <option> list and so could drift from the pills sitting beside them.
+ * For the status <select> on My Leave and Approvals, which each hardcoded their own <option> list
+ * and so could drift from the pills sitting beside them.
  */
 export const LEAVE_STATUS_OPTIONS = LEAVE_STATUSES.map((s) => ({ value: s, label: META[s].label }));
-export const ENCASHMENT_STATUS_OPTIONS = ENCASHMENT_STATUSES.map((s) => ({ value: s, label: META[s].label }));
