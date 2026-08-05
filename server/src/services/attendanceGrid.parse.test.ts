@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { parseMarkedGrid, parseHeaderDate, cellText } from './attendanceGrid.service';
+import {
+  parseMarkedGrid, parseHeaderDate, cellText,
+  GRID_LEAD_HEADERS, GRID_SUMMARY_HEADERS, gridHeaderDate,
+} from './attendanceGrid.service';
 
 /**
  * The marked-grid importer unpivots HR's wide dashboard (one row per employee, one column
@@ -148,22 +151,32 @@ describe('the header shape the real dashboard export produces', () => {
  * rather than a hand-written fixture, so a change to one side fails here rather than in an
  * admin's face.
  *
- * `buildMarkedGridTemplate` reads the employee table, so the shape it produces is reconstructed
- * here instead of calling it — the assertion is about the FORMAT, which is what the parser cares
- * about, and this keeps the test pure.
+ * `buildMarkedGridTemplate` reads the employee table, so the row shape is reconstructed here rather
+ * than calling it — but the HEADER is built from the same exported constants the builder uses, so
+ * renaming a column or changing the date spelling shows up here instead of in an admin's face.
  */
 describe('marked-grid template round-trip', () => {
-  const templateShape = (month: string, dates: string[]) => ([
-    ['Emp Code', 'Name', 'Department', 'Property', ...dates],
-    ['PD-0013', 'Aadhya Reddy', 'Security', 'SaltStayz Connaught Place', ...dates.map(() => '')],
+  /** The template's own header, assembled the way the builder assembles it. */
+  const templateHeader = (dates: string[]) => [...GRID_LEAD_HEADERS, ...GRID_SUMMARY_HEADERS, ...dates];
+  /** Index of the first date column — everything before it is identity or a tally. */
+  const FIRST_DATE_COL = GRID_LEAD_HEADERS.length + GRID_SUMMARY_HEADERS.length;
+
+  const templateShape = (dates: string[]) => ([
+    templateHeader(dates),
+    // Tallies come out blank: there are no marks yet to total.
+    ['PD-0013', 'Aadhya Reddy', ...GRID_SUMMARY_HEADERS.map(() => ''), ...dates.map(() => '')],
   ]);
 
-  it('parses the ISO date headers the template writes', () => {
-    const dates = ['2026-07-01', '2026-07-02', '2026-07-03'];
-    const grid = templateShape('2026-07', dates);
-    grid[1][4] = 'P';
-    grid[1][5] = 'NP';
-    grid[1][6] = 'HD';
+  const julyDates = (n: number) => Array.from({ length: n }, (_, i) => gridHeaderDate(2026, 7, i + 1));
+
+  it('parses the day-first date headers the template writes', () => {
+    const dates = julyDates(3);
+    expect(dates).toEqual(['01-07-2026', '02-07-2026', '03-07-2026']); // the dashboard's spelling
+
+    const grid = templateShape(dates);
+    grid[1][FIRST_DATE_COL] = 'P';
+    grid[1][FIRST_DATE_COL + 1] = 'NP';
+    grid[1][FIRST_DATE_COL + 2] = 'HD';
 
     const { cells, unrecognized } = parseMarkedGrid(grid, { month: '2026-07' });
     expect(unrecognized).toEqual([]);
@@ -174,26 +187,38 @@ describe('marked-grid template round-trip', () => {
     ]);
   });
 
-  it('ignores the template\'s Name/Department/Property columns rather than reading them as dates', () => {
-    // These sit between the employee code and the first date. Misreading one as a header would
-    // scatter every code onto the wrong day.
-    expect(parseHeaderDate('Name', '2026-07')).toBeNull();
-    expect(parseHeaderDate('Department', '2026-07')).toBeNull();
-    expect(parseHeaderDate('Property', '2026-07')).toBeNull();
+  it('reads every non-date column of its own header as a non-date', () => {
+    // Whatever the lead and summary columns are called, none may parse as a day. One that did
+    // would scatter every mark on the row onto the wrong date.
+    for (const h of [...GRID_LEAD_HEADERS, ...GRID_SUMMARY_HEADERS]) {
+      expect(parseHeaderDate(h, '2026-07')).toBeNull();
+    }
+  });
+
+  it('carries its own year, so no weekday label and nothing to cross-check', () => {
+    // The parser only complains about a weekday when the header names one. The template's format
+    // names none, which is why a file it generated can never trip the mismatch guard.
+    const { weekdayMismatches } = parseMarkedGrid(templateShape(julyDates(31)), { month: '2026-07' });
+    expect(weekdayMismatches).toEqual([]);
   });
 
   it('leaves blank cells alone, so a partly-filled template writes only what was filled', () => {
-    const dates = ['2026-07-01', '2026-07-02'];
-    const grid = templateShape('2026-07', dates);
-    grid[1][4] = 'A'; // day 1 filled, day 2 left blank
+    const grid = templateShape(julyDates(2));
+    grid[1][FIRST_DATE_COL] = 'A'; // day 1 filled, day 2 left blank
     const { cells } = parseMarkedGrid(grid, { month: '2026-07' });
     expect(cells).toEqual([{ empCode: 'PD-0013', date: '2026-07-01', code: 'absent' }]);
   });
 
+  it('imports an untouched template as nothing at all', () => {
+    // Downloading a blank grid and uploading it unchanged must be a no-op, not 400 half-rows.
+    const { cells, unrecognized } = parseMarkedGrid(templateShape(julyDates(31)), { month: '2026-07' });
+    expect(cells).toEqual([]);
+    expect(unrecognized).toEqual([]);
+  });
+
   it('reads the trailing legend rows as nothing, not as an employee', () => {
-    const dates = ['2026-07-01'];
     const grid = [
-      ...templateShape('2026-07', dates),
+      ...templateShape(julyDates(1)),
       [''],
       ['Codes: P = Present · NP = No Punch · A = Absent · HD = Half Day (uses ½ leave) · SP = Short Punch · MP = Miss Punch · HHD = Half-Day Holiday'],
       ['Weekly offs, holidays and approved leave are calendar-driven — leave those cells blank rather than coding them.'],

@@ -475,6 +475,34 @@ export async function uploadMarkedGrid(
 /** CSV-escape a cell: names and properties can contain commas or quotes. */
 const csvCell = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`;
 
+/*
+ * The marked grid's column layout, in one place.
+ *
+ * Two files have to agree on this: the template a person downloads from Admin → Attendance, and the
+ * test-data generator in `db/generate-attendance-grid.ts`. They are meant to be the same shape as
+ * the biometric dashboard's own export, so that a downloaded template and a real export are
+ * interchangeable. They had drifted — the template used ISO dates and its own columns while the
+ * generator used these — which is why they live here now, next to the parser that reads them.
+ */
+
+/** The two columns that identify a person. Only `Emp Code` is read on import. */
+export const GRID_LEAD_HEADERS = ['Emp Code', 'Empname'];
+
+/**
+ * The dashboard's tallies. Decorative to the importer, and deliberately so: `parseHeaderDate`
+ * requires a day number in every text form, which is exactly what stops "Present" and "Half Day"
+ * from being mistaken for date columns.
+ */
+export const GRID_SUMMARY_HEADERS = ['Present', 'Absent', 'Half Day', 'Short Present', 'Missed Punch', 'No Punch', 'HHD'];
+
+/**
+ * A date header, day-first: `01-08-2026`.
+ *
+ * It carries its own year, so the parser needs no month hint, and it carries no weekday name, so the
+ * weekday cross-check never fires on a file we generated ourselves.
+ */
+export const gridHeaderDate = (year: number, month: number, day: number) => `${pad(day)}-${pad(month)}-${year}`;
+
 /**
  * A ready-to-fill marked grid for one month: one row per active employee, one column per date.
  *
@@ -484,25 +512,30 @@ const csvCell = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`;
  * or carry a header this parser will not read, so what is left for a human is the part only a
  * human knows: the cell.
  *
- * Column headers are ISO dates, which `parseHeaderDate` reads without needing the month hint.
+ * The column layout deliberately mirrors the biometric dashboard's own export — same two lead
+ * columns, same seven tallies, same day-first date headers — so this file and one exported from
+ * the dashboard are the same shape and nobody has to think about which they are looking at. The
+ * tallies come out blank, because there are no marks yet to total.
  */
 export async function buildMarkedGridTemplate(month: string): Promise<string> {
   if (!/^\d{4}-\d{2}$/.test(month)) throw new ValidationError('Month must look like 2026-07');
   const [year, mon] = month.split('-').map(Number);
   const daysInMonth = new Date(Date.UTC(year, mon, 0)).getUTCDate();
-  const dates = Array.from({ length: daysInMonth }, (_, i) => `${month}-${pad(i + 1)}`);
+  const dates = Array.from({ length: daysInMonth }, (_, i) => gridHeaderDate(year, mon, i + 1));
 
+  // `branch_name` is selected for the sort, not for a column: the file stays grouped by property
+  // so a property manager finds their people together, without the dashboard's format gaining a
+  // column it does not have.
   const employees = await db('employees')
     .where('is_active', true)
-    .select('employee_code', 'first_name', 'last_name', 'dept_name', 'branch_name')
+    .select('employee_code', 'first_name', 'last_name', 'branch_name')
     .orderBy(['branch_name', 'first_name']);
 
-  const header = ['Emp Code', 'Name', 'Department', 'Property', ...dates].map(csvCell).join(',');
+  const header = [...GRID_LEAD_HEADERS, ...GRID_SUMMARY_HEADERS, ...dates].map(csvCell).join(',');
   const rows = employees.map((e: any) => [
     e.employee_code,
     `${e.first_name ?? ''} ${e.last_name ?? ''}`.trim(),
-    e.dept_name ?? '',
-    e.branch_name ?? '',
+    ...GRID_SUMMARY_HEADERS.map(() => ''), // nothing to tally until the cells are filled in
     ...dates.map(() => ''), // the part a human fills in
   ].map(csvCell).join(','));
 
