@@ -1,12 +1,9 @@
-'use client';
+import { redirect } from 'next/navigation';
 
-import { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
-
-// "Application" was merged into the single Leaves page. Redirect old links to the
-// Approvals tab there.
+// "Application" was merged into the single Leaves page. Nothing in the repo links here any more —
+// the leave.applied notification points at /leaves/my?tab=approvals directly — so this exists only
+// for old bookmarks. Same Server Component shape as /leaves, and no blank frame: the previous
+// 'use client' + useEffect version painted an empty page before redirecting.
 export default function LeaveApplicationRedirect() {
-  const router = useRouter();
-  useEffect(() => { router.replace('/leaves/my?tab=approvals'); }, [router]);
-  return null;
+  redirect('/leaves/my?tab=approvals');
 }

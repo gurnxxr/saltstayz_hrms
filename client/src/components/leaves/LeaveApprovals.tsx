@@ -5,45 +5,55 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import api from '@/lib/api';
 import LoadError from '@/components/ui/LoadError';
-import { Check, X, Clock, Calendar } from 'lucide-react';
-
-const STATUS_COLORS: Record<string, string> = {
-  pending: 'bg-yellow-100 text-yellow-700',
-  approved: 'bg-green-100 text-green-700',
-  rejected: 'bg-red-100 text-red-700',
-  cancelled: 'bg-gray-100 text-gray-500',
-};
+import EmptyState from '@/components/ui/EmptyState';
+import StatusPill from '@/components/ui/StatusPill';
+import RejectDialog from '@/components/leaves/RejectDialog';
+import { btnCls, inputCls } from '@/components/ui/styles';
+import { leaveStatusMeta, LEAVE_STATUS_OPTIONS } from '@/lib/leaveStatus';
+import { cn, formatDateRange } from '@/lib/utils';
+import { Check, X, Clock, Loader2 } from 'lucide-react';
 
 // Reporting managers see their own reports; HR/CHRO/Admin see all (server-scoped).
-// Review-only: applying (incl. on behalf) lives on the Apply tab.
+// Review-only: applying (incl. on behalf) lives on the Apply page.
 export default function LeaveApprovals({ canFilterAll }: { canFilterAll: boolean }) {
   const queryClient = useQueryClient();
-  const [rejectingId, setRejectingId] = useState<number | null>(null);
-  const [rejectionReason, setRejectionReason] = useState('');
-  const [viewMode, setViewMode] = useState<'pending' | 'all'>('pending');
-  const [statusFilter, setStatusFilter] = useState('');
+  const [rejecting, setRejecting] = useState<any | null>(null);
   const [branchFilter, setBranchFilter] = useState('');
 
-  const { data: pending = [], isError: pendingError, refetch: refetchPending } = useQuery({
+  /*
+   * One control where there were two.
+   *
+   * A Pending / All Requests pill bar used to sit here — a second tab strip nested inside the
+   * page's tab strip, drawing a distinction the status <select> beside it already drew, because
+   * "pending" IS a status. Two visually identical stacked bars left you unable to tell which one
+   * you were steering, and its `Pending (3)` duplicated the count on the tab above it.
+   *
+   * Choosing anything other than Pending swaps the data source underneath: the queue endpoint is
+   * manager-scoped and carries the approve/reject actions, /leave/all is org-wide and staff-only.
+   */
+  const [status, setStatus] = useState('pending');
+  const viewingQueue = status === 'pending';
+
+  const { data: pending = [], isError: pendingError, isLoading: pendingLoading, refetch: refetchPending } = useQuery({
     queryKey: ['leave-approvals'],
     queryFn: () => api.get('/leave/approvals').then(r => r.data),
   });
 
-  const { data: allLeaves = [], isError: allError, refetch: refetchAll } = useQuery({
-    queryKey: ['all-leaves', statusFilter, branchFilter],
+  const { data: allLeaves = [], isError: allError, isLoading: allLoading, refetch: refetchAll } = useQuery({
+    queryKey: ['all-leaves', status, branchFilter],
     queryFn: () => {
       const params = new URLSearchParams();
-      if (statusFilter) params.set('status', statusFilter);
+      if (status) params.set('status', status);
       if (branchFilter) params.set('branch_name', branchFilter);
       return api.get(`/leave/all?${params}`).then(r => r.data);
     },
-    enabled: canFilterAll && viewMode === 'all',
+    enabled: canFilterAll && !viewingQueue,
   });
 
   const { data: properties = [] } = useQuery({
     queryKey: ['properties'],
     queryFn: () => api.get('/admin/properties').then(r => r.data),
-    enabled: canFilterAll && viewMode === 'all',
+    enabled: canFilterAll && !viewingQueue,
   });
 
   const approveMutation = useMutation({
@@ -51,7 +61,9 @@ export default function LeaveApprovals({ canFilterAll }: { canFilterAll: boolean
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['leave-approvals'] });
       queryClient.invalidateQueries({ queryKey: ['all-leaves'] });
-      toast.success('Leave approved');
+      // Says what changed, rather than just that something did — approving debits the balance and
+      // marks the days on the attendance calendar.
+      toast.success('Leave approved — days debited from the balance');
     },
     onError: (err: any) => toast.error(err.response?.data?.error || 'Failed to approve'),
   });
@@ -62,154 +74,125 @@ export default function LeaveApprovals({ canFilterAll }: { canFilterAll: boolean
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['leave-approvals'] });
       queryClient.invalidateQueries({ queryKey: ['all-leaves'] });
-      toast.success('Leave rejected');
-      setRejectingId(null);
-      setRejectionReason('');
+      toast.success('Leave rejected — the employee is told your reason');
+      setRejecting(null);
     },
     onError: (err: any) => toast.error(err.response?.data?.error || 'Failed to reject'),
   });
 
-  const renderLeaveCard = (leave: any, showActions: boolean) => (
-    <div key={leave.id} className="p-4 flex items-start justify-between gap-4">
-      <div className="flex items-start gap-4 min-w-0">
-        <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-sm shrink-0">
-          {leave.first_name?.[0]}{leave.last_name?.[0]}
-        </div>
-        <div className="min-w-0">
-          <p className="font-medium text-foreground">{leave.first_name} {leave.last_name}</p>
-          <p className="text-xs text-secondary">{leave.employee_code} &middot; {leave.department_name || leave.dept_name || '—'} &middot; {leave.property_name || leave.branch_name || '—'}</p>
-          <div className="mt-2 flex items-center gap-3 flex-wrap">
-            <span className="text-sm font-medium text-foreground">{leave.leave_type}</span>
-            <span className="text-sm text-secondary">
-              {new Date(leave.start_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
-              {leave.start_date !== leave.end_date && ` — ${new Date(leave.end_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`}
-            </span>
-            <span className="text-xs px-2 py-0.5 bg-muted rounded-full">{leave.days} day{leave.days > 1 ? 's' : ''}</span>
+  const rows = viewingQueue ? pending : allLeaves;
+  const isError = viewingQueue ? pendingError : allError;
+  const isLoading = viewingQueue ? pendingLoading : allLoading;
+  const retry = viewingQueue ? refetchPending : refetchAll;
+
+  const renderLeaveCard = (leave: any) => {
+    // Every row in the queue is pending, so this covers both sources with one test.
+    const showActions = leave.status === 'pending';
+    // Only THIS row locks while its own approval is in flight — the rest of the queue stays live.
+    const approving = approveMutation.isPending && approveMutation.variables === leave.id;
+    return (
+      <div key={leave.id} className="p-4 flex items-start justify-between gap-4">
+        <div className="flex items-start gap-4 min-w-0">
+          <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-sm shrink-0">
+            {leave.first_name?.[0]}{leave.last_name?.[0]}
           </div>
-          {leave.reason && <p className="text-sm text-secondary mt-1">{leave.reason}</p>}
-          {leave.rejection_reason && <p className="text-sm text-red-600 mt-1">Reason: {leave.rejection_reason}</p>}
-        </div>
-      </div>
-      <div className="flex items-center gap-2 shrink-0">
-        {!showActions && (
-          <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${STATUS_COLORS[leave.status]}`}>
-            {leave.status}
-          </span>
-        )}
-        {showActions && leave.status === 'pending' && (
-          rejectingId === leave.id ? (
-            <div className="flex items-center gap-2">
-              <input
-                value={rejectionReason}
-                onChange={(e) => setRejectionReason(e.target.value)}
-                placeholder="Reason (optional)"
-                className="px-2 py-1.5 border border-border rounded-lg text-xs w-40 focus:outline-none focus:ring-1 focus:ring-primary/50"
-              />
-              <button
-                onClick={() => rejectMutation.mutate({ id: leave.id, reason: rejectionReason })}
-                className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-xs font-medium"
-              >
-                Confirm
-              </button>
-              <button onClick={() => { setRejectingId(null); setRejectionReason(''); }} className="text-xs text-secondary">
-                Cancel
-              </button>
+          <div className="min-w-0">
+            <p className="font-medium text-foreground">{leave.first_name} {leave.last_name}</p>
+            <p className="text-xs text-secondary">{leave.employee_code} &middot; {leave.department_name || leave.dept_name || '—'} &middot; {leave.property_name || leave.branch_name || '—'}</p>
+            <div className="mt-2 flex items-center gap-3 flex-wrap">
+              <span className="text-sm font-medium text-foreground">{leave.leave_type}</span>
+              {/* Shared with My Leave. These two screens used to disagree — this one omitted the
+                  year on both ends while My Leave carried it on the end date, so the same request
+                  read differently depending on which tab you were on. */}
+              <span className="text-sm text-secondary">{formatDateRange(leave.start_date, leave.end_date)}</span>
+              <StatusPill tone="neutral" label={`${leave.days} day${leave.days > 1 ? 's' : ''}`} />
             </div>
-          ) : (
+            {leave.reason && <p className="text-sm text-secondary mt-1">{leave.reason}</p>}
+            {leave.rejection_reason && <p className="text-sm text-red-600 mt-1">Reason: {leave.rejection_reason}</p>}
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {!showActions && <StatusPill {...leaveStatusMeta(leave.status)} />}
+          {showActions && (
             <>
               <button
                 onClick={() => approveMutation.mutate(leave.id)}
-                className="flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white rounded-lg text-xs font-medium hover:bg-green-700"
+                // Without this, the second click of a double-click fired a second PUT and the
+                // server's "Only pending requests can be approved" landed as a red error toast on
+                // top of an approval that had just succeeded.
+                disabled={approving}
+                className={btnCls('success', 'sm')}
               >
-                <Check size={12} /> Approve
+                {approving ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />} Approve
               </button>
-              <button
-                onClick={() => setRejectingId(leave.id)}
-                className="flex items-center gap-1 px-3 py-1.5 bg-red-600 text-white rounded-lg text-xs font-medium hover:bg-red-700"
-              >
+              <button onClick={() => setRejecting(leave)} className={btnCls('danger', 'sm')}>
                 <X size={12} /> Reject
               </button>
             </>
-          )
-        )}
+          )}
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="space-y-4">
-      {/* View toggle (All-requests filter only for org-wide staff) */}
-      <div className="flex items-center gap-4 flex-wrap">
-        <div className="flex gap-1 bg-muted p-1 rounded-lg">
-          <button
-            onClick={() => setViewMode('pending')}
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${viewMode === 'pending' ? 'bg-card text-foreground shadow-sm' : 'text-secondary hover:text-foreground'}`}
-          >
-            Pending ({pending.length})
-          </button>
-          {canFilterAll && (
-            <button
-              onClick={() => setViewMode('all')}
-              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${viewMode === 'all' ? 'bg-card text-foreground shadow-sm' : 'text-secondary hover:text-foreground'}`}
-            >
-              All Requests
-            </button>
-          )}
-        </div>
-        {canFilterAll && viewMode === 'all' && (
-          <>
-            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
-              className="px-3 py-2 border border-border rounded-lg bg-background text-sm">
-              <option value="">All Status</option>
-              <option value="pending">Pending</option>
-              <option value="approved">Approved</option>
-              <option value="rejected">Rejected</option>
-              <option value="cancelled">Cancelled</option>
-            </select>
-            <select value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)}
-              className="px-3 py-2 border border-border rounded-lg bg-background text-sm">
-              <option value="">All Properties</option>
+      {/* Staff only. A reporting manager sees their queue and nothing to filter it by — /leave/all
+          is org-wide, so it stays behind canFilterAll. */}
+      {canFilterAll && (
+        <div className="flex items-center gap-3 flex-wrap">
+          <select value={status} onChange={(e) => setStatus(e.target.value)} className={cn(inputCls, 'w-auto')}>
+            {/* Pending first and selected by default — it is the queue, and the reason to be here. */}
+            {LEAVE_STATUS_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+            <option value="">All statuses</option>
+          </select>
+          {!viewingQueue && (
+            <select value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)} className={cn(inputCls, 'w-auto')}>
+              <option value="">All properties</option>
               {properties.map((p: any) => (
                 <option key={p.id} value={p.name}>{p.name}</option>
               ))}
             </select>
-          </>
+          )}
+        </div>
+      )}
+
+      {/* One ladder, in one order: a failure must never be able to render as "nothing here", and
+          an in-flight request must never render as "nothing here" either — which is exactly what
+          this screen used to do for the first few hundred milliseconds. */}
+      <div className="bg-card rounded-xl border border-border overflow-hidden">
+        {isError ? (
+          <LoadError message="Couldn't load leave requests." onRetry={() => retry()} />
+        ) : isLoading ? (
+          <div className="p-10 flex justify-center"><Loader2 className="animate-spin text-secondary" /></div>
+        ) : rows.length === 0 ? (
+          <EmptyState
+            icon={Clock}
+            title={viewingQueue ? 'Nothing waiting for you' : 'No leave requests found'}
+            body={viewingQueue
+              ? 'Requests from the people who report to you appear here as soon as they apply.'
+              : 'Try a different status or property.'}
+          />
+        ) : (
+          <div className="divide-y divide-border">{rows.map(renderLeaveCard)}</div>
         )}
       </div>
 
-      {viewMode === 'pending' && (
-        <div className="bg-card rounded-xl border border-border overflow-hidden">
-          {pendingError ? (
-            <LoadError message="Couldn't load pending requests." onRetry={() => refetchPending()} />
-          ) : pending.length === 0 ? (
-            <div className="p-8 text-center text-secondary">
-              <Clock size={32} className="mx-auto mb-2 opacity-40" />
-              <p>No pending leave requests.</p>
-            </div>
-          ) : (
-            <div className="divide-y divide-border">
-              {pending.map((leave: any) => renderLeaveCard(leave, true))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {canFilterAll && viewMode === 'all' && (
-        <div className="bg-card rounded-xl border border-border overflow-hidden">
-          {allError ? (
-            <LoadError message="Couldn't load leave requests." onRetry={() => refetchAll()} />
-          ) : allLeaves.length === 0 ? (
-            <div className="p-8 text-center text-secondary">
-              <Calendar size={32} className="mx-auto mb-2 opacity-40" />
-              <p>No leave requests found.</p>
-            </div>
-          ) : (
-            <div className="divide-y divide-border">
-              {allLeaves.map((leave: any) => renderLeaveCard(leave, leave.status === 'pending'))}
-            </div>
-          )}
-        </div>
-      )}
+      <RejectDialog
+        open={!!rejecting}
+        title="Reject leave request?"
+        subject={rejecting ? (
+          <>
+            {rejecting.first_name} {rejecting.last_name} — {rejecting.days} day{rejecting.days > 1 ? 's' : ''} of{' '}
+            {rejecting.leave_type}. Nothing is debited, and they are told the reason you give.
+          </>
+        ) : undefined}
+        loading={rejectMutation.isPending}
+        onCancel={() => setRejecting(null)}
+        onConfirm={(reason) => rejectMutation.mutate({ id: rejecting.id, reason })}
+      />
     </div>
   );
 }

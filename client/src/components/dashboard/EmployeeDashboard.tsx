@@ -249,7 +249,9 @@ export default function EmployeeDashboard() {
         <h2 className="text-lg font-semibold text-foreground mb-4">Quick Actions</h2>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {[
-            { label: 'Apply for Leave', href: '/leaves/my', icon: CalendarPlus },
+            // The form, not the list. The app's most prominent leave CTA used to land on
+            // /leaves/my, so "Apply for Leave" took you to a page of past requests.
+            { label: 'Apply for Leave', href: '/leaves/apply', icon: CalendarPlus },
             { label: 'My Attendance', href: '/attendance', icon: CalendarCheck },
             { label: 'My Performance', href: '/analytics', icon: BarChart3 },
             { label: 'My Payslips', href: '/salary', icon: FileText },

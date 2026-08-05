@@ -29,6 +29,48 @@ export function formatDate(date: string | Date | null | undefined, opts?: Intl.D
   return d.toLocaleDateString('en-IN', { timeZone: IST, day: '2-digit', month: 'short', year: 'numeric', ...opts });
 }
 
+/**
+ * One leave request, one string, on every screen that shows it.
+ *
+ * My Leave put the year on the end date only and Approvals put it on neither, so the same request
+ * read "3 Aug — 7 Aug 2026" in one place and "3 Aug — 7 Aug" in the other. There is one function
+ * now, and the end date always carries the year.
+ *
+ * A single-day request collapses to one date; a range inside one month drops the repeated month;
+ * a range inside one year drops the repeated year. A null falls through to formatDate's "—" rather
+ * than throwing, which the local helper on the Control Panel did.
+ */
+export function formatDateRange(
+  start: string | Date | null | undefined,
+  end: string | Date | null | undefined,
+): string {
+  const a = toDate(start);
+  const b = toDate(end);
+  if (!a) return formatDate(end);
+  if (!b) return formatDate(start);
+
+  // Compare the IST calendar DAY, not the instant, so a bare 'YYYY-MM-DD' and the same day stored
+  // as a timestamp count as equal. en-CA is reliably ISO order, so these compare as plain strings.
+  const key = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: IST });
+  const ka = key(a);
+  const kb = key(b);
+  if (ka === kb) return formatDate(a);
+
+  const sameYear = ka.slice(0, 4) === kb.slice(0, 4);
+  const sameMonth = sameYear && ka.slice(0, 7) === kb.slice(0, 7);
+
+  // An explicit `undefined` option drops that part — Intl treats it as not requested, and it beats
+  // the default in the spread. The same trick MyHolidays already uses to render a month on its own.
+  const left = sameMonth
+    ? formatDate(a, { month: undefined, year: undefined })
+    : sameYear
+      ? formatDate(a, { year: undefined })
+      : formatDate(a);
+
+  // An en dash, because an em dash is not a range separator.
+  return `${left} – ${formatDate(b)}`;
+}
+
 export function formatDateTime(date: string | Date | null | undefined, opts?: Intl.DateTimeFormatOptions) {
   const d = toDate(date);
   if (!d) return '—';

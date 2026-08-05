@@ -1,19 +1,17 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import api from '@/lib/api';
 import LoadError from '@/components/ui/LoadError';
-import { Plus, Calendar, Clock, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
-
-const STATUS_COLORS: Record<string, string> = {
-  pending: 'bg-yellow-100 text-yellow-700',
-  approved: 'bg-green-100 text-green-700',
-  rejected: 'bg-red-100 text-red-700',
-  cancelled: 'bg-gray-100 text-gray-500',
-};
+import EmptyState from '@/components/ui/EmptyState';
+import StatusPill, { TONE_CLS } from '@/components/ui/StatusPill';
+import { btnCls, inputCls } from '@/components/ui/styles';
+import { leaveStatusMeta, LEAVE_STATUS_OPTIONS } from '@/lib/leaveStatus';
+import { cn, formatDateRange } from '@/lib/utils';
+import { Plus, Calendar, Clock, CheckCircle, XCircle, AlertCircle, Loader2 } from 'lucide-react';
 
 const STATUS_ICONS: Record<string, typeof Clock> = {
   pending: Clock,
@@ -22,10 +20,13 @@ const STATUS_ICONS: Record<string, typeof Clock> = {
   cancelled: AlertCircle,
 };
 
-// Self-service: leave balances + apply button + my requests. (Holidays live on
-// the Leaves page's own "Holidays" tab now.)
-export default function LeaveTab() {
-  const router = useRouter();
+// Self-service: leave balances + my requests. (Holidays live on the Leaves page's own "Holidays"
+// tab, and the Apply button now lives in that page's header so it is present on every tab.)
+//
+// Was components/attendance/LeaveTab.tsx — a leave screen filed under attendance, named for the
+// fact that it happens to be rendered in a tab rather than for what it shows. Its neighbours are
+// LeaveApprovals and MyHolidays.
+export default function MyLeave() {
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState('');
 
@@ -34,7 +35,7 @@ export default function LeaveTab() {
     queryFn: () => api.get('/leave/balances').then(r => r.data),
   });
 
-  const { data: leaves = [], isError: leavesError, refetch: refetchLeaves } = useQuery({
+  const { data: leaves = [], isError: leavesError, isLoading: leavesLoading, refetch: refetchLeaves } = useQuery({
     queryKey: ['my-leaves', statusFilter],
     queryFn: () => {
       const params = new URLSearchParams();
@@ -48,27 +49,18 @@ export default function LeaveTab() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['my-leaves'] });
       queryClient.invalidateQueries({ queryKey: ['leave-balances'] });
-      toast.success('Leave request cancelled');
+      toast.success('Leave request cancelled — the days are back on your balance');
     },
     onError: (err: any) => toast.error(err.response?.data?.error || 'Failed to cancel'),
   });
 
   // Unpaid leave (Loss of Pay) is allocated 365 days to mean "no limit", not as an entitlement,
   // so a 365/365 tile beside the real balances is noise. Hidden here only — it is still applied
-  // for from the Apply Leave button below.
+  // for from the Apply Leave button in the page header.
   const paidBalances = (balances as any[]).filter((b: any) => b.is_paid);
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-end gap-3">
-        <button
-          onClick={() => router.push('/leaves/apply')}
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
-        >
-          <Plus size={16} /> Apply Leave
-        </button>
-      </div>
-
       {/* Leave Balances */}
       {balancesError && <LoadError compact message="Couldn't load leave balances." onRetry={() => refetchBalances()} />}
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
@@ -102,39 +94,54 @@ export default function LeaveTab() {
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
-          className="px-3 py-2 border border-border rounded-lg bg-background text-sm"
+          aria-label="Filter requests by status"
+          className={cn(inputCls, 'w-auto')}
         >
-          <option value="">All Status</option>
-          <option value="pending">Pending</option>
-          <option value="approved">Approved</option>
-          <option value="rejected">Rejected</option>
-          <option value="cancelled">Cancelled</option>
+          <option value="">All statuses</option>
+          {LEAVE_STATUS_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
         </select>
       </div>
 
+      {/* One ladder, one order. This screen used to render the empty state while the request was
+          still in flight, so "No leave requests found." was what somebody read as a FACT for the
+          first few hundred milliseconds after opening their own leave page. */}
       <div className="bg-card rounded-xl border border-border overflow-hidden">
         {leavesError ? (
           <LoadError message="Couldn't load your leave requests." onRetry={() => refetchLeaves()} />
+        ) : leavesLoading ? (
+          <div className="p-10 flex justify-center"><Loader2 className="animate-spin text-secondary" /></div>
         ) : leaves.length === 0 ? (
-          <div className="p-8 text-center text-secondary">
-            <Calendar size={32} className="mx-auto mb-2 opacity-40" />
-            <p>No leave requests found.</p>
-          </div>
+          <EmptyState
+            icon={Calendar}
+            title={statusFilter ? 'No requests with that status' : 'No leave requests yet'}
+            body={statusFilter ? undefined : 'Anything you apply for shows up here, with where it has got to.'}
+            action={statusFilter ? undefined : (
+              <Link href="/leaves/apply" className={btnCls('primary')}>
+                <Plus size={16} /> Apply for leave
+              </Link>
+            )}
+          />
         ) : (
           <div className="divide-y divide-border">
             {leaves.map((leave: any) => {
               const Icon = STATUS_ICONS[leave.status] || Clock;
+              const meta = leaveStatusMeta(leave.status);
               return (
                 <div key={leave.id} className="p-4 flex items-center justify-between">
                   <div className="flex items-center gap-4">
-                    <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${STATUS_COLORS[leave.status]}`}>
+                    {/* The same status colour as the pill, on a tile rather than a pill. That is
+                        why TONE_CLS is exported: one source of truth, two shapes. */}
+                    <div className={cn('w-10 h-10 rounded-lg flex items-center justify-center shrink-0', TONE_CLS[meta.tone])}>
                       <Icon size={18} />
                     </div>
                     <div>
                       <p className="font-medium text-foreground">{leave.leave_type}</p>
                       <p className="text-sm text-secondary">
-                        {new Date(leave.start_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
-                        {leave.start_date !== leave.end_date && ` — ${new Date(leave.end_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`}
+                        {/* Shared with Approvals, which is the point — this screen put the year on
+                            the end date and that one omitted it entirely. */}
+                        {formatDateRange(leave.start_date, leave.end_date)}
                         {' '}&middot; {leave.days} day{leave.days > 1 ? 's' : ''}
                       </p>
                       {leave.reason && <p className="text-xs text-secondary mt-0.5 line-clamp-1">{leave.reason}</p>}
@@ -149,13 +156,14 @@ export default function LeaveTab() {
                     {leave.approved_by_name && leave.status !== 'pending' && (
                       <p className="text-xs text-secondary">by {leave.approved_by_name}</p>
                     )}
-                    <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${STATUS_COLORS[leave.status]}`}>
-                      {leave.status}
-                    </span>
+                    <StatusPill {...meta} />
                     {leave.status === 'pending' && (
                       <button
                         onClick={() => cancelMutation.mutate(leave.id)}
-                        className="text-xs px-3 py-1 border border-red-200 text-red-600 rounded-lg hover:bg-red-50"
+                        // Same guard as Approve on the other screen: a second click used to fire a
+                        // second PUT and paint the server's rejection over a successful cancel.
+                        disabled={cancelMutation.isPending && cancelMutation.variables === leave.id}
+                        className={btnCls('dangerOutline', 'sm')}
                       >
                         Cancel
                       </button>

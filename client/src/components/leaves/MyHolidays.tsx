@@ -4,6 +4,9 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
 import LoadError from '@/components/ui/LoadError';
+import EmptyState from '@/components/ui/EmptyState';
+import StatusPill from '@/components/ui/StatusPill';
+import { btnCls } from '@/components/ui/styles';
 import { formatDate } from '@/lib/utils';
 import { istToday, groupByMonth, rosterHint, monthOf, dayOf } from '@/lib/holidays';
 import type { MyHolidaysResponse, HolidayRow } from '@/lib/types';
@@ -185,9 +188,7 @@ function HolidayItem({ h, today }: { h: HolidayRow; today: string }) {
       {/* Only the exception is badged. Nearly every holiday is national, so a "National" pill on
           every row was twelve repetitions of something the header already says. */}
       {!h.is_national && (
-        <span className="shrink-0 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
-          {h.state || 'Regional'}
-        </span>
+        <StatusPill tone="accent" label={h.state || 'Regional'} className="shrink-0" />
       )}
     </li>
   );
@@ -284,23 +285,19 @@ function Warning({ title, body }: { title: string; body: string }) {
   );
 }
 
+// This was the best of the module's eleven hand-written empty states, so ui/EmptyState was modelled
+// on it. It is now the shortest adopter of the thing it inspired.
 function EmptyYear({ year, currentYear, onBack }: { year: number; currentYear: number; onBack: () => void }) {
   return (
-    <div className="mt-4 bg-card rounded-xl border border-border p-10 text-center">
-      <CalendarDays size={32} className="mx-auto mb-3 text-secondary opacity-40" />
-      <p className="text-base font-medium text-foreground">No holidays published for {year} yet</p>
-      <p className="text-sm text-secondary mt-1 max-w-md mx-auto">
-        Your HR team hasn&apos;t published the holiday calendar for this year. It usually goes up
-        before the year starts — check back soon, or ask your HR team.
-      </p>
-      {year !== currentYear && (
-        <button
-          onClick={onBack}
-          className="mt-4 px-4 py-2 border border-border rounded-lg text-sm font-medium text-foreground hover:bg-muted transition-colors"
-        >
-          Back to {currentYear}
-        </button>
-      )}
+    <div className="mt-4 bg-card rounded-xl border border-border">
+      <EmptyState
+        icon={CalendarDays}
+        title={`No holidays published for ${year} yet`}
+        body="Your HR team hasn't published the holiday calendar for this year. It usually goes up before the year starts — check back soon, or ask your HR team."
+        action={year !== currentYear
+          ? <button onClick={onBack} className={btnCls('secondary')}>Back to {currentYear}</button>
+          : undefined}
+      />
     </div>
   );
 }
