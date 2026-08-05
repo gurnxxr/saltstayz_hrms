@@ -247,14 +247,8 @@ export default function MyShiftsPage() {
               {selected && (
                 <p className="text-xs text-secondary">
                   {selected.name} runs {selected.start_time}–{selected.end_time}
-                  {selected.ends_next_day ? ' (ends the next day)' : ''} ·{' '}
-                  {/* This one genuinely IS rung 1 — it describes a shift you have not moved to yet.
-                      An empty pattern on the target means moving to it leaves your off days exactly
-                      where they came from, which is a different statement from "the company work
-                      week", a rung this shift has no say over. */}
-                  {offDaysInWords(selected.weekly_off_days, {
-                    empty: 'this shift does not change your off days',
-                  })}
+                  {selected.ends_next_day ? ' (ends the next day)' : ''}. Your off days do not change —
+                  they come from your leave plan, not from the shift.
                 </p>
               )}
 

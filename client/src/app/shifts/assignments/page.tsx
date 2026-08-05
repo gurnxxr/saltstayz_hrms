@@ -11,7 +11,6 @@ import Pagination from '@/components/ui/Pagination';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
-import { offDaysInWords } from '@/lib/weeklyOff';
 import { Search, Clock, Loader2, X, History, UserCog, Moon, Trash2, Download, Upload, Copy } from 'lucide-react';
 
 const PAGE_SIZE = 15;
@@ -31,15 +30,6 @@ const todayStr = () => {
   const p = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 };
-
-/**
- * "Sun, Sat (2,4)" — the off days declared by a SHIFT, which is only the first of four rungs the
- * engine walks. An empty pattern here means this shift declares none, so the employee's rest days
- * come from their leave template or the company work week; it does NOT mean they follow the work
- * week, which is what the wording used to claim.
- */
-const offDaySummary = (offs: any) =>
-  offDaysInWords(offs, { style: 'compact', empty: 'Not set on this shift' });
 
 function ShiftLabel({ s }: { s: any }) {
   if (!s) return <span className="text-secondary">—</span>;
@@ -171,9 +161,6 @@ function AssignDialog({ employee, onClose }: { employee: any; onClose: () => voi
           {selected && (
             <div className="rounded-lg bg-muted/40 px-3 py-2.5 text-sm space-y-1">
               <p className="text-secondary">
-                Off days: <span className="text-foreground font-medium">{offDaySummary(selected.weekly_off_days)}</span>
-              </p>
-              <p className="text-secondary">
                 Full day at <span className="text-foreground font-medium">{Number(selected.full_day_hours) || 0}h</span>,
                 {' '}half day below <span className="text-foreground font-medium">{Number(selected.half_day_hours) || 0}h</span>,
                 {' '}absent below <span className="text-foreground font-medium">{Number(selected.absent_hours) || 0}h</span>
@@ -183,8 +170,9 @@ function AssignDialog({ employee, onClose }: { employee: any; onClose: () => voi
           )}
 
           <p className="text-xs text-secondary">
-            Everything follows from the shift — its off days, grace and hour thresholds. Assigning from a date
-            keeps past months resolving to the shift the person was actually on.
+            Timings, grace and hour thresholds all follow from the shift; off days come from the employee&apos;s
+            leave template. Assigning from a date keeps past months resolving to the shift the person was
+            actually on.
           </p>
 
           <div className="pt-2 border-t border-border">
@@ -342,7 +330,7 @@ export default function ShiftAssignmentsPage() {
           <div>
             <h1 className="text-2xl font-bold text-foreground">Shift Assignments</h1>
             <p className="text-secondary mt-1">
-              Put each employee on a shift. Their timings, off days and hour thresholds all follow from it.
+              Put each employee on a shift. Their timings and hour thresholds follow from it; their off days come from their leave template.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -425,7 +413,6 @@ export default function ShiftAssignmentsPage() {
                     <th className="px-4 py-3 font-medium">Employee</th>
                     <th className="px-4 py-3 font-medium">Property</th>
                     <th className="px-4 py-3 font-medium">Shift</th>
-                    <th className="px-4 py-3 font-medium">Off days</th>
                     <th className="px-4 py-3 font-medium">From</th>
                     <th className="px-4 py-3 font-medium text-right">Actions</th>
                   </tr>
@@ -449,9 +436,6 @@ export default function ShiftAssignmentsPage() {
                             → {r.upcoming.shift_name} from {String(r.upcoming.effective_from).slice(0, 10)}
                           </p>
                         )}
-                      </td>
-                      <td className="px-4 py-3 text-secondary">
-                        {r.current ? offDaySummary(r.current.weekly_off_days) : '—'}
                       </td>
                       <td className="px-4 py-3 text-secondary tabular-nums">
                         {r.current ? String(r.current.effective_from).slice(0, 10) : '—'}

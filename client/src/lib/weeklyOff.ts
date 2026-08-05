@@ -44,22 +44,11 @@ const occurrenceOf = (iso: string) => Math.floor((Number(iso.slice(8, 10)) - 1) 
  */
 export function offDaysInWords(
   rules: OffDay[] | null | undefined,
-  opts: { style?: 'prose' | 'compact'; empty: string },
+  opts: { empty: string },
 ): string {
   if (!Array.isArray(rules) || rules.length === 0) return opts.empty;
   const sorted = rules.slice().sort((a, b) => a.day - b.day);
   const weeksOf = (o: OffDay) => (Array.isArray(o.weeks) && o.weeks.length ? o.weeks : null);
-
-  // Short enough for a table cell that must not wrap: "Sun, Sat (2,4)".
-  if (opts.style === 'compact') {
-    return sorted
-      .map((o) => {
-        const d = DAYS_SHORT[Number(o.day)] ?? '?';
-        const w = weeksOf(o);
-        return w ? `${d} (${w.join(',')})` : d;
-      })
-      .join(', ');
-  }
 
   const join = (xs: string[]) =>
     xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}` : (xs[0] ?? '');

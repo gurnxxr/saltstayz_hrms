@@ -1,20 +1,9 @@
 import db from '../config/database';
 import { NotFoundError, ValidationError } from '../utils/errors';
 import { notifyEmployee } from './notification.service';
-import { pickAssignmentFor, parseOffDayRules } from './shiftPattern';
+import { pickAssignmentFor } from './shiftPattern';
 import { buildCsv, parseCsv } from '../utils/csv';
 import { businessToday } from '../utils/businessDate';
-
-const DAYS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-/** "Sun, Sat(2,4)" — a shift's off days as text, for the CSV export. */
-function offDaySummary(raw: unknown): string {
-  const rules = parseOffDayRules(raw);
-  if (!rules.length) return 'Company work week';
-  return rules.slice().sort((a, b) => a.day - b.day)
-    .map((r) => (r.weeks && r.weeks.length ? `${DAYS_SHORT[r.day]}(${r.weeks.join(',')})` : DAYS_SHORT[r.day]))
-    .join(', ');
-}
 
 // ─── Shift Types (organization-wide) ───
 
@@ -585,20 +574,23 @@ export async function assignShift(
  * with blank shift/date columns, so the file doubles as a fill-in template for the importer.
  *
  * The columns the importer reads are `employee_code`, `shift_name` and `effective_from`; the
- * rest (name, property, off days) are there for a human to read.
+ * rest (name, property) are there for a human to read.
+ *
+ * Off days are deliberately NOT a column. They are decided by the employee's leave template, not
+ * by the shift, so a shift-assignment export is the wrong file to read them from — it would have
+ * printed the shift's own (empty) pattern and implied the assignment set them.
  */
 export async function exportShiftAssignmentsCsv(filters: ShiftAssignmentFilters): Promise<string> {
   // Reuse the list (unpaginated) so export selects exactly the same people as the screen.
   const rows = await listShiftAssignments({ ...filters, page: undefined, pageSize: undefined }) as any[];
 
-  const header = ['employee_code', 'employee_name', 'property', 'shift_name', 'effective_from', 'off_days'];
+  const header = ['employee_code', 'employee_name', 'property', 'shift_name', 'effective_from'];
   return buildCsv(header, rows.map((r) => [
     r.employee_code,
     `${r.first_name} ${r.last_name}`.trim(),
     r.branch_name,
     r.current?.shift_name ?? '',
     r.current ? isoDate(r.current.effective_from) : '',
-    r.current ? offDaySummary(r.current.weekly_off_days) : '',
   ]));
 }
 

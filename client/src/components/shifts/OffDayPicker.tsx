@@ -121,7 +121,7 @@ export default function OffDayPicker({
 
       {value.length === 0 && (
         <p className="text-xs text-secondary pt-1">
-          {emptyHint ?? 'No off days set — employees on this shift follow the company work week.'}
+          {emptyHint ?? 'No off days set — employees fall back to the next rung: the Default leave plan, then the company work week.'}
         </p>
       )}
 
