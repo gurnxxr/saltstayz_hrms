@@ -120,13 +120,75 @@ function EmptyState({ icon, heading, text, cta, onCta }: { icon: React.ReactNode
   );
 }
 
-function Footer({ onCancel, onSave, saving, saveLabel = 'Enable' }: { onCancel: () => void; onSave: () => void; saving: boolean; saveLabel?: string }) {
+/*
+ * `onDisable` is only passed once a component is actually on. Enabling used to be one-way here:
+ * every tab hardcoded `enabled: true`, so nothing could take EPF, ESI or Statutory Bonus back off
+ * once it was switched on — the "Are you registered for…?" screen was unreachable again and the
+ * deduction kept running. Per-state PT and LWF already had their own Disable button; these three
+ * now match it, on the right-hand side so it is never the button you hit reaching for Save.
+ */
+function Footer({ onCancel, onSave, saving, saveLabel = 'Enable', onDisable, disableLabel, disabling }: {
+  onCancel: () => void; onSave: () => void; saving: boolean; saveLabel?: string;
+  onDisable?: () => void; disableLabel?: string; disabling?: boolean;
+}) {
   return (
     <div className="flex items-center gap-2 pt-4 border-t border-border">
-      <button onClick={onSave} disabled={saving} className="inline-flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors">
+      <button onClick={onSave} disabled={saving || disabling} className="inline-flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors">
         {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />} {saveLabel}
       </button>
       <button onClick={onCancel} className="px-5 py-2.5 border border-border rounded-lg text-sm font-medium hover:bg-muted transition-colors">Cancel</button>
+      {onDisable && (
+        <button onClick={onDisable} disabled={saving || disabling}
+          className="ml-auto inline-flex items-center gap-2 px-5 py-2.5 border border-border rounded-lg text-sm font-medium text-red-600 hover:bg-red-50 hover:border-red-200 disabled:opacity-50 transition-colors">
+          {disabling ? <Loader2 size={15} className="animate-spin" /> : <Ban size={15} />} {disableLabel}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The disable half of a component's save pair. Sends `enabled: false` and NO config, so the
+ * server keeps the stored settings — switch it back on later and the rates are as they were.
+ */
+function useDisableComponent(path: string, label: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.put(`/statutory/${path}`, { enabled: false }),
+    onSuccess: () => { toast.success(`${label} disabled`); qc.invalidateQueries({ queryKey: ['statutory'] }); },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to disable'),
+  });
+}
+
+/*
+ * A percentage spinner for the EPF rates.
+ *
+ * The raw keystrokes are held as a string so a half-typed "10." or a cleared box does not
+ * become 0 mid-edit and re-render the field out from under the typist. Only a parsed number
+ * is handed upward, and blur snaps an empty or out-of-range box back to the last good value —
+ * saveEpf rejects anything outside 0.01–100, and a rejected save is a worse way to learn that
+ * than the field simply refusing to hold it.
+ */
+function RatePct({ value, onChange }: { value: any; onChange: (v: number) => void }) {
+  const [draft, setDraft] = useState(String(value ?? ''));
+  useEffect(() => setDraft(String(value ?? '')), [value]);
+  const commit = () => {
+    const n = Number(draft);
+    if (draft.trim() === '' || !Number.isFinite(n) || n < 0.01 || n > 100) setDraft(String(value ?? ''));
+    else onChange(n);
+  };
+  return (
+    <div className="flex items-center gap-2">
+      <div className="relative w-32">
+        <input
+          type="number" step="0.01" min="0.01" max="100" value={draft}
+          onChange={(e) => { setDraft(e.target.value); const n = Number(e.target.value); if (e.target.value !== '' && Number.isFinite(n) && n >= 0.01 && n <= 100) onChange(n); }}
+          onBlur={commit}
+          className={`${inputCls} pr-7`}
+        />
+        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-secondary">%</span>
+      </div>
+      <span className="text-sm text-secondary whitespace-nowrap">of Actual PF Wage</span>
     </div>
   );
 }
@@ -146,6 +208,10 @@ function EpfTab({ epf }: { epf: any }) {
     onSuccess: () => { toast.success('EPF settings saved'); setEditing(false); qc.invalidateQueries({ queryKey: ['statutory'] }); },
     onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to save'),
   });
+  // setEditing(false) as well, or the form stays open over an already-disabled component
+  // instead of falling back to the "Are you registered for EPF?" screen.
+  const disable = useDisableComponent('epf', 'EPF');
+  const onDisable = () => disable.mutate(undefined, { onSuccess: () => setEditing(false) });
 
   if (!epf.enabled && !editing) {
     return (
@@ -161,9 +227,12 @@ function EpfTab({ epf }: { epf: any }) {
 
   const SAMPLE = 20000;
   const eeEpf = Math.round(SAMPLE * (Number(cfg.employeeRatePct) || 0) / 100);
-  const eps = Math.round(Math.min(SAMPLE, 15000) * 8.33 / 100);
-  const erEpf = Math.round(SAMPLE * (Number(cfg.employerRatePct) || 0) / 100) - eps;
-  const erTotal = eps + erEpf;
+  // EPS takes 8.33% of the capped wage and EPF gets what is left of the employer's share.
+  // Clamped because the rate is a free spinner now: below 8.33% the old subtraction rendered
+  // a negative EPF line and a total larger than the rate actually set.
+  const erTotal = Math.round(SAMPLE * (Number(cfg.employerRatePct) || 0) / 100);
+  const eps = Math.min(erTotal, Math.round(Math.min(SAMPLE, 15000) * 8.33 / 100));
+  const erEpf = erTotal - eps;
 
   return (
     <div className="space-y-4">
@@ -171,20 +240,17 @@ function EpfTab({ epf }: { epf: any }) {
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-6 items-start">
         {/* Form */}
         <div className="bg-card rounded-xl border border-border p-6 space-y-5">
-          <Field label="EPF Number" hint="Format: AA/AAA/0000000/XXX">
-            <input value={cfg.epfNumber || ''} onChange={(e) => set('epfNumber', e.target.value.toUpperCase())} placeholder="AA/AAA/0000000/XXX" className={inputCls} />
-          </Field>
-
           <Field label={<>Deduction Cycle <InfoTip text="EPF is deducted every month." /></>}>
             <input value="Monthly" readOnly className={`${inputCls} bg-muted/50 cursor-default`} />
           </Field>
 
+          {/* Both rates were a two-option dropdown (12% / 10%). saveEpf has always accepted
+              anything in 0.01–100 via num(), so the picker was narrower than the rule it was
+              standing in for — a reduced-rate establishment on 10% could be configured but
+              nothing in between could. Now a spinner, matching the ESI tab's two rate inputs. */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Field label="Employee Contribution Rate">
-              <select value={cfg.employeeRatePct} onChange={(e) => set('employeeRatePct', Number(e.target.value))} className={inputCls}>
-                <option value={12}>12% of Actual PF Wage</option>
-                <option value={10}>10% of Actual PF Wage</option>
-              </select>
+              <RatePct value={cfg.employeeRatePct} onChange={(v) => set('employeeRatePct', v)} />
             </Field>
             <Field label={
               <span className="flex items-center justify-between">
@@ -192,12 +258,13 @@ function EpfTab({ epf }: { epf: any }) {
                 <button type="button" onClick={() => setShowSplit((s) => !s)} className="text-xs text-primary hover:underline font-normal">View Splitup</button>
               </span>
             }>
-              <select value={cfg.employerRatePct} onChange={(e) => set('employerRatePct', Number(e.target.value))} className={inputCls}>
-                <option value={12}>12% of Actual PF Wage</option>
-                <option value={10}>10% of Actual PF Wage</option>
-              </select>
+              <RatePct value={cfg.employerRatePct} onChange={(v) => set('employerRatePct', v)} />
             </Field>
           </div>
+          <p className="text-xs text-secondary -mt-2">
+            Statutory EPF is <b className="text-foreground">12%</b>; <b className="text-foreground">10%</b> applies to the
+            reduced-rate establishments named in the Act. The sample on the right follows whatever you set here.
+          </p>
           {showSplit && (
             <div className="text-xs text-secondary bg-muted/40 rounded-lg p-3 -mt-2">
               Employer&apos;s {cfg.employerRatePct}% splits into <b>EPS</b> (8.33% of PF wage, capped at ₹15,000) and <b>EPF</b> (the remainder).
@@ -231,7 +298,8 @@ function EpfTab({ epf }: { epf: any }) {
             </div>
           </div>
 
-          <Footer onCancel={() => { setCfg(epf.config); setEditing(false); }} onSave={() => save.mutate()} saving={save.isPending} saveLabel={epf.enabled ? 'Save' : 'Enable'} />
+          <Footer onCancel={() => { setCfg(epf.config); setEditing(false); }} onSave={() => save.mutate()} saving={save.isPending} saveLabel={epf.enabled ? 'Save' : 'Enable'}
+            onDisable={epf.enabled ? onDisable : undefined} disableLabel="Disable EPF" disabling={disable.isPending} />
         </div>
 
         {/* Sample calc panel */}
@@ -271,6 +339,8 @@ function EsiTab({ esi }: { esi: any }) {
     onSuccess: () => { toast.success('ESI settings saved'); setEditing(false); qc.invalidateQueries({ queryKey: ['statutory'] }); },
     onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to save'),
   });
+  const disable = useDisableComponent('esi', 'ESI');
+  const onDisable = () => disable.mutate(undefined, { onSuccess: () => setEditing(false) });
 
   if (!esi.enabled && !editing) {
     return (
@@ -288,9 +358,6 @@ function EsiTab({ esi }: { esi: any }) {
     <div className="space-y-4">
       <h2 className="text-lg font-semibold text-foreground">Employees&apos; State Insurance</h2>
       <div className="bg-card rounded-xl border border-border p-6 space-y-5 max-w-2xl">
-        <Field label="ESI Number" hint="Format: 00-00-000000-000-0000">
-          <input value={cfg.esiNumber || ''} onChange={(e) => set('esiNumber', e.target.value)} placeholder="00-00-000000-000-0000" className={inputCls} />
-        </Field>
         <Field label={<>Deduction Cycle <InfoTip text="ESI is deducted every month." /></>}>
           <input value="Monthly" readOnly className={`${inputCls} bg-muted/50 cursor-default`} />
         </Field>
@@ -315,7 +382,8 @@ function EsiTab({ esi }: { esi: any }) {
         <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-lg p-3 text-xs">
           ESI deductions will be made only if the employee&apos;s monthly salary is less than or equal to ₹21,000. If the employee gets a salary revision which increases their monthly salary above ₹21,000, they would have to continue making ESI contributions till the end of the contribution period in which the salary was revised (April–September or October–March).
         </div>
-        <Footer onCancel={() => { setCfg(esi.config); setEditing(false); }} onSave={() => save.mutate()} saving={save.isPending} saveLabel={esi.enabled ? 'Save' : 'Enable'} />
+        <Footer onCancel={() => { setCfg(esi.config); setEditing(false); }} onSave={() => save.mutate()} saving={save.isPending} saveLabel={esi.enabled ? 'Save' : 'Enable'}
+          onDisable={esi.enabled ? onDisable : undefined} disableLabel="Disable ESI" disabling={disable.isPending} />
       </div>
     </div>
   );
@@ -323,20 +391,116 @@ function EsiTab({ esi }: { esi: any }) {
 
 // ─────────────────────────── Professional Tax ───────────────────────────
 function PtTab({ pt }: { pt: any[] }) {
+  const existing = new Set<string>(pt.map((r) => r.state));
   return (
     <div className="space-y-4 max-w-2xl">
       <div>
         <h2 className="text-lg font-semibold text-foreground">Professional Tax</h2>
-        <p className="text-sm text-secondary mt-1">Levied by the State Government on monthly gross salary; slabs differ per state. States are derived from your properties — configure slabs only where PT is actually levied, and the engine deducts automatically.</p>
+        <p className="text-sm text-secondary mt-1">Levied by the State Government on monthly gross salary; slabs differ per state. The states below come from your properties, and you can add one that isn&apos;t there yet — configure slabs only where PT is actually levied, and the engine deducts automatically.</p>
       </div>
       <div className="space-y-3">
         {pt.map((row) => <PtStateCard key={row.state} row={row} />)}
       </div>
+      <AddPtState existingStates={existing} />
     </div>
   );
 }
 
 interface SlabDraft { min: string; max: string; amount: string }
+
+const BLANK_SLABS = (): SlabDraft[] => [{ min: '0', max: '', amount: '0' }];
+
+// A row the admin never filled in at all is dropped rather than sent as a 0–0 slab that
+// deducts nothing and then blocks the next slab as an overlap.
+const slabsPayload = (slabs: SlabDraft[]) => slabs
+  .filter((s) => s.min !== '' || s.max !== '' || s.amount !== '')
+  .map((s) => ({ min: Number(s.min) || 0, max: s.max === '' ? null : Number(s.max), amount: Number(s.amount) || 0 }));
+
+// The slab grid only — each caller keeps its own "+ Add slab" link and action buttons,
+// because the card puts them on one row with Disable/Save and the add-state form does not.
+function SlabRows({ slabs, setSlabs }: { slabs: SlabDraft[]; setSlabs: React.Dispatch<React.SetStateAction<SlabDraft[]>> }) {
+  const edit = (i: number, patch: Partial<SlabDraft>) => setSlabs(p => p.map((x, j) => j === i ? { ...x, ...patch } : x));
+  return (
+    <>
+      {slabs.map((s, i) => (
+        <div key={i} className="grid grid-cols-[1fr_1fr_1fr_32px] gap-2 items-center">
+          <input type="number" placeholder="From ₹" value={s.min} onChange={(e) => edit(i, { min: e.target.value })}
+            className="px-2 py-1.5 border border-border rounded-lg bg-background text-sm" />
+          <input type="number" placeholder="To ₹ (blank = no limit)" value={s.max} onChange={(e) => edit(i, { max: e.target.value })}
+            className="px-2 py-1.5 border border-border rounded-lg bg-background text-sm" />
+          <input type="number" placeholder="PT ₹/month" value={s.amount} onChange={(e) => edit(i, { amount: e.target.value })}
+            className="px-2 py-1.5 border border-border rounded-lg bg-background text-sm" />
+          <button onClick={() => setSlabs(p => p.filter((_, j) => j !== i))} className="p-1 text-secondary hover:text-red-600" title="Remove slab">✕</button>
+        </div>
+      ))}
+    </>
+  );
+}
+
+/*
+ * Introduce a state that has no property yet. Mirrors AddLwfState: savePtState accepts any
+ * name in INDIAN_STATES, not just the derived ones, so the PUT is all that is needed.
+ *
+ * Worth knowing before you use it: writing a PT row makes that state an OPERATING state
+ * everywhere, because getOperatingStates unions properties with the states that already
+ * carry statutory rows. So the state also gains an LWF card here and joins the preview-state
+ * picker on Salary Structures. That is the intended way to configure a state ahead of opening
+ * a property in it.
+ */
+function AddPtState({ existingStates }: { existingStates: Set<string> }) {
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [state, setState] = useState('');
+  const [slabs, setSlabs] = useState<SlabDraft[]>(BLANK_SLABS());
+
+  const reset = () => { setOpen(false); setState(''); setSlabs(BLANK_SLABS()); };
+  const options = INDIAN_STATES.filter((s) => !existingStates.has(s));
+
+  const save = useMutation({
+    mutationFn: () => api.put(`/statutory/pt/${encodeURIComponent(state)}`, { enabled: true, config: { slabs: slabsPayload(slabs) } }),
+    onSuccess: () => { toast.success(`Professional Tax added for ${state}`); qc.invalidateQueries({ queryKey: ['statutory'] }); reset(); },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to add state'),
+  });
+
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)} className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline">
+        <Plus size={15} /> Add a state
+      </button>
+    );
+  }
+
+  return (
+    <div className="bg-card rounded-xl border border-dashed border-border p-5 space-y-3 text-sm">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold text-foreground">Add a state</h3>
+        <button onClick={reset} className="p-1 text-secondary hover:text-foreground" aria-label="Close"><X size={16} /></button>
+      </div>
+
+      <label className="block text-xs text-secondary">State
+        <select value={state} onChange={(e) => setState(e.target.value)} className={`${inputCls} mt-1`}>
+          <option value="">Select a state…</option>
+          {options.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+      </label>
+
+      <div className="space-y-2">
+        <SlabRows slabs={slabs} setSlabs={setSlabs} />
+        <button onClick={() => setSlabs(p => [...p, { min: '', max: '', amount: '' }])} className="text-xs text-primary hover:underline">+ Add slab</button>
+      </div>
+
+      <div className="flex justify-end gap-2 pt-1">
+        <button onClick={reset} className="px-3 py-1.5 border border-border rounded-lg text-xs font-medium hover:bg-muted">Cancel</button>
+        {/* PT with no slabs deducts nothing, and the server rejects enabling in that state —
+            so the button is held shut rather than letting the save come back as an error. */}
+        <button onClick={() => save.mutate()} disabled={save.isPending || !state || slabsPayload(slabs).length === 0}
+          className="px-3 py-1.5 bg-primary text-white rounded-lg text-xs font-medium hover:bg-primary/90 disabled:opacity-50">
+          {save.isPending ? 'Adding…' : 'Add & Enable'}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function PtStateCard({ row }: { row: any }) {
   const qc = useQueryClient();
@@ -347,7 +511,7 @@ function PtStateCard({ row }: { row: any }) {
     const existing = Array.isArray(row.config?.slabs) ? row.config.slabs : [];
     setSlabs(existing.length
       ? existing.map((s: any) => ({ min: String(s.min ?? 0), max: s.max == null ? '' : String(s.max), amount: String(s.amount ?? 0) }))
-      : [{ min: '0', max: '', amount: '0' }]);
+      : BLANK_SLABS());
     setEditing(true);
   };
 
@@ -357,14 +521,7 @@ function PtStateCard({ row }: { row: any }) {
     onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to save'),
   });
 
-  const submit = (enabled: boolean) => save.mutate({
-    enabled,
-    config: {
-      slabs: slabs
-        .filter((s) => s.min !== '' || s.max !== '' || s.amount !== '')
-        .map((s) => ({ min: Number(s.min) || 0, max: s.max === '' ? null : Number(s.max), amount: Number(s.amount) || 0 })),
-    },
-  });
+  const submit = (enabled: boolean) => save.mutate({ enabled, config: { slabs: slabsPayload(slabs) } });
 
   const configured = Array.isArray(row.config?.slabs) && row.config.slabs.length > 0;
 
@@ -405,17 +562,7 @@ function PtStateCard({ row }: { row: any }) {
 
       {editing && (
         <div className="space-y-2 mt-2">
-          {slabs.map((s, i) => (
-            <div key={i} className="grid grid-cols-[1fr_1fr_1fr_32px] gap-2 items-center">
-              <input type="number" placeholder="From ₹" value={s.min} onChange={(e) => setSlabs(p => p.map((x, j) => j === i ? { ...x, min: e.target.value } : x))}
-                className="px-2 py-1.5 border border-border rounded-lg bg-background text-sm" />
-              <input type="number" placeholder="To ₹ (blank = no limit)" value={s.max} onChange={(e) => setSlabs(p => p.map((x, j) => j === i ? { ...x, max: e.target.value } : x))}
-                className="px-2 py-1.5 border border-border rounded-lg bg-background text-sm" />
-              <input type="number" placeholder="PT ₹/month" value={s.amount} onChange={(e) => setSlabs(p => p.map((x, j) => j === i ? { ...x, amount: e.target.value } : x))}
-                className="px-2 py-1.5 border border-border rounded-lg bg-background text-sm" />
-              <button onClick={() => setSlabs(p => p.filter((_, j) => j !== i))} className="p-1 text-secondary hover:text-red-600" title="Remove slab">✕</button>
-            </div>
-          ))}
+          <SlabRows slabs={slabs} setSlabs={setSlabs} />
           <div className="flex items-center justify-between pt-1">
             <button onClick={() => setSlabs(p => [...p, { min: '', max: '', amount: '' }])} className="text-xs text-primary hover:underline">+ Add slab</button>
             <div className="flex gap-2">
@@ -684,6 +831,8 @@ function BonusTab({ bonus }: { bonus: any }) {
     onSuccess: () => { toast.success('Statutory bonus saved'); setEditing(false); qc.invalidateQueries({ queryKey: ['statutory'] }); },
     onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to save'),
   });
+  const disable = useDisableComponent('bonus', 'Statutory bonus');
+  const onDisable = () => disable.mutate(undefined, { onSuccess: () => setEditing(false) });
 
   if (!bonus.enabled && !editing) {
     return (
@@ -722,7 +871,8 @@ function BonusTab({ bonus }: { bonus: any }) {
 
         <p className="text-xs text-secondary">Statutory Bonus is a percentage of the minimum wage or Basic (whichever the Act caps it at). Configure per-state minimum wage in the <span className="font-medium text-foreground">Minimum Wage</span> tab.</p>
 
-        <Footer onCancel={() => { setCfg(bonus.config); setEditing(false); }} onSave={() => save.mutate()} saving={save.isPending} saveLabel="Save" />
+        <Footer onCancel={() => { setCfg(bonus.config); setEditing(false); }} onSave={() => save.mutate()} saving={save.isPending} saveLabel={bonus.enabled ? 'Save' : 'Enable'}
+          onDisable={bonus.enabled ? onDisable : undefined} disableLabel="Disable Bonus" disabling={disable.isPending} />
       </div>
     </div>
   );
