@@ -2,6 +2,10 @@ import db from '../config/database';
 import { getMonthSummary } from './attendance.service';
 import { getMyBalances, getMyLeaves } from './leave.service';
 import { LIVE_VACANCY_STATUSES } from './recruitment.service';
+// An odd home for a four-line regex — it would sit better in utils/businessDate — but it is
+// already exported for exactly this purpose, and moving it would change its default from the UTC
+// month to the business month for every other caller. Worth doing, separately.
+import { assertMonth } from './attendanceRegister.service';
 
 // ─── Layer 1: KPI Strip ───
 
@@ -876,8 +880,18 @@ async function leaveBalancesFor(employeeId: number) {
   });
 }
 
-export async function getMyOverview(employeeId: number | null) {
-  const month = istMonth(0);
+/**
+ * One employee's own attendance and leave for a month.
+ *
+ * `monthArg` is optional and defaults to the current IST month, which is what every caller sent
+ * before it existed — so adding it changed nothing for them. Validated here rather than in the
+ * controller so the guard travels with the function: without it an unparseable month becomes the
+ * bounds 'abc-01'..'abc-31' and returns a silently empty month instead of an error.
+ *
+ * `month` stays in the response as the honest echo of which month was actually answered.
+ */
+export async function getMyOverview(employeeId: number | null, monthArg?: string) {
+  const month = monthArg ? assertMonth(monthArg) : istMonth(0);
   if (!employeeId) {
     return { month, attendance: { ...ZERO_ATTENDANCE }, leave: { balances: [], total_days: 0, used_days: 0, remaining: 0, pending_count: 0 } };
   }

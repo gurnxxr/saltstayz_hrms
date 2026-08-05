@@ -77,6 +77,45 @@ export function formatINRShort(
   return '₹' + v;
 }
 
+// ─── Calendar months ────────────────────────────────────────────────────────────
+//
+// A `YYYY-MM` here is a calendar LABEL, not an instant, and two rules keep it honest.
+//
+// "Which month is it now" is asked in IST, the same clock the rest of this file renders in.
+// `new Date().toISOString().slice(0, 7)` is the UTC month, so between midnight and 05:30 IST on
+// the 1st it still names the month that just ended.
+//
+// Rendering one builds it with Date.UTC and formats it with `timeZone: 'UTC'`. Leave the timezone
+// off and a browser west of Greenwich renders Date.UTC(2026, 7, 1) as 31 July — the label names the
+// month BEFORE the one it was handed. The same warning is written out at the top of
+// app/admin/attendance-register/page.tsx; this is that comment made reusable.
+
+/** The current calendar month, `YYYY-MM`, in IST. */
+export function currentMonth(now: Date = new Date()): string {
+  // en-CA is reliably YYYY-MM-DD; a year+month-only format string is implementation-defined.
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: IST, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(now).slice(0, 7);
+}
+
+/** `2026-08` → `August 2026`. */
+export function formatMonth(month: string): string {
+  const [y, m] = month.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, 1))
+    .toLocaleDateString('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+}
+
+/** The last `count` calendar months ending at `end`, newest first — ready for <option>. */
+export function recentMonths(count = 12, end: string = currentMonth()): { value: string; label: string }[] {
+  const [y, m] = end.split('-').map(Number);
+  return Array.from({ length: count }, (_, i) => {
+    // Date.UTC takes a negative month index and rolls the year back, so December of the previous
+    // year needs no special case.
+    const value = new Date(Date.UTC(y, m - 1 - i, 1)).toISOString().slice(0, 7);
+    return { value, label: formatMonth(value) };
+  });
+}
+
 /**
  * Pull the server's error message out of a failed `responseType: 'blob'` request.
  *
