@@ -121,11 +121,41 @@ function Stat({ label, value, color }: { label: string; value: number; color: st
   );
 }
 
+const NOTICE_OPTIONS = [30, 60];
+
+/** Today as YYYY-MM-DD in the viewer's own calendar — business dates are stored as TEXT. */
+function todayIso() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * Date arithmetic in UTC on purpose. Parsing 'YYYY-MM-DD' with the local constructor and
+ * stepping days lands an hour either side of midnight on a DST boundary, which silently
+ * shifts the last working day by one — and that day is what the settlement prorates against.
+ */
+function addDays(iso: string, days: number) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().slice(0, 10);
+}
+
 function InitiateModal({ onClose, onDone }: { onClose: () => void; onDone: (id: number) => void }) {
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search, 300);
   const [picked, setPicked] = useState<any>(null);
-  const [form, setForm] = useState({ exit_type: 'resignation', resignation_date: '', last_working_day: '', notice_period_days: '', reason: '' });
+  /*
+   * Notice period is the only date input now. The resignation date IS the day the exit is
+   * initiated, and the last working day is that date plus the notice — both were free date
+   * pickers, which let the three disagree (a 30-day notice recorded against a last working day
+   * 9 days out, and nothing objected). Captured once at mount rather than recomputed on render,
+   * so a dialog left open across midnight cannot renumber itself under the person using it.
+   */
+  const [resignationDate] = useState(todayIso);
+  const [noticeDays, setNoticeDays] = useState(NOTICE_OPTIONS[0]);
+  const [form, setForm] = useState({ exit_type: 'resignation', reason: '' });
+  const lastWorkingDay = addDays(resignationDate, noticeDays);
 
   const { data: results, isFetching: searching } = useQuery({
     queryKey: ['emp-picker', debouncedSearch],
@@ -136,14 +166,20 @@ function InitiateModal({ onClose, onDone }: { onClose: () => void; onDone: (id: 
   });
 
   const createMutation = useMutation({
-    mutationFn: () => api.post('/offboarding/cases', { employee_id: picked.id, ...form }).then(r => r.data),
+    mutationFn: () => api.post('/offboarding/cases', {
+      employee_id: picked.id,
+      ...form,
+      resignation_date: resignationDate,
+      last_working_day: lastWorkingDay,
+      notice_period_days: noticeDays,
+    }).then(r => r.data),
     onSuccess: (c) => { toast.success('Offboarding initiated'); onDone(c.id); },
     onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to initiate'),
   });
 
   // The API returns { data } when paginated, or a bare array otherwise — handle both.
   const employees = Array.isArray(results) ? results : (results?.data ?? []);
-  const valid = picked && form.last_working_day;
+  const valid = picked && lastWorkingDay;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -198,16 +234,21 @@ function InitiateModal({ onClose, onDone }: { onClose: () => void; onDone: (id: 
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-medium text-secondary mb-1">Notice period (days)</label>
-                <input type="number" value={form.notice_period_days} onChange={(e) => setForm({ ...form, notice_period_days: e.target.value })} className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm" />
+                <label className="block text-xs font-medium text-secondary mb-1">Notice period</label>
+                <select value={noticeDays} onChange={(e) => setNoticeDays(Number(e.target.value))} className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm">
+                  {NOTICE_OPTIONS.map((d) => <option key={d} value={d}>{d} days</option>)}
+                </select>
+              </div>
+              {/* Both dates follow from the notice period, so they are shown rather than asked for. */}
+              <div>
+                <label className="block text-xs font-medium text-secondary mb-1">Resignation date</label>
+                <input readOnly value={formatDate(resignationDate)} className="w-full px-3 py-2 border border-border rounded-lg bg-muted/50 text-sm cursor-default" />
+                <p className="text-[11px] text-secondary mt-1">The day this exit is initiated.</p>
               </div>
               <div>
-                <label className="block text-xs font-medium text-secondary mb-1">Resignation / notice date</label>
-                <input type="date" value={form.resignation_date} onChange={(e) => setForm({ ...form, resignation_date: e.target.value })} className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm" />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-secondary mb-1">Last working day *</label>
-                <input type="date" value={form.last_working_day} onChange={(e) => setForm({ ...form, last_working_day: e.target.value })} className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm" />
+                <label className="block text-xs font-medium text-secondary mb-1">Last working day</label>
+                <input readOnly value={formatDate(lastWorkingDay)} className="w-full px-3 py-2 border border-border rounded-lg bg-muted/50 text-sm cursor-default" />
+                <p className="text-[11px] text-secondary mt-1">{noticeDays} days after the resignation date.</p>
               </div>
             </div>
             <div>
