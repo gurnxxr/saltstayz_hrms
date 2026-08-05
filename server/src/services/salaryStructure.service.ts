@@ -228,18 +228,40 @@ async function validateLines(raw: any): Promise<StructureInput['lines']> {
   return lines;
 }
 
-async function validateStructureInput(data: any, excludeId?: number): Promise<StructureInput> {
-  const name = String(data.name || '').trim();
-  if (!name) throw new ValidationError('Structure name is required');
-  const dupName = db('salary_structures').whereRaw('lower(name) = lower(?)', [name]);
-  if (excludeId) dupName.whereNot('id', excludeId);
-  if (await dupName.first()) throw new ValidationError('A structure with this name already exists');
+/**
+ * A designation template's name IS its designation — the Designation tab has no Name field
+ * any more, because naming a template separately from the designation it maps to was pure
+ * duplication.
+ *
+ * `salary_structures.name` is NOT NULL and UNIQUE across EVERY row — templates and the
+ * per-employee private structures share one namespace — so a title already spoken for gets a
+ * deterministic suffix rather than an "already exists" the admin has no field left to fix.
+ * `(Structure)` is the same suffix db/seeds/10_salary_structures.ts already uses on this
+ * exact collision.
+ */
+async function deriveTemplateName(title: string, jobTitleId: number, excludeId?: number): Promise<string> {
+  const free = async (candidate: string) => {
+    const q = db('salary_structures').whereRaw('lower(name) = lower(?)', [candidate]);
+    if (excludeId) q.whereNot('id', excludeId);
+    return !(await q.first());
+  };
+  const base = title.trim();
+  if (await free(base)) return base;
+  const suffixed = `${base} (Structure)`;
+  if (await free(suffixed)) return suffixed;
+  return `${base} (Structure #${jobTitleId})`; // job_title_id is UNIQUE, so this is too
+}
 
+async function validateStructureInput(data: any, excludeId?: number): Promise<StructureInput> {
+  // Designation resolves FIRST: the name is derived from its title, so the title has to be
+  // in hand before the name can be settled.
   const job_title_id = data.job_title_id ? Number(data.job_title_id) : null;
+  let jobTitle: any = null;
   if (job_title_id) {
-    const jt = await db('job_titles').where('id', job_title_id).first();
-    if (!jt) throw new NotFoundError('Designation');
+    jobTitle = await db('job_titles').where('id', job_title_id).first();
+    if (!jobTitle) throw new NotFoundError('Designation');
     // One TEMPLATE per designation (employee structures never carry job_title_id).
+    // Backed by the DB: salary_structures_job_title_id_unique.
     const dupJt = db('salary_structures').where('job_title_id', job_title_id).whereNull('employee_id');
     if (excludeId) dupJt.whereNot('id', excludeId);
     if (await dupJt.first()) throw new ValidationError('That designation already has a structure');
@@ -260,6 +282,16 @@ async function validateStructureInput(data: any, excludeId?: number): Promise<St
   if (job_title_id && department_id) {
     throw new ValidationError('A template can be tied to a designation or a department, not both');
   }
+
+  // Designation templates no longer carry a name of their own. The Departments tab and any
+  // direct API caller still supply one; an omitted name on a designation template is derived
+  // from the designation, never rejected.
+  const supplied = String(data.name ?? '').trim();
+  const name = supplied || (jobTitle ? await deriveTemplateName(String(jobTitle.title), job_title_id!, excludeId) : '');
+  if (!name) throw new ValidationError('Structure name is required');
+  const dupName = db('salary_structures').whereRaw('lower(name) = lower(?)', [name]);
+  if (excludeId) dupName.whereNot('id', excludeId);
+  if (await dupName.first()) throw new ValidationError('A structure with this name already exists');
 
   const payment_basis = data.payment_basis === 'hourly' ? 'hourly' : 'monthly';
   const default_base = num(data.default_base);

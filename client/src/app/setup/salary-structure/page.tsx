@@ -251,33 +251,52 @@ const emptyTemplate = (): TemplateForm => ({
   lines: [{ component_id: '', calculation_type: 'pct_of_base', value: '50' }],
 });
 
-// TemplatesPanel serves two scopes with the same editor: a Designation template is
-// keyed to a job title (optional — a blank one is a generic template), a Department
-// template to a department (required). Everything that differs — which list to load,
-// which dropdown to show, which id field to send — lives here.
+// TemplatesPanel serves two scopes with the same editor.
+//
+// A DESIGNATION template IS its designation: no name of its own, one required dropdown,
+// one template per job title. That last part is not a new rule — the database has carried
+// UNIQUE (job_title_id) since the baseline; this screen just stops pretending otherwise.
+// Naming the template separately was pure duplication, so the server derives the name from
+// the chosen designation and the field is gone.
+//
+// A DEPARTMENT template is still a separately-named thing keyed to a department, so it keeps
+// its Name field — it has no designation to fall back on.
+//
+// Everything that differs — which list to load, whether a Name field appears at all, which id
+// field to send — lives here.
 type TemplateScope = 'designation' | 'department';
 const TEMPLATE_SCOPES: Record<TemplateScope, {
   listKey: readonly string[]; listUrl: string;
   optionsKey: readonly string[]; optionsUrl: string; optionLabel: (o: any) => string;
   payloadField: 'job_title_id' | 'department_id'; rowIdField: 'job_title_id' | 'department_id';
-  rowLabel: (s: any) => string; scopeInputLabel: string; scopeRequired: boolean;
-  nonePlaceholder: string; newLabel: string; emptyHint: string;
+  rowTitle: (s: any) => string; rowLabel: (s: any) => string | null;
+  showName: boolean; scopeInputLabel: string;
+  nonePlaceholder: string; newLabel: string; emptyHint: string; noOptionsHint: string;
 }> = {
   designation: {
     listKey: ['salary-structures', 'designation'], listUrl: '/admin/salary-structures',
     optionsKey: ['job-titles'], optionsUrl: '/admin/job-titles', optionLabel: (o) => o.title,
     payloadField: 'job_title_id', rowIdField: 'job_title_id',
-    rowLabel: (s) => s.designation || 'No designation',
-    scopeInputLabel: 'Designation (optional)', scopeRequired: false, nonePlaceholder: '— None —',
+    // The designation is the identity, so it is the headline and nothing repeats it
+    // underneath. `s.name` is the fallback for a row whose job title was deleted out from
+    // under it — there is no FK on job_title_id, so that orphan is reachable.
+    rowTitle: (s) => s.designation || s.name || 'No designation',
+    rowLabel: () => null,
+    showName: false,
+    scopeInputLabel: 'Designation', nonePlaceholder: '— Select a designation —',
     newLabel: 'New Template', emptyHint: 'Select a template, or create one for a designation',
+    noOptionsHint: 'Every designation already has a template. Add a designation in Admin → Organization first.',
   },
   department: {
     listKey: ['salary-structures', 'department'], listUrl: '/admin/salary-structures?scope=department',
     optionsKey: ['departments'], optionsUrl: '/admin/departments', optionLabel: (o) => o.name,
     payloadField: 'department_id', rowIdField: 'department_id',
+    rowTitle: (s) => s.name,
     rowLabel: (s) => s.department_name || 'No department',
-    scopeInputLabel: 'Department', scopeRequired: true, nonePlaceholder: '— Select a department —',
+    showName: true,
+    scopeInputLabel: 'Department', nonePlaceholder: '— Select a department —',
     newLabel: 'New Department Template', emptyHint: 'Select a template, or create one for a department',
+    noOptionsHint: 'Every department already has a template.',
   },
 };
 
@@ -314,6 +333,25 @@ function TemplatesPanel({ scope }: { scope: TemplateScope }) {
     [list, selectedId],
   );
 
+  // One template per designation (a DB UNIQUE on job_title_id) and one per department, so a
+  // scope row that already has a template cannot take a second.
+  //
+  // The dropdown still lists EVERY designation in the system — the taken ones are rendered
+  // disabled and labelled, not hidden. Hiding them was the first attempt and it was worse:
+  // with every designation already spoken for, the list collapsed to a single entry and read
+  // as a broken control rather than as "these are all spoken for". Disabling also keeps the
+  // reason on screen at the moment somebody looks for a designation and cannot pick it.
+  const scopeChoices = useMemo(() => {
+    const taken = new Set<number>(
+      (list as any[])
+        .filter((r) => r.id !== selectedId && r[cfg.rowIdField] != null)
+        .map((r) => Number(r[cfg.rowIdField])),
+    );
+    return (scopeOptions as any[]).map((o) => ({ ...o, taken: taken.has(Number(o.id)) }));
+  }, [list, scopeOptions, selectedId, cfg.rowIdField]);
+
+  const anySelectable = scopeChoices.some((o) => !o.taken);
+
   useEffect(() => {
     if (selectedId === 'new') { setForm(emptyTemplate()); return; }
     if (selected) {
@@ -336,7 +374,9 @@ function TemplatesPanel({ scope }: { scope: TemplateScope }) {
   const removeLine = (idx: number) => setForm((p) => ({ ...p, lines: p.lines.filter((_, i) => i !== idx) }));
 
   const payload = () => ({
-    name: form.name.trim(),
+    // The Designation tab has no Name field — the server derives it from the chosen
+    // designation. Omit the key entirely so it can tell "not supplied" from "blank".
+    ...(cfg.showName ? { name: form.name.trim() } : {}),
     [cfg.payloadField]: form.scope_id ? Number(form.scope_id) : null,
     payment_basis: form.payment_basis,
     default_base: Number(form.default_base) || 0,
@@ -405,11 +445,11 @@ function TemplatesPanel({ scope }: { scope: TemplateScope }) {
               className={`w-full text-left px-4 py-2.5 transition-colors ${selectedId === s.id ? 'bg-primary/5' : 'hover:bg-muted/40'}`}>
               <div className="flex items-center gap-2">
                 <Layers size={14} className="text-secondary shrink-0" />
-                <span className="text-sm font-medium text-foreground truncate flex-1">{s.name}</span>
+                <span className="text-sm font-medium text-foreground truncate flex-1">{cfg.rowTitle(s)}</span>
                 {!s.is_active && <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-secondary">Inactive</span>}
               </div>
               <p className="text-[11px] text-secondary mt-0.5 ml-6">
-                {cfg.rowLabel(s)} · CTC {formatINR(s.breakdown?.ctc ?? 0)}/mo
+                {cfg.rowLabel(s) ? `${cfg.rowLabel(s)} · ` : ''}CTC {formatINR(s.breakdown?.ctc ?? 0)}/mo
               </p>
             </button>
           ))}
@@ -427,7 +467,7 @@ function TemplatesPanel({ scope }: { scope: TemplateScope }) {
           <div className="bg-card rounded-xl border border-border p-5">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-foreground">
-                {selectedId === 'new' ? cfg.newLabel : `Edit — ${selected?.name ?? ''}`}
+                {selectedId === 'new' ? cfg.newLabel : `Edit — ${selected ? cfg.rowTitle(selected) : ''}`}
               </h2>
               <div className="flex items-center gap-2">
                 {typeof selectedId === 'number' && (
@@ -436,7 +476,7 @@ function TemplatesPanel({ scope }: { scope: TemplateScope }) {
                     <Trash2 size={16} />
                   </button>
                 )}
-                <button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || !form.name || !form.default_base || (cfg.scopeRequired && !form.scope_id)}
+                <button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || (cfg.showName && !form.name.trim()) || !form.default_base || !form.scope_id}
                   className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors">
                   {saveMutation.isPending ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />} Save
                 </button>
@@ -444,18 +484,33 @@ function TemplatesPanel({ scope }: { scope: TemplateScope }) {
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-              <div className="col-span-2 md:col-span-1">
-                <label className="block text-xs font-medium text-secondary mb-1">Name<span className="text-red-600"> *</span></label>
-                <input className={inputCls} value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="e.g. F&B Service Staff" />
-              </div>
+              {cfg.showName && (
+                <div className="col-span-2 md:col-span-1">
+                  <label className="block text-xs font-medium text-secondary mb-1">Name<span className="text-red-600"> *</span></label>
+                  <input className={inputCls} value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="e.g. F&B Service Staff" />
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-medium text-secondary mb-1">
-                  {cfg.scopeInputLabel}{cfg.scopeRequired && <span className="text-red-600"> *</span>}
+                  {cfg.scopeInputLabel}<span className="text-red-600"> *</span>
                 </label>
                 <select className={inputCls} value={form.scope_id} onChange={(e) => set('scope_id', e.target.value)}>
                   <option value="">{cfg.nonePlaceholder}</option>
-                  {scopeOptions.map((o: any) => <option key={o.id} value={o.id}>{cfg.optionLabel(o)}</option>)}
+                  {/* Orphan guard: a template whose scope row was deleted keeps showing its old
+                      label instead of snapping to the placeholder and silently re-scoping itself
+                      on the next Save. Same trick as the state picker three fields down. */}
+                  {form.scope_id && !scopeChoices.some((o: any) => String(o.id) === form.scope_id) && (
+                    <option value={form.scope_id}>{selected ? cfg.rowTitle(selected) : form.scope_id}</option>
+                  )}
+                  {scopeChoices.map((o: any) => (
+                    <option key={o.id} value={o.id} disabled={o.taken && String(o.id) !== form.scope_id}>
+                      {cfg.optionLabel(o)}{o.taken && String(o.id) !== form.scope_id ? ' — already has a template' : ''}
+                    </option>
+                  ))}
                 </select>
+                {selectedId === 'new' && !anySelectable && (
+                  <p className="mt-1 text-[11px] text-amber-700">{cfg.noOptionsHint}</p>
+                )}
               </div>
               <div>
                 <label className="block text-xs font-medium text-secondary mb-1">Payment basis</label>
@@ -493,7 +548,7 @@ function TemplatesPanel({ scope }: { scope: TemplateScope }) {
       <ConfirmDialog
         open={!!confirmDel}
         title="Delete template?"
-        message={confirmDel ? <>This permanently removes <span className="font-medium text-foreground">{confirmDel.name}</span>.{scope === 'designation' ? ' New hires for its designation will no longer be seeded from it.' : ''}</> : undefined}
+        message={confirmDel ? <>This permanently removes <span className="font-medium text-foreground">{cfg.rowTitle(confirmDel)}</span>.{scope === 'designation' ? ' New hires for its designation will no longer be seeded from it.' : ''}</> : undefined}
         confirmLabel="Delete"
         loading={deleteMutation.isPending}
         onConfirm={() => confirmDel && deleteMutation.mutate(confirmDel.id)}
