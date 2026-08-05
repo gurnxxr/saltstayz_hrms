@@ -251,19 +251,20 @@ const emptyTemplate = (): TemplateForm => ({
   lines: [{ component_id: '', calculation_type: 'pct_of_base', value: '50' }],
 });
 
-// TemplatesPanel serves two scopes with the same editor.
+// TemplatesPanel serves two scopes with the same editor, and both work the same way: the
+// template IS the thing it is scoped to. A designation template is its designation, a
+// department template is its department — one required dropdown, no name of its own, one
+// template per scope row.
 //
-// A DESIGNATION template IS its designation: no name of its own, one required dropdown,
-// one template per job title. That last part is not a new rule — the database has carried
-// UNIQUE (job_title_id) since the baseline; this screen just stops pretending otherwise.
-// Naming the template separately was pure duplication, so the server derives the name from
-// the chosen designation and the field is gone.
+// Naming a template separately from what it maps to was pure duplication and only invited the
+// two to disagree, so the server derives the name from the chosen scope row. The 1:1 rule is
+// not new either: the database has carried UNIQUE (job_title_id) since the baseline, and the
+// service has always refused a second template per department.
 //
-// A DEPARTMENT template is still a separately-named thing keyed to a department, so it keeps
-// its Name field — it has no designation to fall back on.
+// `showName` survives as a config flag rather than being deleted because the server still
+// accepts a supplied name from direct API callers; no tab sets it today.
 //
-// Everything that differs — which list to load, whether a Name field appears at all, which id
-// field to send — lives here.
+// Everything that differs — which list to load, which id field to send — lives here.
 type TemplateScope = 'designation' | 'department';
 const TEMPLATE_SCOPES: Record<TemplateScope, {
   listKey: readonly string[]; listUrl: string;
@@ -291,9 +292,11 @@ const TEMPLATE_SCOPES: Record<TemplateScope, {
     listKey: ['salary-structures', 'department'], listUrl: '/admin/salary-structures?scope=department',
     optionsKey: ['departments'], optionsUrl: '/admin/departments', optionLabel: (o) => o.name,
     payloadField: 'department_id', rowIdField: 'department_id',
-    rowTitle: (s) => s.name,
-    rowLabel: (s) => s.department_name || 'No department',
-    showName: true,
+    // Same as designation: the department is the identity, so it is the headline and nothing
+    // repeats it underneath. `s.name` is the fallback for a row whose department was deleted.
+    rowTitle: (s) => s.department_name || s.name || 'No department',
+    rowLabel: () => null,
+    showName: false,
     scopeInputLabel: 'Department', nonePlaceholder: '— Select a department —',
     newLabel: 'New Department Template', emptyHint: 'Select a template, or create one for a department',
     noOptionsHint: 'Every department already has a template.',
@@ -374,8 +377,8 @@ function TemplatesPanel({ scope }: { scope: TemplateScope }) {
   const removeLine = (idx: number) => setForm((p) => ({ ...p, lines: p.lines.filter((_, i) => i !== idx) }));
 
   const payload = () => ({
-    // The Designation tab has no Name field — the server derives it from the chosen
-    // designation. Omit the key entirely so it can tell "not supplied" from "blank".
+    // Neither tab has a Name field — the server derives it from the chosen scope row. Omit
+    // the key entirely so it can tell "not supplied" from "blank".
     ...(cfg.showName ? { name: form.name.trim() } : {}),
     [cfg.payloadField]: form.scope_id ? Number(form.scope_id) : null,
     payment_basis: form.payment_basis,

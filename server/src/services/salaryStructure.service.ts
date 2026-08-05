@@ -229,32 +229,35 @@ async function validateLines(raw: any): Promise<StructureInput['lines']> {
 }
 
 /**
- * A designation template's name IS its designation — the Designation tab has no Name field
- * any more, because naming a template separately from the designation it maps to was pure
- * duplication.
+ * A template's name IS the thing it is scoped to — its designation, or its department. Neither
+ * tab has a Name field any more, because naming a template separately from what it maps to was
+ * pure duplication and only invited the two to disagree.
  *
  * `salary_structures.name` is NOT NULL and UNIQUE across EVERY row — templates and the
- * per-employee private structures share one namespace — so a title already spoken for gets a
+ * per-employee private structures share one namespace — so a label already spoken for gets a
  * deterministic suffix rather than an "already exists" the admin has no field left to fix.
  * `(Structure)` is the same suffix db/seeds/10_salary_structures.ts already uses on this
  * exact collision.
+ *
+ * `scopeKey` only seeds the last-resort suffix. Both scope ids are unique per template, so the
+ * final candidate cannot collide with another template of the same scope.
  */
-async function deriveTemplateName(title: string, jobTitleId: number, excludeId?: number): Promise<string> {
+async function deriveTemplateName(label: string, scopeKey: string, excludeId?: number): Promise<string> {
   const free = async (candidate: string) => {
     const q = db('salary_structures').whereRaw('lower(name) = lower(?)', [candidate]);
     if (excludeId) q.whereNot('id', excludeId);
     return !(await q.first());
   };
-  const base = title.trim();
+  const base = label.trim();
   if (await free(base)) return base;
   const suffixed = `${base} (Structure)`;
   if (await free(suffixed)) return suffixed;
-  return `${base} (Structure #${jobTitleId})`; // job_title_id is UNIQUE, so this is too
+  return `${base} (Structure ${scopeKey})`;
 }
 
 async function validateStructureInput(data: any, excludeId?: number): Promise<StructureInput> {
-  // Designation resolves FIRST: the name is derived from its title, so the title has to be
-  // in hand before the name can be settled.
+  // The scope resolves FIRST: the name is derived from its label, so the label has to be in
+  // hand before the name can be settled.
   const job_title_id = data.job_title_id ? Number(data.job_title_id) : null;
   let jobTitle: any = null;
   if (job_title_id) {
@@ -268,9 +271,10 @@ async function validateStructureInput(data: any, excludeId?: number): Promise<St
   }
 
   const department_id = data.department_id ? Number(data.department_id) : null;
+  let department: any = null;
   if (department_id) {
-    const dept = await db('departments').where('id', department_id).first();
-    if (!dept) throw new NotFoundError('Department');
+    department = await db('departments').where('id', department_id).first();
+    if (!department) throw new NotFoundError('Department');
     // One TEMPLATE per department (employee structures never carry department_id).
     const dupDept = db('salary_structures').where('department_id', department_id).whereNull('employee_id');
     if (excludeId) dupDept.whereNot('id', excludeId);
@@ -283,11 +287,13 @@ async function validateStructureInput(data: any, excludeId?: number): Promise<St
     throw new ValidationError('A template can be tied to a designation or a department, not both');
   }
 
-  // Designation templates no longer carry a name of their own. The Departments tab and any
-  // direct API caller still supply one; an omitted name on a designation template is derived
-  // from the designation, never rejected.
+  // Templates no longer carry a name of their own — neither tab has the field. A direct API
+  // caller may still supply one; an omitted name is derived from whichever scope was chosen,
+  // never rejected. Only a payload with no name AND no scope at all can still fail here.
   const supplied = String(data.name ?? '').trim();
-  const name = supplied || (jobTitle ? await deriveTemplateName(String(jobTitle.title), job_title_id!, excludeId) : '');
+  const name = supplied
+    || (jobTitle ? await deriveTemplateName(String(jobTitle.title), `#${job_title_id}`, excludeId) : '')
+    || (department ? await deriveTemplateName(String(department.name), `dept #${department_id}`, excludeId) : '');
   if (!name) throw new ValidationError('Structure name is required');
   const dupName = db('salary_structures').whereRaw('lower(name) = lower(?)', [name]);
   if (excludeId) dupName.whereNot('id', excludeId);
