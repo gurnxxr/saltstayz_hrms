@@ -11,6 +11,7 @@ import LoadError from '@/components/ui/LoadError';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import api from '@/lib/api';
 import { useUnsavedChangesWarning } from '@/hooks/useUnsavedChangesWarning';
+import { offDaysInWords } from '@/lib/weeklyOff';
 import { Plus, Clock, Pencil, Trash2, ArrowLeft, Save, Loader2, Info, Moon } from 'lucide-react';
 
 const ROSTER_COLORS: { name: string; hex: string }[] = [
@@ -28,7 +29,6 @@ const ROSTER_COLORS: { name: string; hex: string }[] = [
 const colorHex = (name: string) => ROSTER_COLORS.find((c) => c.name === name)?.hex ?? '#3b82f6';
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-const DAYS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 const inputCls =
   'w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50';
@@ -192,17 +192,7 @@ function NotYetApplied() {
  */
 
 /** Human summary of an off-day pattern, for the list table. */
-function offDaySummary(offs: any): string {
-  if (!Array.isArray(offs) || offs.length === 0) return '—';
-  return offs
-    .slice()
-    .sort((a: any, b: any) => a.day - b.day)
-    .map((o: any) => {
-      const d = DAYS_SHORT[Number(o.day)] ?? '?';
-      return Array.isArray(o.weeks) && o.weeks.length ? `${d} (${o.weeks.join(',')})` : d;
-    })
-    .join(', ');
-}
+const offDaySummary = (offs: any) => offDaysInWords(offs, { style: 'compact', empty: '—' });
 
 export default function ShiftTypePage() {
   const qc = useQueryClient();

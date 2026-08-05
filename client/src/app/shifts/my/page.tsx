@@ -7,9 +7,10 @@ import AppShell from '@/components/layout/AppShell';
 import LoadError from '@/components/ui/LoadError';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import { offDaysInWords } from '@/lib/weeklyOff';
+import { useMyWeeklyOff } from '@/components/shifts/WeeklyOffCard';
 import { Clock, CalendarClock, Loader2, Send, Moon, ArrowRight } from 'lucide-react';
 
-const DAYS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const inputCls =
   'w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50';
 
@@ -28,25 +29,14 @@ const todayStr = () => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 };
 
-/** "Every Sunday, plus the 2nd and 4th Saturday" — in words. */
-function offDaysInWords(offs: any): string {
-  if (!Array.isArray(offs) || offs.length === 0) return 'Follows the company work week';
-  return offs
-    .slice()
-    .sort((a: any, b: any) => a.day - b.day)
-    .map((o: any) => {
-      const day = DAYS_SHORT[Number(o.day)] ?? '?';
-      if (!Array.isArray(o.weeks) || !o.weeks.length) return `every ${day}`;
-      const ord = o.weeks.map((w: number) => `${w}${['st', 'nd', 'rd', 'th', 'th'][w - 1]}`).join(' & ');
-      return `the ${ord} ${day}`;
-    })
-    .join(', ');
-}
-
 export default function MyShiftsPage() {
   const qc = useQueryClient();
   const { user } = useAuth();
   const hasProfile = !!user?.employeeId;
+
+  // The RESOLVED off days — the shift's own pattern, then the leave template, then the Default
+  // template, then the company work week. Shared with the dashboard card so the two cannot differ.
+  const { data: weeklyOff } = useMyWeeklyOff();
 
   const [form, setForm] = useState({ date: todayStr(), target: '', reason: '' });
 
@@ -140,7 +130,38 @@ export default function MyShiftsPage() {
                   <div className="mt-4 pt-4 border-t border-border grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                     <div>
                       <p className="text-xs text-secondary">Off days</p>
-                      <p className="text-foreground capitalize">{offDaysInWords(current.weekly_off_days)}</p>
+                      {/*
+                        NOT `current.weekly_off_days`. That is only the FIRST of four rungs the
+                        engine walks (payableDays.service, `policyFor`), migration 020 shipped every
+                        shift with an empty array, and an empty rung falls THROUGH — it never means
+                        "works every day". Rendering it here printed "Follows the company work week"
+                        to essentially the whole workforce, which is false for anyone whose rest days
+                        come from a leave template. That is the normal case.
+
+                        The resolved answer comes from the attendance calendar, the one self-scoped
+                        surface that walks the whole ladder. When it can't be fetched, say so — do
+                        NOT fall back to rung 1, which is how this went wrong the first time.
+                      */}
+                      {weeklyOff === undefined ? (
+                        <p className="text-secondary">Loading…</p>
+                      ) : weeklyOff === null ? (
+                        <p className="text-secondary">Couldn&apos;t load your off days</p>
+                      ) : (
+                        <>
+                          <p className="text-foreground first-letter:uppercase">
+                            {offDaysInWords(weeklyOff.days, { empty: 'No weekly off is set for you' })}
+                          </p>
+                          {/* Which rung decided it. Branch on the engine's own enum, not on the
+                              display name — a leave template can be renamed to anything. */}
+                          <p className="text-xs text-secondary mt-0.5">
+                            {weeklyOff.decidedByKind === 'shift'
+                              ? `Set by this shift · ${current.name}`
+                              : weeklyOff.decidedBy
+                                ? `From ${weeklyOff.decidedBy} — not from this shift`
+                                : 'Nothing sets a rest day for you — ask HR'}
+                          </p>
+                        </>
+                      )}
                     </div>
                     {current.office_hour_time && (
                       <div>
@@ -226,7 +247,14 @@ export default function MyShiftsPage() {
               {selected && (
                 <p className="text-xs text-secondary">
                   {selected.name} runs {selected.start_time}–{selected.end_time}
-                  {selected.ends_next_day ? ' (ends the next day)' : ''} · off days: {offDaysInWords(selected.weekly_off_days)}
+                  {selected.ends_next_day ? ' (ends the next day)' : ''} ·{' '}
+                  {/* This one genuinely IS rung 1 — it describes a shift you have not moved to yet.
+                      An empty pattern on the target means moving to it leaves your off days exactly
+                      where they came from, which is a different statement from "the company work
+                      week", a rung this shift has no say over. */}
+                  {offDaysInWords(selected.weekly_off_days, {
+                    empty: 'this shift does not change your off days',
+                  })}
                 </p>
               )}
 

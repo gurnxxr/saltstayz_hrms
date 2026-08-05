@@ -7,7 +7,7 @@ import { audienceOf, scopeHolidaysTo } from './holidayScope';
 import { getPaySchedule } from './paySchedule.service';
 import { overnightHours, judgeDay } from './attendance.calc';
 import { pickAssignmentFor } from './shiftPattern';
-import { buildWorkCalendar } from './payableDays.service';
+import { buildWorkCalendar, type DayDecidedBy } from './payableDays.service';
 import { businessToday } from '../utils/businessDate';
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
@@ -108,6 +108,22 @@ export async function autoMarkAttendance(date?: string) {
   return { date: target, scanned, updated };
 }
 
+/**
+ * One day of GET /attendance/my-calendar.
+ *
+ * `kind` is what the employee should SEE — a day before they joined is `not_employed`, whatever
+ * the roster would have said. `base` is what the roster actually said, kept separately because it
+ * is the only way to read a weekly pattern off a month that an employment date clipped.
+ */
+export interface MyCalendarDay {
+  date: string;
+  kind: 'working' | 'weekly_off' | 'holiday' | 'not_employed';
+  base: 'working' | 'weekly_off' | 'holiday';
+  decided_by: DayDecidedBy;
+  decided_by_name: string;
+  holiday_name?: string;
+}
+
 export async function getMyCalendar(employeeId: number, month: string) {
   // month format: "2026-06"
   const startDate = `${month}-01`;
@@ -143,13 +159,23 @@ export async function getMyCalendar(employeeId: number, month: string) {
   // punch" appears on somebody's Sunday with nothing explaining why it did not cost them
   // anything — and the screen had to guess, hard-coding Saturday and Sunday for everyone.
   const cal = await buildWorkCalendar(employeeId, startDate, endDate);
-  const days = [];
+  const days: MyCalendarDay[] = [];
   for (let d = 1; d <= lastDay; d++) {
     const date = `${month}-${String(d).padStart(2, '0')}`;
     const info = cal.classify(date);
     days.push({
       date,
       kind: info.employed ? info.base : 'not_employed',
+      // The verdict `kind` hides outside the employment span. `classify` computes it regardless of
+      // `employed` (payableDays.service: the off-day question is answered from policyFor before
+      // the employment span is consulted), so carrying it costs nothing — and without it a month
+      // clipped by a joining or leaving date cannot say whether the 8th was a rest day. A weekly
+      // pattern is exactly that question asked thirty-one times, so a mid-month joiner would come
+      // out with most of their pattern missing.
+      base: info.base,
+      // The machine answer beside the human one. A screen deciding "did the shift set this, or the
+      // leave template?" must not do it by string-matching a display name somebody can rename.
+      decided_by: info.base === 'holiday' ? 'holiday' : info.source,
       decided_by_name: info.base === 'holiday' ? (info.holidayName ?? 'Holiday') : info.sourceName,
       ...(info.holidayName ? { holiday_name: info.holidayName } : {}),
     });

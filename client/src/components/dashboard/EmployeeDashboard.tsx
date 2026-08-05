@@ -7,6 +7,7 @@ import api from '@/lib/api';
 import { currentMonth, formatMonth, recentMonths } from '@/lib/utils';
 import DashboardGreeting from '@/components/dashboard/DashboardGreeting';
 import UpcomingHolidaysCard from '@/components/leaves/UpcomingHolidaysCard';
+import WeeklyOffCard from '@/components/shifts/WeeklyOffCard';
 import { ATTENDANCE_CODES } from '@/lib/attendanceCodes';
 import { CalendarCheck, CalendarOff, Clock, Wallet, CalendarPlus, FileText, User, BarChart3 } from 'lucide-react';
 
@@ -187,6 +188,11 @@ export default function EmployeeDashboard() {
 
       {/* Holidays — sits beside My Shift because both answer "when am I not working". */}
       <UpcomingHolidaysCard />
+
+      {/* The other half of that answer, and the one that repeats every week. Fed from the resolved
+          calendar rather than the shift, so it survives the common case where the shift sets no
+          off days of its own and the leave template decides them instead. */}
+      <WeeklyOffCard />
 
       {/* My Shift */}
       <div className="bg-card rounded-xl border border-border p-6">

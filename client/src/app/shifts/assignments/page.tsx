@@ -11,6 +11,7 @@ import Pagination from '@/components/ui/Pagination';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { offDaysInWords } from '@/lib/weeklyOff';
 import { Search, Clock, Loader2, X, History, UserCog, Moon, Trash2, Download, Upload, Copy } from 'lucide-react';
 
 const PAGE_SIZE = 15;
@@ -25,26 +26,20 @@ function copyErrors(errors: string[]) {
 const inputCls =
   'w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50';
 
-const DAYS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
 const todayStr = () => {
   const d = new Date();
   const p = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 };
 
-/** "Sun, Sat (2,4)" — the off days an employee inherits from their shift. */
-function offDaySummary(offs: any): string {
-  if (!Array.isArray(offs) || offs.length === 0) return 'Company work week';
-  return offs
-    .slice()
-    .sort((a: any, b: any) => a.day - b.day)
-    .map((o: any) => {
-      const d = DAYS_SHORT[Number(o.day)] ?? '?';
-      return Array.isArray(o.weeks) && o.weeks.length ? `${d} (${o.weeks.join(',')})` : d;
-    })
-    .join(', ');
-}
+/**
+ * "Sun, Sat (2,4)" — the off days declared by a SHIFT, which is only the first of four rungs the
+ * engine walks. An empty pattern here means this shift declares none, so the employee's rest days
+ * come from their leave template or the company work week; it does NOT mean they follow the work
+ * week, which is what the wording used to claim.
+ */
+const offDaySummary = (offs: any) =>
+  offDaysInWords(offs, { style: 'compact', empty: 'Not set on this shift' });
 
 function ShiftLabel({ s }: { s: any }) {
   if (!s) return <span className="text-secondary">—</span>;

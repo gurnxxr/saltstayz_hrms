@@ -9,7 +9,10 @@
  * have meant two places where "2nd and 4th Saturday" could come to mean different things.
  */
 
-export interface OffDay { day: number; weeks: number[] | null }
+// The type lives in lib/weeklyOff so plain modules can own it without importing from a
+// 'use client' component. Re-exported here because half the app already imports it from this path.
+import type { OffDay } from '@/lib/weeklyOff';
+export type { OffDay };
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const DAYS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
