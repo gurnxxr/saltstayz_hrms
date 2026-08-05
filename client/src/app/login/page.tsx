@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth';
 import { Loader2 } from 'lucide-react';
+import PasswordInput from '@/components/ui/PasswordInput';
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -88,9 +89,8 @@ export default function LoginPage() {
                   Forgot password?
                 </Link>
               </div>
-              <input
+              <PasswordInput
                 id="password"
-                type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Enter password"

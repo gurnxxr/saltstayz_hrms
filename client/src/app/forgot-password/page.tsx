@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, Loader2, MailCheck } from 'lucide-react';
 import api from '@/lib/api';
+import PasswordInput from '@/components/ui/PasswordInput';
 
 /**
  * Password reset for someone who cannot sign in.
@@ -181,9 +182,8 @@ export default function ForgotPasswordPage() {
                 <label htmlFor="newPassword" className="block text-sm font-medium text-foreground mb-1.5">
                   New password
                 </label>
-                <input
+                <PasswordInput
                   id="newPassword"
-                  type="password"
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
                   required
@@ -199,9 +199,8 @@ export default function ForgotPasswordPage() {
                 <label htmlFor="confirmPassword" className="block text-sm font-medium text-foreground mb-1.5">
                   Confirm new password
                 </label>
-                <input
+                <PasswordInput
                   id="confirmPassword"
-                  type="password"
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   required

@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import { KeyRound, Loader2 } from 'lucide-react';
+import PasswordInput from '@/components/ui/PasswordInput';
 
 export default function SettingsPage() {
   const [pw, setPw] = useState({ currentPassword: '', newPassword: '', confirm: '' });
@@ -54,8 +55,7 @@ export default function SettingsPage() {
           <form onSubmit={submitPassword} className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="block text-sm font-medium text-foreground mb-1.5">Current Password</label>
-              <input
-                type="password"
+              <PasswordInput
                 required
                 value={pw.currentPassword}
                 onChange={(e) => setPw(p => ({ ...p, currentPassword: e.target.value }))}
@@ -64,8 +64,7 @@ export default function SettingsPage() {
             </div>
             <div>
               <label className="block text-sm font-medium text-foreground mb-1.5">New Password</label>
-              <input
-                type="password"
+              <PasswordInput
                 required
                 minLength={4}
                 value={pw.newPassword}
@@ -76,8 +75,7 @@ export default function SettingsPage() {
             </div>
             <div>
               <label className="block text-sm font-medium text-foreground mb-1.5">Confirm New Password</label>
-              <input
-                type="password"
+              <PasswordInput
                 required
                 value={pw.confirm}
                 onChange={(e) => setPw(p => ({ ...p, confirm: e.target.value }))}
