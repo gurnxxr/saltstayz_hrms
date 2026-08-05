@@ -51,7 +51,7 @@ export default function LeaveControlPanelPage() {
     <AppShell>
       <div className="space-y-6">
         <div>
-          <Breadcrumb className="mb-2" items={[{ label: 'Leaves', href: '/leaves/my' }, { label: 'Control Panel' }]} />
+          <Breadcrumb className="mb-2" items={[{ label: 'Leaves' }, { label: 'Control Panel' }]} />
           <h1 className="text-2xl font-bold text-foreground">Leave Control Panel</h1>
           <p className="text-secondary mt-1">Build leave templates, assign them to employees, and manage the type catalog & periods.</p>
         </div>

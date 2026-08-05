@@ -49,17 +49,27 @@ export const NAVIGATION: NavItem[] = [
     ],
   },
   {
-    // ONE Leaves entry. There used to be two adjacent ones — a flat "My Leaves" and a "Leaves"
-    // group — which read as the same thing twice and gave no clue which was which.
+    // Self-service: the signed-in user's own leave — apply, cancel, balances, holidays.
     //
-    // Self-service is the FIRST child on purpose: it is the only child most roles can see, and
-    // Sidebar collapses a single-visible-child group back down to that child's link, so an
-    // employee still reaches their leave in one click rather than through an accordion.
+    // A TOP-LEVEL entry, not a child of the admin group below. It was briefly folded in there to
+    // stop two adjacent entries both saying "Leaves", and that was the wrong trade: it put the one
+    // leave screen everybody uses, every week, behind a disclosure that only staff have any reason
+    // to open. The ambiguity is worth less than the click. "My Leave" vs "Leaves" carries the
+    // distinction on its own.
     //
-    // Gated on `leave`, NOT a nav-only key of its own. Every endpoint behind these pages is
-    // authorize('leave', …) (see server/src/routes/leave.routes.ts), so a visibility-only key
-    // would show the entry and then 403 on every request behind it. Granting `leave` in
-    // Admin → Module Access is what turns this on for one employee.
+    // Gated on `leave`, NOT a nav-only key of its own. Every endpoint this page calls is
+    // authorize('leave', …) (see server/src/routes/leave.routes.ts), so a visibility-only
+    // key would show the entry and then 403 on every request behind it. Granting `leave`
+    // in Admin → Module Access is what turns this on for one employee.
+    label: 'My Leave',
+    href: '/leaves/my',
+    icon: 'CalendarPlus',
+    roles: ['admin', 'chro', 'hr', 'hr_manager', 'cluster_hr', 'property_manager', 'employee', 'finance'],
+    module: 'leave',
+  },
+  {
+    // Leave ADMINISTRATION. Every child is admin/CHRO/HR only, so the Sidebar hides the
+    // whole group for anyone else (it drops a group with no visible children).
     //
     // The children deliberately carry NO `module` key. Sidebar's visible() returns roleAllowed
     // untouched when a child has no module — add `module: 'leave'` and an employee with a
@@ -67,12 +77,11 @@ export const NAVIGATION: NavItem[] = [
     // Balances, Encashment and Control Panel and get a 403 from every one. Denial still works:
     // the parent carries the module, and a filtered-out parent drops the whole group.
     label: 'Leaves',
-    href: '/leaves/my',
+    href: '/leaves/balances',
     icon: 'CalendarDays',
-    roles: ['admin', 'chro', 'hr', 'hr_manager', 'cluster_hr', 'property_manager', 'employee', 'finance'],
+    roles: ['admin', 'chro', 'hr'],
     module: 'leave',
     children: [
-      { label: 'My Leave', href: '/leaves/my', icon: 'CalendarPlus', roles: ['admin', 'chro', 'hr', 'hr_manager', 'cluster_hr', 'property_manager', 'employee', 'finance'] },
       { label: 'Balances', href: '/leaves/balances', icon: 'Scale', roles: ['admin', 'chro', 'hr'] },
       { label: 'Encashment', href: '/leaves/encashment', icon: 'Coins', roles: ['admin', 'chro', 'hr'] },
       // Publishing the holiday calendar and reading it are two halves of one feature. The API

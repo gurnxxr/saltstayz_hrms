@@ -109,7 +109,7 @@ export default function LeaveBalancesPage() {
     <AppShell>
       <div className="space-y-6">
         <div>
-          <Breadcrumb className="mb-2" items={[{ label: 'Leaves', href: '/leaves/my' }, { label: 'Balances' }]} />
+          <Breadcrumb className="mb-2" items={[{ label: 'Leaves' }, { label: 'Balances' }]} />
           <h1 className="text-2xl font-bold text-foreground">Leave Balances</h1>
           <p className="text-secondary mt-1">
             Every employee&apos;s balance by leave type{data?.period ? ` — ${data.period.name}` : ''}

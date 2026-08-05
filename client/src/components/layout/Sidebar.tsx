@@ -83,16 +83,7 @@ export default function Sidebar({ collapsed, onToggle }: { collapsed: boolean; o
       </div>
 
       <nav className="flex-1 py-4 px-2 space-y-1 overflow-y-auto">
-        {filteredNav.map((rawItem) => {
-          // A group whose role filter leaves exactly ONE visible child is a disclosure wrapped
-          // around a single link — an employee's Leaves group is only "My Leave". Render it as
-          // that link instead, so the majority of users still reach it in one click rather than
-          // two. It keeps the group's own label and icon, and the child's href is still in
-          // navHrefs, so the active highlight is unaffected.
-          const onlyKid = rawItem.children?.filter(visible);
-          const item = onlyKid?.length === 1
-            ? { ...rawItem, href: onlyKid[0].href, children: undefined }
-            : rawItem;
+        {filteredNav.map((item) => {
           const Icon = iconMap[item.icon] || LayoutDashboard;
 
           // ── Collapsible group (parent with subtabs) ──

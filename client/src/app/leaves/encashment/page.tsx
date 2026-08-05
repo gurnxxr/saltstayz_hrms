@@ -55,7 +55,7 @@ export default function LeaveEncashmentPage() {
       <div className="space-y-6">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <Breadcrumb className="mb-2" items={[{ label: 'Leaves', href: '/leaves/my' }, { label: 'Encashment' }]} />
+            <Breadcrumb className="mb-2" items={[{ label: 'Leaves' }, { label: 'Encashment' }]} />
             <h1 className="text-2xl font-bold text-foreground">Leave Encashment</h1>
             <p className="text-secondary mt-1">Encash unused leave — approving deducts the days from the balance; Finance pays the amount outside payroll</p>
           </div>
