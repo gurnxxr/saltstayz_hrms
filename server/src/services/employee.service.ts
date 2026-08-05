@@ -489,10 +489,12 @@ const FIXED_AT_ONBOARDING = [
   'father_name', 'date_of_birth', 'gender', 'pan_number', 'date_of_joining',
 ] as const;
 
+/** Empty for this purpose: never set, or set to whitespace. `0` is not blank. */
+const isBlank = (v: any) => v === null || v === undefined || String(v).trim() === '';
+
 export async function updateEmployee(id: number, data: any) {
-  await db('employees').where('id', id).first().then(e => {
-    if (!e) throw Object.assign(new Error('Employee not found'), { status: 404 });
-  });
+  const existing = await db('employees').where('id', id).first();
+  if (!existing) throw Object.assign(new Error('Employee not found'), { status: 404 });
 
   if (data.email) {
     const emailExists = await db('employees').where('email', data.email).whereNot('id', id).first();
@@ -501,8 +503,16 @@ export async function updateEmployee(id: number, data: any) {
 
   // Drop rather than reject: the edit form posts the whole record back, so these arrive on
   // every save even when untouched. Rejecting would fail ordinary edits.
+  //
+  // FIXED means fixed once RECORDED, not fixed forever. A row that never got a gender or a PAN
+  // has nothing to protect, and the old blanket delete meant the only way to fill that gap was
+  // a hand-written UPDATE — so the gaps stayed. A blank field accepts its first value here;
+  // after that it is locked exactly as before. Blank incoming values are dropped either way,
+  // so posting the record back with an empty box can never erase a recorded one.
   const patch: any = { ...data };
-  for (const f of FIXED_AT_ONBOARDING) delete patch[f];
+  for (const f of FIXED_AT_ONBOARDING) {
+    if (!isBlank(existing[f]) || isBlank(patch[f])) delete patch[f];
+  }
 
   normalizeGender(patch);
   await db('employees').where('id', id).update({ ...patch, updated_at: db.fn.now() });
