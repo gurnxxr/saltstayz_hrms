@@ -6,8 +6,11 @@ import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { formatINR } from '@/lib/utils';
+import { cn, errorFromBlob, formatDate, formatINR } from '@/lib/utils';
+import { statutoryLines } from '@/lib/payslip';
 import LoadError from '@/components/ui/LoadError';
+import EmptyState from '@/components/ui/EmptyState';
+import { btnCls, inputCls, labelSmCls, table } from '@/components/ui/styles';
 import PayslipPreview from '@/components/payroll/PayslipPreview';
 import { FileText, Download, Loader2, Wallet, AlertTriangle } from 'lucide-react';
 
@@ -40,7 +43,9 @@ export default function SalaryPage() {
     enabled: hasProfile,
   });
 
-  const { data: myStructure } = useQuery({
+  const {
+    data: myStructure, isLoading: structureLoading, isError: structureError, refetch: refetchStructure,
+  } = useQuery({
     queryKey: ['my-salary-structure'],
     queryFn: () => api.get('/payroll/me/structure').then(r => r.data),
     enabled: hasProfile,
@@ -64,8 +69,11 @@ export default function SalaryPage() {
       a.download = `Payslip_${label}.pdf`;
       a.click();
       URL.revokeObjectURL(blobUrl);
-    } catch {
-      toast.error('Failed to download PDF');
+    } catch (err) {
+      // A blob request hands the error body back as a Blob, so `err.response.data.error` is always
+      // undefined and every failure read "Failed to download PDF" — including "this month isn't
+      // locked yet", which is the one an employee could act on. errorFromBlob reads it back.
+      toast.error((await errorFromBlob(err)) || 'Failed to download PDF');
     }
   }
 
@@ -78,15 +86,28 @@ export default function SalaryPage() {
         </div>
 
         {!hasProfile ? (
-          <div className="bg-card rounded-xl border border-border p-8 text-center">
-            <FileText size={32} className="mx-auto text-secondary/30 mb-2" />
-            <p className="text-sm font-medium text-foreground">No salary on this account</p>
-            <p className="text-sm text-secondary mt-1">Your login isn&apos;t linked to an employee profile, so there&apos;s no personal salary to show.</p>
+          <div className="bg-card rounded-xl border border-border">
+            <EmptyState
+              icon={FileText}
+              title="No salary on this account"
+              body="Your login isn't linked to an employee profile, so there's no personal salary to show."
+            />
           </div>
         ) : (
           <>
-            {/* My Salary Structure — read-only */}
-            {myStructure?.breakdown && <MySalaryStructure data={myStructure} />}
+            {/* My Salary Structure — read-only.
+                This used to be `{myStructure?.breakdown && …}` and nothing else, so a failed request
+                rendered as silence: the card simply wasn't there, which reads as "you have no salary
+                structure" rather than "we couldn't fetch it". */}
+            {structureError ? (
+              <LoadError message="Couldn't load your salary structure." onRetry={() => refetchStructure()} />
+            ) : structureLoading ? (
+              <div className="bg-card rounded-xl border border-border p-10 flex justify-center">
+                <Loader2 className="animate-spin text-secondary" />
+              </div>
+            ) : myStructure?.breakdown ? (
+              <MySalaryStructure data={myStructure} />
+            ) : null}
 
             {/* Viewer — published (locked) months only */}
             <div className="bg-card rounded-xl border border-border p-6">
@@ -96,11 +117,12 @@ export default function SalaryPage() {
               <p className="text-xs text-secondary mb-4">Your payslip becomes available once HR finalises (locks) that month&apos;s payroll.</p>
               <div className="flex flex-wrap items-end gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-secondary mb-1">Month</label>
+                  <label className={labelSmCls}>Month</label>
+                  {/* Was py-2.5, which made these two the tallest fields in the app. */}
                   <select
                     value={month}
                     onChange={(e) => { setMonth(Number(e.target.value)); setResult(null); }}
-                    className="px-3 py-2.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 min-w-[140px]"
+                    className={cn(inputCls, 'w-auto min-w-[140px]')}
                   >
                     {MONTHS.map((m, i) => (
                       <option key={m} value={i + 1} disabled={isFutureMonth(i + 1, year)}>{m}</option>
@@ -108,11 +130,11 @@ export default function SalaryPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-secondary mb-1">Year</label>
+                  <label className={labelSmCls}>Year</label>
                   <select
                     value={year}
                     onChange={(e) => { setYear(Number(e.target.value)); setResult(null); }}
-                    className="px-3 py-2.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                    className={cn(inputCls, 'w-auto')}
                   >
                     {years.map(y => <option key={y} value={y}>{y}</option>)}
                   </select>
@@ -120,7 +142,7 @@ export default function SalaryPage() {
                 <button
                   onClick={() => viewMutation.mutate()}
                   disabled={viewMutation.isPending || selectedIsFuture}
-                  className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                  className={btnCls('primary', 'lg')}
                 >
                   {viewMutation.isPending ? <Loader2 size={15} className="animate-spin" /> : <FileText size={15} />}
                   View Payslip
@@ -147,41 +169,44 @@ export default function SalaryPage() {
               <div className="px-6 py-4 border-b border-border">
                 <h2 className="text-sm font-semibold text-foreground">Payslip History</h2>
               </div>
-              {historyLoading ? (
-                <div className="flex justify-center py-10">
-                  <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-primary" />
-                </div>
-              ) : historyError ? (
+              {/* Error before loading. On a background refetch failure react-query reports isError
+                  while isLoading is already false, so loading-first can hand a failure straight to
+                  the empty state — and "No payslips generated yet" is a claim about somebody's pay
+                  that must never be made on their behalf by a network error. */}
+              {historyError ? (
                 <LoadError message="Couldn't load your payslip history." onRetry={() => refetchHistory()} />
+              ) : historyLoading ? (
+                <div className="p-10 flex justify-center"><Loader2 className="animate-spin text-secondary" /></div>
               ) : history.length === 0 ? (
-                <div className="py-12 text-center">
-                  <FileText size={36} className="mx-auto text-secondary/30 mb-2" />
-                  <p className="text-sm text-secondary">No payslips generated yet</p>
-                </div>
+                <EmptyState
+                  icon={FileText}
+                  title="No payslips yet"
+                  body="A payslip appears here once HR finalises that month's payroll."
+                />
               ) : (
                 <table className="w-full">
                   <thead>
-                    <tr className="border-b border-border bg-muted/40">
-                      <th className="text-left px-6 py-2.5 text-xs font-semibold text-secondary uppercase">Period</th>
-                      <th className="text-left px-4 py-2.5 text-xs font-semibold text-secondary uppercase">Pay Date</th>
-                      <th className="text-right px-4 py-2.5 text-xs font-semibold text-secondary uppercase">Net Pay</th>
-                      <th className="text-right px-4 py-2.5 text-xs font-semibold text-secondary uppercase">CTC</th>
-                      <th className="text-right px-6 py-2.5 text-xs font-semibold text-secondary uppercase">Action</th>
+                    <tr className={table.head}>
+                      <th className={table.th}>Period</th>
+                      <th className={table.th}>Pay Date</th>
+                      <th className={cn(table.th, 'text-right')}>Net Pay</th>
+                      <th className={cn(table.th, 'text-right')}>CTC</th>
+                      <th className={cn(table.th, 'text-right')}>Action</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-border">
+                  <tbody className={table.body}>
                     {history.map((h: any) => (
-                      <tr key={h.id} className="hover:bg-muted/20">
-                        <td className="px-6 py-3 text-sm font-medium text-foreground">{MONTHS[h.month - 1]} {h.year}</td>
-                        <td className="px-4 py-3 text-sm text-secondary">
-                          {h.pay_date ? new Date(h.pay_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}
-                        </td>
-                        <td className="px-4 py-3 text-sm text-right font-medium text-green-700">{formatINR(h.net_pay)}</td>
-                        <td className="px-4 py-3 text-sm text-right text-foreground">{formatINR(h.ctc)}</td>
-                        <td className="px-6 py-3 text-right">
+                      <tr key={h.id} className={table.row}>
+                        <td className={cn(table.td, 'text-sm font-medium text-foreground')}>{MONTHS[h.month - 1]} {h.year}</td>
+                        {/* formatDate, not a raw toLocaleDateString: it pins Asia/Kolkata and returns
+                            "—" for a null, which this cell was hand-rolling either side of. */}
+                        <td className={cn(table.td, 'text-sm text-secondary')}>{formatDate(h.pay_date)}</td>
+                        <td className={cn(table.td, 'text-sm text-right font-medium text-green-700')}>{formatINR(h.net_pay)}</td>
+                        <td className={cn(table.td, 'text-sm text-right text-foreground')}>{formatINR(h.ctc)}</td>
+                        <td className={cn(table.td, 'text-right')}>
                           <button
                             onClick={() => download(`/payroll/me/history/${h.id}/pdf`, `${MONTHS[h.month - 1]}_${h.year}`)}
-                            className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/5 rounded-lg transition-colors"
+                            className={btnCls('secondary', 'sm')}
                           >
                             <Download size={13} /> PDF
                           </button>
@@ -213,9 +238,11 @@ function MySalaryStructure({ data }: { data: any }) {
   const b = data.breakdown;
   const earnings = (b.earnings ?? []).filter((l: any) => l.amount);
   const componentDeductions = (b.other_deductions ?? []).filter((l: any) => l.amount);
-  const statutory: [string, number][] = ([
-    ['Provident Fund', b.employee_pf], ['ESI', b.esi], ['Professional Tax', b.pt], ['Labour Welfare Fund', b.lwf],
-  ] as [string, number][]).filter(([, v]) => v);
+  // Shared with the payslip preview below, which had its own list in its own order under its own
+  // names — so the same deduction was "Provident Fund" on this card and "Employee PF" one scroll
+  // down. Zeroes are dropped here: this is a summary of what to expect, not a record of what
+  // happened, and a row of ₹0 is noise.
+  const statutory = statutoryLines(b);
   const hasDeductions = statutory.length > 0 || componentDeductions.length > 0;
 
   return (
