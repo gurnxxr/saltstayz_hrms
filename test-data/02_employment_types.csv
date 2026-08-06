@@ -1,0 +1,7 @@
+Employment Type,Is Confirmed,Prefix,Restriction for Employment Type,Probation Period (In Months),Notice Period (In Days)
+Permanent,Y,PERM,,,60
+Probationer,N,PROB,Permanent,6,15
+Contract,N,CON,Permanent,,30
+Trainee,N,TRN,"Permanent, Contract",3,7
+Consultant,N,CNS,,,30
+Intern,N,INT,"Permanent, Contract, Consultant",,7

@@ -1,0 +1,61 @@
+EmpCode,Employee Name,Property,Item,Serial No,Assigned Date,Status
+TD-0001,Myra Mehta,SaltStayz Cyber Hub,Two-Way Radio,TW-1000,2026-05-04,returned
+TD-0002,Nikhil Kumar,SaltStayz Sohna Road,Two-Way Radio,TW-1001,2026-05-04,assigned
+TD-0003,Sneha Kapoor,SaltStayz Aerocity,Laptop,LA-1002,2026-05-04,assigned
+TD-0004,Karan Bansal,SaltStayz Saket,Two-Way Radio,TW-1003,2026-05-04,assigned
+TD-0005,Rohan Kapoor,SaltStayz Sector 17,Two-Way Radio,TW-1004,2026-05-04,assigned
+TD-0006,Rahul Agarwal,SaltStayz Sector 62,Mobile Handset,MO-1005,2026-05-04,assigned
+TD-0007,Ananya Kumar,SaltStayz Agra Fort,Access Keycard,AC-1006,2026-05-04,assigned
+TD-0008,Sanjay Singh,SaltStayz Rishikesh,Locker Key,LO-1007,2026-05-04,assigned
+TD-0009,Payal Verma,SaltStayz Indiranagar,Mobile Handset,MO-1008,2026-05-04,assigned
+TD-0010,Divya Kapoor,SaltStayz Whitefield,Laptop,LA-1009,2026-05-04,assigned
+TD-0011,Aadhya Mehta,SaltStayz Cyber Hub,Access Keycard,AC-1010,2026-05-04,assigned
+TD-0012,Shreya Reddy,SaltStayz Sohna Road,Uniform Set,UN-1011,2026-05-04,assigned
+TD-0013,Diya Bansal,SaltStayz Aerocity,Laptop,LA-1012,2026-05-04,assigned
+TD-0014,Karan Bansal,SaltStayz Saket,Mobile Handset,MO-1013,2026-05-04,assigned
+TD-0015,Anika Joshi,SaltStayz Sector 17,Laptop,LA-1014,2026-05-04,assigned
+TD-0016,Myra Sharma,SaltStayz Sector 62,Access Keycard,AC-1015,2026-05-04,assigned
+TD-0017,Riya Menon,SaltStayz Agra Fort,Mobile Handset,MO-1016,2026-05-04,assigned
+TD-0018,Myra Rao,SaltStayz Rishikesh,Laptop,LA-1017,2026-05-04,returned
+TD-0019,Saanvi Kumar,SaltStayz Indiranagar,Laptop,LA-1018,2026-05-04,assigned
+TD-0020,Neha Pillai,SaltStayz Whitefield,Laptop,LA-1019,2026-05-04,assigned
+TD-0021,Arjun Kapoor,SaltStayz Cyber Hub,Laptop,LA-1020,2026-05-04,assigned
+TD-0022,Saanvi Patel,SaltStayz Sohna Road,Mobile Handset,MO-1021,2026-05-04,assigned
+TD-0023,Reyansh Kumar,SaltStayz Aerocity,Uniform Set,UN-1022,2026-05-04,assigned
+TD-0024,Shreya Bansal,SaltStayz Saket,Mobile Handset,MO-1023,2026-05-04,assigned
+TD-0025,Rajesh Bansal,SaltStayz Sector 17,Two-Way Radio,TW-1024,2026-05-04,assigned
+TD-0026,Rohan Nair,SaltStayz Sector 62,Uniform Set,UN-1025,2026-05-04,assigned
+TD-0027,Priya Nair,SaltStayz Agra Fort,Locker Key,LO-1026,2026-05-04,assigned
+TD-0028,Meera Bansal,SaltStayz Rishikesh,Access Keycard,AC-1027,2026-05-04,assigned
+TD-0029,Ananya Mehta,SaltStayz Indiranagar,Two-Way Radio,TW-1028,2026-05-04,assigned
+TD-0030,Rohan Reddy,SaltStayz Whitefield,Two-Way Radio,TW-1029,2026-05-04,assigned
+TD-0031,Pooja Iyer,SaltStayz Cyber Hub,Two-Way Radio,TW-1030,2026-05-04,assigned
+TD-0032,Vikram Sinha,SaltStayz Sohna Road,Two-Way Radio,TW-1031,2026-05-04,assigned
+TD-0033,Arjun Kapoor,SaltStayz Aerocity,Uniform Set,UN-1032,2026-05-04,assigned
+TD-0034,Krishna Singh,SaltStayz Saket,Access Keycard,AC-1033,2026-05-04,assigned
+TD-0035,Aditya Patel,SaltStayz Sector 17,Laptop,LA-1034,2026-05-04,returned
+TD-0036,Manish Kapoor,SaltStayz Sector 62,Two-Way Radio,TW-1035,2026-05-04,assigned
+TD-0037,Vihaan Rao,SaltStayz Agra Fort,Two-Way Radio,TW-1036,2026-05-04,assigned
+TD-0038,Amit Verma,SaltStayz Rishikesh,Mobile Handset,MO-1037,2026-05-04,assigned
+TD-0039,Rajesh Nair,SaltStayz Indiranagar,Two-Way Radio,TW-1038,2026-05-04,assigned
+TD-0040,Ritu Sharma,SaltStayz Whitefield,Uniform Set,UN-1039,2026-05-04,assigned
+TD-0041,Anika Gupta,SaltStayz Cyber Hub,Two-Way Radio,TW-1040,2026-05-04,assigned
+TD-0042,Aarav Malhotra,SaltStayz Sohna Road,Locker Key,LO-1041,2026-05-04,assigned
+TD-0043,Shreya Reddy,SaltStayz Aerocity,Two-Way Radio,TW-1042,2026-05-04,assigned
+TD-0044,Ananya Pillai,SaltStayz Saket,Mobile Handset,MO-1043,2026-05-04,assigned
+TD-0045,Suresh Patel,SaltStayz Sector 17,Two-Way Radio,TW-1044,2026-05-04,assigned
+TD-0046,Vihaan Nair,SaltStayz Sector 62,Two-Way Radio,TW-1045,2026-05-04,assigned
+TD-0047,Kavya Bansal,SaltStayz Agra Fort,Uniform Set,UN-1046,2026-05-04,assigned
+TD-0048,Reyansh Iyer,SaltStayz Rishikesh,Two-Way Radio,TW-1047,2026-05-04,assigned
+TD-0049,Saanvi Gupta,SaltStayz Indiranagar,Mobile Handset,MO-1048,2026-05-04,assigned
+TD-0050,Kabir Pillai,SaltStayz Whitefield,Laptop,LA-1049,2026-05-04,assigned
+TD-0051,Rahul Kapoor,SaltStayz Cyber Hub,Laptop,LA-1050,2026-05-04,assigned
+TD-0052,Diya Sinha,SaltStayz Sohna Road,Uniform Set,UN-1051,2026-05-04,returned
+TD-0053,Suresh Chopra,SaltStayz Aerocity,Uniform Set,UN-1052,2026-05-04,assigned
+TD-0054,Aadhya Malhotra,SaltStayz Saket,Locker Key,LO-1053,2026-05-04,assigned
+TD-0055,Saanvi Mehta,SaltStayz Sector 17,Mobile Handset,MO-1054,2026-05-04,assigned
+TD-0056,Kavya Singh,SaltStayz Sector 62,Locker Key,LO-1055,2026-05-04,assigned
+TD-0057,Rohan Sharma,SaltStayz Agra Fort,Mobile Handset,MO-1056,2026-05-04,assigned
+TD-0058,Aarav Singh,SaltStayz Rishikesh,Access Keycard,AC-1057,2026-05-04,assigned
+TD-0059,Saanvi Reddy,SaltStayz Indiranagar,Mobile Handset,MO-1058,2026-05-04,assigned
+TD-0060,Sanjay Iyer,SaltStayz Whitefield,Laptop,LA-1059,2026-05-04,assigned

@@ -8,32 +8,67 @@ export const createProperty = async (req: AuthRequest, res: Response, next: Next
 export const updateProperty = async (req: AuthRequest, res: Response, next: NextFunction) => { try { res.json(await orgService.updateProperty(Number(req.params.id), req.body)); } catch (e) { next(e); } };
 export const deleteProperty = async (req: AuthRequest, res: Response, next: NextFunction) => { try { await orgService.deleteProperty(Number(req.params.id)); res.json({ message: 'Deleted' }); } catch (e) { next(e); } };
 
+export interface PropertyCsvRow {
+  name: string;
+  hotel_id?: string;
+  city?: string;
+  state?: string;
+  address?: string;
+  category?: string;
+}
+
+/**
+ * Turn a properties CSV into rows for `bulkCreateProperties`.
+ *
+ * Exported and pure ON PURPOSE. This parsing previously lived inline in the handler, where the only
+ * way to reach it was a multipart upload — so when `bulkCreateProperties` was changed to require a
+ * state and this was not changed to read one, every upload started failing with "no state given"
+ * and no test noticed. A property's state decides Professional Tax, Labour Welfare Fund and the
+ * minimum wage for everyone working there, which is why the service refuses to guess it.
+ *
+ * Note the naive `split(',')` is kept deliberately: it is what the file format has always been, and
+ * widening it to a quoted parser would change which existing files import. Addresses containing a
+ * comma still need quoting support — a separate change if it ever comes up.
+ */
+export function parsePropertiesCsv(csv: string): PropertyCsvRow[] {
+  const lines = csv.split(/\r?\n/).filter((l) => l.trim());
+  if (lines.length < 2) throw new Error('CSV must have a header row and at least one data row');
+
+  const header = lines[0].split(',').map((h) => h.trim().toLowerCase().replace(/\s+/g, '_'));
+  const nameIdx = header.findIndex((h) => h === 'name' || h === 'property_name');
+  if (nameIdx === -1) throw new Error('CSV must have a "Name" column');
+
+  const at = (...aliases: string[]) => header.findIndex((h) => aliases.includes(h));
+  const hotelIdx = at('hotel_id', 'hotel');
+  const cityIdx = at('city');
+  const stateIdx = at('state');
+  const addressIdx = at('address');
+  const categoryIdx = at('category');
+
+  return lines.slice(1).map((line) => {
+    const cols = line.split(',').map((c) => c.trim());
+    const pick = (idx: number) => (idx >= 0 ? cols[idx] : undefined);
+    return {
+      name: cols[nameIdx] || '',
+      hotel_id: pick(hotelIdx),
+      city: pick(cityIdx),
+      state: pick(stateIdx),
+      address: pick(addressIdx),
+      category: pick(categoryIdx),
+    };
+  });
+}
+
 export const bulkUploadProperties = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'CSV file is required' });
-    const csv = req.file.buffer.toString('utf-8');
-    const lines = csv.split(/\r?\n/).filter(l => l.trim());
-    if (lines.length < 2) return res.status(400).json({ error: 'CSV must have a header row and at least one data row' });
 
-    const header = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/\s+/g, '_'));
-    const nameIdx = header.findIndex(h => h === 'name' || h === 'property_name');
-    if (nameIdx === -1) return res.status(400).json({ error: 'CSV must have a "Name" column' });
-
-    const hotelIdx = header.findIndex(h => h === 'hotel_id' || h === 'hotel');
-    const cityIdx = header.findIndex(h => h === 'city');
-    const addressIdx = header.findIndex(h => h === 'address');
-    const categoryIdx = header.findIndex(h => h === 'category');
-
-    const rows = lines.slice(1).map(line => {
-      const cols = line.split(',').map(c => c.trim());
-      return {
-        name: cols[nameIdx] || '',
-        hotel_id: hotelIdx >= 0 ? cols[hotelIdx] : undefined,
-        city: cityIdx >= 0 ? cols[cityIdx] : undefined,
-        address: addressIdx >= 0 ? cols[addressIdx] : undefined,
-        category: categoryIdx >= 0 ? cols[categoryIdx] : undefined,
-      };
-    });
+    let rows: PropertyCsvRow[];
+    try {
+      rows = parsePropertiesCsv(req.file.buffer.toString('utf-8'));
+    } catch (e) {
+      return res.status(400).json({ error: (e as Error).message });
+    }
 
     const result = await orgService.bulkCreateProperties(rows);
     res.json(result);
