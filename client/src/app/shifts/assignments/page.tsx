@@ -11,9 +11,22 @@ import Pagination from '@/components/ui/Pagination';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
-import { Search, Clock, Loader2, X, History, UserCog, Moon, Trash2, Download, Upload, Copy } from 'lucide-react';
+import { Search, Clock, Loader2, X, History, UserCog, Moon, Trash2, Download, FileDown, Upload, Copy } from 'lucide-react';
 
 const PAGE_SIZE = 15;
+
+/*
+ * The three columns `bulkUploadShiftAssignments` (server/src/services/shift.service.ts) actually
+ * reads. Spelled the way it reads them: it lower-cases and turns spaces into underscores before
+ * matching, and a column it cannot find aborts the whole upload with a 400 before any row is
+ * processed. If those names change there, change them here — and in the Columns note inside
+ * BulkUploadDialog below, which states the same contract in prose.
+ *
+ * Headers only, no example row. There is nothing to delete before typing, and a made-up row
+ * would be worse than nothing here: shift_name has to match a shift that actually exists and is
+ * active, so a plausible-looking "Morning Shift" would come back rejected on the first attempt.
+ */
+const SAMPLE_CSV_HEADERS = 'employee_code,shift_name,effective_from';
 
 function copyErrors(errors: string[]) {
   navigator.clipboard.writeText((errors || []).join('\n')).then(
@@ -303,6 +316,16 @@ export default function ShiftAssignmentsPage() {
   // Any filter or search change resets to page 1, so you never land on an empty page.
   useEffect(() => { setPage(1); }, [debounced, unassignedOnly, property]);
 
+  // No network call, so nothing to fail and no loading state — unlike handleExport below.
+  function downloadSample() {
+    const url = URL.createObjectURL(new Blob([`${SAMPLE_CSV_HEADERS}\n`], { type: 'text/csv' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'Shift_Assignments_Sample.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   async function handleExport() {
     setExporting(true);
     try {
@@ -333,7 +356,19 @@ export default function ShiftAssignmentsPage() {
               Put each employee on a shift. Their timings and hour thresholds follow from it; their off days come from their leave template.
             </p>
           </div>
+          {/* Left to right, the order the job runs in: get a blank file, get today's data, upload.
+              The sample is behind canAssign because a blank import template is no use to someone
+              who cannot import; Export stays open, since reading the data is its own reason. */}
           <div className="flex items-center gap-2">
+            {canAssign && (
+              <button
+                onClick={downloadSample}
+                title="Download a blank CSV with the columns the upload requires"
+                className="inline-flex items-center gap-2 px-4 py-2 bg-card border border-border text-foreground rounded-lg text-sm font-medium hover:bg-muted"
+              >
+                <FileDown size={16} /> Download Sample
+              </button>
+            )}
             <button
               onClick={handleExport}
               disabled={exporting}
@@ -513,11 +548,14 @@ function BulkUploadDialog({ onClose }: { onClose: () => void }) {
           <button onClick={onClose} className="p-1 rounded-lg hover:bg-muted"><X size={18} /></button>
         </div>
         <div className="p-5 space-y-4">
+          {/* Two files, two jobs — they used to compete, because the export was called "the
+              template" and was the only thing on offer. */}
           <p className="text-sm text-secondary">
             Upload a CSV to put employees on shifts. Each row is matched by{' '}
             <span className="font-medium text-foreground">Employee Code</span> and assigned from the effective date.
-            The <span className="font-medium text-foreground">Export CSV</span> download is the template — fill in
-            the blank shift and date columns and upload it back.
+            Start from <span className="font-medium text-foreground">Download Sample</span> for an empty file with
+            just these columns, or <span className="font-medium text-foreground">Export CSV</span> to work from who
+            is on what today.
           </p>
           <div className="rounded-lg bg-muted/50 border border-border p-3">
             <p className="text-xs font-medium text-foreground mb-1">Columns</p>

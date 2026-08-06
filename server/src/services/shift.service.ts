@@ -609,8 +609,12 @@ const SHIFT_HEADER_ALIASES: Record<string, string> = {
  * otherwise refused, is skipped and reported; the table is never touched directly.
  */
 export async function bulkUploadShiftAssignments(csvContent: string, userId?: number | null) {
+  // ValidationError, not `Object.assign(new Error(), { status: 400 })`. errorHandler only reads
+  // `statusCode`, and only off an AppError — so every one of these four messages used to reach the
+  // user as a bare 500 "Internal server error", which is the least useful thing to say to someone
+  // whose file is one heading away from working.
   const grid = parseCsv(csvContent);
-  if (grid.length < 2) throw Object.assign(new Error('CSV must have a header row and at least one data row'), { status: 400 });
+  if (grid.length < 2) throw new ValidationError('CSV must have a header row and at least one data row');
 
   const header = grid[0].map((h) => {
     const key = h.trim().toLowerCase().replace(/\s+/g, '_');
@@ -618,9 +622,9 @@ export async function bulkUploadShiftAssignments(csvContent: string, userId?: nu
   });
   const col = (name: string) => header.indexOf(name);
   const codeIdx = col('employee_code'), shiftIdx = col('shift_name'), fromIdx = col('effective_from');
-  if (codeIdx === -1) throw Object.assign(new Error('CSV must have an "Employee Code" column'), { status: 400 });
-  if (shiftIdx === -1) throw Object.assign(new Error('CSV must have a "Shift" column'), { status: 400 });
-  if (fromIdx === -1) throw Object.assign(new Error('CSV must have an "Effective From" column'), { status: 400 });
+  if (codeIdx === -1) throw new ValidationError('CSV must have an "Employee Code" column');
+  if (shiftIdx === -1) throw new ValidationError('CSV must have a "Shift" column');
+  if (fromIdx === -1) throw new ValidationError('CSV must have an "Effective From" column');
 
   // Case-insensitive shift lookup by name (names are unique lower-cased). Only active shifts can
   // be assigned; an inactive one resolves to no id and the row is reported as unknown.
