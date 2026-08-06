@@ -349,16 +349,46 @@ describe.skipIf(!ON_THROWAWAY)('an approved regularisation reaches the money', (
     //
     // So: evidence the whole month, and lock with confirm FALSE. Nothing is waved through, because
     // there is nothing to wave.
-    const days = Array.from({ length: 30 }, (_, i) => ({
-      employee_id: empId, date: d(i + 1), status: 'present', working_hours: 8,
-    }));
-    await db('attendance_records').insert(days);
+    //
+    // Evidencing THIS employee's month is not enough on its own, though, because the gate judges
+    // the whole run and not one slip. On a freshly seeded database the ~30 seeded employees have no
+    // April attendance either, and their unmarked days alone put the run at 96.6% unevidenced — the
+    // lock was refused and the test failed. It passed only where some other fixture had left broad
+    // attendance behind, so the result depended on which database it happened to meet.
+    //
+    // Standing the rest of the roster down makes the run this employee's own month, which is the
+    // only thing this test sets up and therefore the only thing it should be judged on: 0%
+    // unevidenced with these rows, 100% without them. Marking the whole roster present would also
+    // get past the gate, but it would decide the outcome too — one employee's unmarked days are
+    // ~3% of a 31-slip run, under the 10% gate, so the test would keep passing with its own setup
+    // deleted.
+    const stoodDown = await db('employees')
+      .where('is_active', true)
+      .whereNotIn('id', [empId, approverId])
+      .update({ is_active: false })
+      .returning('id');
+    try {
+      const days = Array.from({ length: 30 }, (_, i) => ({
+        employee_id: empId, date: d(i + 1), status: 'present', working_hours: 8,
+      }));
+      await db('attendance_records').insert(days);
 
-    await runPayroll(MONTH, YEAR, null);
-    await lockRun(MONTH, YEAR, null, false);
-    const run = await db('payroll_runs').where({ month: MONTH, year: YEAR }).first();
-    expect(run.status).toBe('locked');
-    expect(run.lock_override_reason).toBeNull();
+      await runPayroll(MONTH, YEAR, null);
+      // Fully evidenced, not merely under the threshold. The gate accepts anything at or below
+      // 10%, so the lock on its own would also pass a month with a couple of days missing; zero is
+      // what makes "nothing was waved through" the only available reading of the null below.
+      expect((await getRunDetails(MONTH, YEAR)).coverage.unevidenced_days).toBe(0);
+
+      await lockRun(MONTH, YEAR, null, false);
+      const run = await db('payroll_runs').where({ month: MONTH, year: YEAR }).first();
+      expect(run.status).toBe('locked');
+      expect(run.lock_override_reason).toBeNull();
+    } finally {
+      // Back on, whatever the assertions did — the same set-and-restore this file uses for the pay
+      // schedule and the correction window, and for the same reason: the database is shared with
+      // the other DB test files.
+      await db('employees').whereIn('id', stoodDown.map((r: any) => r.id)).update({ is_active: true });
+    }
   });
 
   it('the approval records what happened to pay, for whoever asks months later', async () => {
