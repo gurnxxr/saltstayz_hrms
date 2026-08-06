@@ -80,8 +80,6 @@ export const EVENTS: NotificationEvent[] = [
     description: 'A leave request is rejected.' },
   { key: 'leave.cancelled', group: 'Leave', label: 'Leave cancelled', carriesEmployee: true,
     description: 'An employee withdraws a leave request they had already filed.' },
-  { key: 'leave.encashment_approved', group: 'Leave', label: 'Leave encashment approved', carriesEmployee: true,
-    description: 'Unused leave is paid out as cash. Money leaves the business.' },
 
   // ── Attendance ──
   { key: 'attendance.regularisation_raised', group: 'Attendance', label: 'Regularisation requested', carriesEmployee: true,

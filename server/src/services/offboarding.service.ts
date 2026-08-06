@@ -1,9 +1,6 @@
 import db from '../config/database';
 import { NotFoundError, ValidationError, AppError } from '../utils/errors';
 import { getMonthlyBreakdown } from './payslip.service';
-import { getCurrentPeriod, getEffectiveBalances } from './leave.service';
-import { isAccruing } from './accrual.service';
-import { getEmployeeLeaveRules } from './leaveTemplate.service';
 import { notifyEmployee, emit } from './notification.service';
 import { notifyReplacementNeeded } from './manpower.service';
 
@@ -168,10 +165,10 @@ export async function computeFnF(
     ? Math.round(breakdown.net_pay) // hours-based: already the earned amount for the final month
     : Math.round((breakdown.net_pay / dim) * daysWorked);
 
-  // Leave encashment — encashable balance × (basic / 30). Best-effort from entitlements.
-  const leaveBalance = await remainingLeaveBalance(employeeId);
-  const perDayBasic = breakdown.basic / 30;
-  const leaveEncashment = Math.round(leaveBalance * perDayBasic);
+  // No leave encashment line. Unused leave is not paid out on exit — the whole encashment
+  // feature was removed, flag and all. Settlements SAVED before that keep their own figure:
+  // saveFnF stores the full breakdown in fnf_details and the total in fnf_amount, so history
+  // is untouched and only newly-computed settlements differ.
 
   // Gratuity — payable after 5 COMPLETED years: (15/26) × last basic × years.
   const tenure = gratuityTenure(dateOfJoining, lastWorkingDay);
@@ -179,16 +176,14 @@ export async function computeFnF(
   const gratuity = years >= 5 ? Math.round((15 / 26) * breakdown.basic * tenure.forAmount) : 0;
   const tenureMonths = diffMonths(dateOfJoining, lastWorkingDay) ?? 0;
 
-  const earnings = proratedSalary + leaveEncashment + gratuity;
+  const earnings = proratedSalary + gratuity;
   const deductions = 0; // notice shortfall / advances entered by HR
   const net_payable = earnings - deductions;
 
   return {
     days_worked: daysWorked,
     days_in_month: dim,
-    leave_balance_days: leaveBalance,
     prorated_salary: proratedSalary,
-    leave_encashment: leaveEncashment,
     gratuity,
     gratuity_eligible: years >= 5,
     tenure_months: tenureMonths,
@@ -196,47 +191,6 @@ export async function computeFnF(
     earnings,
     net_payable,
   };
-}
-
-async function remainingLeaveBalance(employeeId: number): Promise<number> {
-  try {
-    // Encashable balance ONLY: F&F pays out unused leave for encashable leave types in
-    // the CURRENT period (the same rule leaveEncashment.service enforces). Summing every
-    // leave type across every year — including non-encashable casual/sick and prior-year
-    // rows — materially overpaid the settlement.
-    const period = await getCurrentPeriod();
-    // Encashable leave types are now per the employee's assigned template, not the global type.
-    const rules = await getEmployeeLeaveRules(employeeId);
-    const encashable = [...rules.values()].filter((r) => r.is_encashable);
-    if (!encashable.length) return 0;
-
-    // Split by how the type holds its balance. An ACCRUING type has no entitlement row by
-    // construction, so the query below would settle it at zero and quietly underpay somebody their
-    // earned leave on the way out. The entitlement sum is left exactly as it was for every other
-    // type, so no existing settlement figure moves.
-    const accruingIds = encashable.filter(isAccruing).map((r) => r.leave_type_id);
-    const entitlementIds = encashable.filter((r) => !isAccruing(r)).map((r) => r.leave_type_id);
-
-    let bal = 0;
-    if (entitlementIds.length) {
-      const row = await db('leave_entitlements')
-        .where('employee_id', employeeId)
-        .where('leave_period_id', period.id)
-        .whereIn('leave_type_id', entitlementIds)
-        .sum({ total: 'total_days' })
-        .sum({ used: 'used_days' })
-        .first();
-      bal += Number((row as any)?.total ?? 0) - Number((row as any)?.used ?? 0);
-    }
-    if (accruingIds.length) {
-      const balances = await getEffectiveBalances([employeeId], period.id, { leaveTypeIds: accruingIds });
-      // Per type, floored at zero: one type in deficit must not eat another's payout.
-      bal += balances.reduce((sum, b) => sum + Math.max(0, b.available), 0);
-    }
-    return Math.max(0, bal);
-  } catch {
-    return 0;
-  }
 }
 
 // ─── Create / update ───

@@ -15,6 +15,10 @@ export function usePermissions() {
   const isEmployee = user?.roleName === 'employee';
   const isFinance = user?.roleName === 'finance';
 
+  // Not a role — a capability, from /session-context. Someone reports to this person, so they can
+  // approve leave regardless of what role they hold.
+  const managesAnyone = user?.managesAnyone === true;
+
   function hasRole(...roles: RoleName[]) {
     return user ? roles.includes(user.roleName as RoleName) : false;
   }
@@ -30,5 +34,6 @@ export function usePermissions() {
     isPM,
     isEmployee,
     isFinance,
+    managesAnyone,
   };
 }

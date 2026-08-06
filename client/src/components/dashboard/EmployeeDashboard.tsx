@@ -1,10 +1,13 @@
 'use client';
 
+import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
+import { currentMonth, formatMonth, recentMonths } from '@/lib/utils';
 import DashboardGreeting from '@/components/dashboard/DashboardGreeting';
 import UpcomingHolidaysCard from '@/components/leaves/UpcomingHolidaysCard';
+import WeeklyOffCard from '@/components/shifts/WeeklyOffCard';
 import { ATTENDANCE_CODES } from '@/lib/attendanceCodes';
 import { CalendarCheck, CalendarOff, Clock, Wallet, CalendarPlus, FileText, User, BarChart3 } from 'lucide-react';
 
@@ -13,10 +16,41 @@ const fmt = (t?: string) => (t ? t.slice(0, 5) : '');
 export default function EmployeeDashboard() {
   const router = useRouter();
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['my-overview'],
-    queryFn: () => api.get('/analytics/me/overview').then(r => r.data).catch(() => null),
+  // The attendance breakdown card carries its own month so somebody can look back without leaving
+  // the dashboard. Twelve on purpose: getMyTrends clamps its history to twelve, so this cannot
+  // offer a month the trends chart on /analytics would refuse to cover.
+  const thisMonth = useMemo(() => currentMonth(), []);
+  const [month, setMonth] = useState(thisMonth);
+  const monthOptions = useMemo(() => recentMonths(12), []);
+
+  const overview = (m: string) => ({
+    queryKey: ['my-overview', m],
+    queryFn: () => api.get('/analytics/me/overview', { params: { month: m } })
+      .then(r => r.data).catch(() => null),
   });
+
+  /*
+   * Two queries, deliberately, against the same endpoint.
+   *
+   * The KPI row and the leave cards are "how am I doing now" and stay on the current month
+   * whatever the card's dropdown says. The card gets its own. Sharing one query would have been
+   * fewer lines, but on a phone the four KPI cards stack above the fold and this card sits a full
+   * screen below them — changing a dropdown and silently moving four numbers you cannot see is a
+   * defect, not a feature.
+   *
+   * It costs nothing while the months match: identical query keys, so React Query issues ONE
+   * request. A second only happens once somebody actually looks back.
+   */
+  const { data, isLoading } = useQuery(overview(thisMonth));
+  const { data: monthData, isFetching } = useQuery({
+    ...overview(month),
+    // Hold the previous month's tiles while the next loads. Without this every tile drops to 0
+    // and back, and 0 is a plausible real count — the flash reads as data rather than as loading.
+    placeholderData: (prev: any) => prev,
+  });
+
+  // Non-empty only while a DIFFERENT month is in flight and the previous one is still on screen.
+  const stale = isFetching && !isLoading ? 'opacity-60' : '';
 
   // No .catch here on purpose. Swallowing the error turned every failure into "no shift", which
   // is a different fact and the one thing an employee cannot act on — and because this answer is
@@ -35,14 +69,15 @@ export default function EmployeeDashboard() {
     queryFn: () => api.get('/employees/me/reportees').then(r => r.data).catch(() => []),
   });
 
-  const att = data?.attendance ?? {};
+  const att = data?.attendance ?? {};            // the current month — KPI row
+  const monthAtt = monthData?.attendance ?? {};  // whatever the card's dropdown says
 
   // The eight codes the record actually stores, in one place — so the tiles below add up to the
   // month instead of showing a hand-picked four. `other` is the reconciliation check: it is
   // total minus the eight, and should always be zero. If it isn't, a status nothing in the code
   // writes has reached the table, and that deserves to be visible rather than swallowed.
-  const counts = ATTENDANCE_CODES.map((c) => ({ ...c, value: Number(att[c.code] ?? 0) }));
-  const total = Number(att.total ?? 0);
+  const counts = ATTENDANCE_CODES.map((c) => ({ ...c, value: Number(monthAtt[c.code] ?? 0) }));
+  const total = Number(monthAtt.total ?? 0);
   const other = Math.max(0, total - counts.reduce((a, c) => a + c.value, 0));
 
   // Attendance is scored against days the person was expected to work. Approved leave isn't a
@@ -61,9 +96,10 @@ export default function EmployeeDashboard() {
   const leaveUsed = paidBalances.reduce((a, b) => a + Number(b.used_days || 0), 0);
   const leaveRemaining = Math.max(0, leaveTotal - leaveUsed);
 
-  const monthLabel = data?.month
-    ? new Date(`${data.month}-01`).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })
-    : 'This month';
+  // The page subtitle names the CURRENT month — the one the KPI row above reports on. The card's
+  // own month is named by its dropdown. Formatted through formatMonth so it is built and rendered
+  // in the same timezone; done inline it named the previous month for anyone west of Greenwich.
+  const monthLabel = formatMonth(data?.month || thisMonth);
 
   return (
     <div className="space-y-6">
@@ -114,14 +150,32 @@ export default function EmployeeDashboard() {
           )}
         </div>
 
-        {/* This-month attendance breakdown — every code the record can hold, so the tiles
-            reconcile with the month. Zeros stay visible for the same reason. */}
+        {/* The month's attendance breakdown — every code the record can hold, so the tiles
+            reconcile with the month. Zeros stay visible for the same reason.
+
+            The dropdown governs this card and nothing else on the page; see the two queries at the
+            top. It replaced a hard-coded "This Month" heading, which was simply false the moment a
+            different month could be picked. */}
         <div className="bg-card rounded-xl border border-border p-6">
-          <div className="flex items-baseline justify-between mb-4">
-            <h2 className="text-lg font-semibold text-foreground">This Month</h2>
-            <span className="text-xs text-secondary">{total} day{total === 1 ? '' : 's'} marked</span>
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 mb-4">
+            <div className="flex items-center gap-3 min-w-0">
+              <h2 className="text-lg font-semibold text-foreground shrink-0">Attendance</h2>
+              <select
+                aria-label="Month to show attendance for"
+                value={month}
+                onChange={(e) => setMonth(e.target.value)}
+                className="px-3 py-1.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+              >
+                {monthOptions.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+            <span className={`text-xs text-secondary shrink-0 transition-opacity ${stale}`}>
+              {total} day{total === 1 ? '' : 's'} marked
+            </span>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className={`grid grid-cols-2 sm:grid-cols-4 gap-3 transition-opacity ${stale}`}>
             {counts.map((c) => (
               <Mini key={c.code} label={c.label} badge={c.badge} value={c.value}
                 color={c.value > 0 ? c.tone : 'text-secondary/40'} />
@@ -134,6 +188,11 @@ export default function EmployeeDashboard() {
 
       {/* Holidays — sits beside My Shift because both answer "when am I not working". */}
       <UpcomingHolidaysCard />
+
+      {/* The other half of that answer, and the one that repeats every week. Fed from the resolved
+          calendar rather than the shift, so it survives the common case where the shift sets no
+          off days of its own and the leave template decides them instead. */}
+      <WeeklyOffCard />
 
       {/* My Shift */}
       <div className="bg-card rounded-xl border border-border p-6">
@@ -190,7 +249,9 @@ export default function EmployeeDashboard() {
         <h2 className="text-lg font-semibold text-foreground mb-4">Quick Actions</h2>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {[
-            { label: 'Apply for Leave', href: '/leaves/my', icon: CalendarPlus },
+            // The form, not the list. The app's most prominent leave CTA used to land on
+            // /leaves/my, so "Apply for Leave" took you to a page of past requests.
+            { label: 'Apply for Leave', href: '/leaves/apply', icon: CalendarPlus },
             { label: 'My Attendance', href: '/attendance', icon: CalendarCheck },
             { label: 'My Performance', href: '/analytics', icon: BarChart3 },
             { label: 'My Payslips', href: '/salary', icon: FileText },

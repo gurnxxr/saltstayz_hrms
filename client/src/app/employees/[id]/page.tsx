@@ -17,6 +17,15 @@ import {
   CreditCard, Shield, Hash, Save, Loader2, Pencil,
 } from 'lucide-react';
 
+/**
+ * The identity facts captured once from documents (FIXED_AT_ONBOARDING on the server). Locked
+ * as soon as they hold a value; until then the gap can be filled in from this screen.
+ */
+const FILL_ONCE_FIELDS = ['date_of_birth', 'gender', 'father_name', 'pan_number', 'date_of_joining'] as const;
+const FILL_ONCE = 'Not recorded yet — this can be set once, then it locks.';
+const GENDERS = [{ value: 'male', label: 'Male' }, { value: 'female', label: 'Female' }, { value: 'other', label: 'Other' }];
+const isBlank = (v: any) => v === null || v === undefined || String(v).trim() === '';
+
 export default function EmployeeDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
@@ -87,9 +96,10 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
     onError: (err: any) => { toast.error(err.response?.data?.error || 'Status update failed'); setConfirmDeactivate(false); },
   });
 
-  // Warn before leaving with unsaved employee edits. Only the fields that can actually be
-  // edited — the onboarding-fixed ones can never differ, and testing them would be dead code.
+  // Warn before leaving with unsaved employee edits. The onboarding-fixed fields count only
+  // while they are still blank — once recorded they cannot differ, so testing them is dead.
   const dirty = editing && !!emp && (
+    FILL_ONCE_FIELDS.some((f) => isBlank(emp[f]) && !isBlank(form[f])) ||
     form.first_name !== emp.first_name ||
     form.last_name !== emp.last_name ||
     String(form.reporting_manager_id) !== String(emp.reporting_manager_id || '') ||
@@ -105,9 +115,16 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
 
   function startEditing() {
     if (!emp) return;
-    // The onboarding-fixed fields are deliberately absent: the server strips them from any
-    // update, so carrying them in the form would only invite them to be sent and dropped.
+    // The onboarding-fixed fields are carried as '' — the server takes a first value into a
+    // blank column and drops anything aimed at a filled one, so seeding them from emp would
+    // just re-post a value that is going to be dropped. Blank in, blank dropped, or blank
+    // filled: all three are right.
     setForm({
+      date_of_birth: '',
+      gender: '',
+      father_name: '',
+      pan_number: '',
+      date_of_joining: '',
       first_name: emp.first_name,
       last_name: emp.last_name,
       reporting_manager_id: emp.reporting_manager_id || '',
@@ -279,13 +296,27 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
                   off the UID/PAN card and are verified once; editing them later would leave the
                   record no longer matching the document it was checked against. Date of joining
                   is set by the hire at the end of recruitment, and moving it would shift payable
-                  days and leave accrual. The server drops them on save, so these are shown
-                  read-only rather than left editable and silently ignored. */}
-              <ReadOnlyField label="Date of Birth (As per UID)" value={fmtDate(emp.date_of_birth)} />
-              <ReadOnlyField label="Gender" value={emp.gender ? emp.gender[0].toUpperCase() + emp.gender.slice(1) : ''} />
-              <ReadOnlyField label="Father's Name (As per UID)" value={emp.father_name} />
-              <ReadOnlyField label="PAN Card No" value={emp.pan_number} />
-              <ReadOnlyField label="Date of Joining" value={fmtDate(emp.date_of_joining)} hint="Set when the hire is completed in Recruitment" />
+                  days and leave accrual.
+
+                  Fixed once RECORDED, though — a field that is still blank has nothing to protect
+                  and accepts its first value here. The server enforces the same rule, so this is
+                  not a UI-only unlock: it takes a value into an empty column and refuses one over
+                  a filled column, whatever posts it. */}
+              {isBlank(emp.date_of_birth)
+                ? <FormField label="Date of Birth (As per UID)" type="date" value={form.date_of_birth} onChange={(v) => setForm((p: any) => ({ ...p, date_of_birth: v }))} hint={FILL_ONCE} />
+                : <ReadOnlyField label="Date of Birth (As per UID)" value={fmtDate(emp.date_of_birth)} />}
+              {isBlank(emp.gender)
+                ? <SelectField label="Gender" value={form.gender} onChange={(v) => setForm((p: any) => ({ ...p, gender: v }))} options={GENDERS} hint={FILL_ONCE} />
+                : <ReadOnlyField label="Gender" value={emp.gender[0].toUpperCase() + emp.gender.slice(1)} />}
+              {isBlank(emp.father_name)
+                ? <FormField label="Father's Name (As per UID)" value={form.father_name} onChange={(v) => setForm((p: any) => ({ ...p, father_name: v }))} hint={FILL_ONCE} />
+                : <ReadOnlyField label="Father's Name (As per UID)" value={emp.father_name} />}
+              {isBlank(emp.pan_number)
+                ? <FormField label="PAN Card No" value={form.pan_number} onChange={(v) => setForm((p: any) => ({ ...p, pan_number: v.toUpperCase() }))} maxLength={10} hint={FILL_ONCE} />
+                : <ReadOnlyField label="PAN Card No" value={emp.pan_number} />}
+              {isBlank(emp.date_of_joining)
+                ? <FormField label="Date of Joining" type="date" value={form.date_of_joining} onChange={(v) => setForm((p: any) => ({ ...p, date_of_joining: v }))} hint={FILL_ONCE} />
+                : <ReadOnlyField label="Date of Joining" value={fmtDate(emp.date_of_joining)} hint="Set when the hire is completed in Recruitment" />}
               <SelectField label="Reporting Manager" value={form.reporting_manager_id} onChange={(v) => setForm((p: any) => ({ ...p, reporting_manager_id: v ? Number(v) : null }))} options={managers.filter((m: any) => m.id !== Number(id)).map((m: any) => ({ value: m.id, label: `${m.first_name} ${m.last_name}` }))} />
               <FormField label="Email Address" value={form.email} onChange={(v) => setForm((p: any) => ({ ...p, email: v }))} type="email" />
               <FormField label="Phone Number" value={form.phone} onChange={(v) => setForm((p: any) => ({ ...p, phone: v }))} />
@@ -392,8 +423,8 @@ function ReadOnlyField({ label, value, hint }: { label: string; value?: string |
   );
 }
 
-function FormField({ label, value, onChange, type = 'text', maxLength }: {
-  label: string; value: string; onChange: (v: string) => void; type?: string; maxLength?: number;
+function FormField({ label, value, onChange, type = 'text', maxLength, hint }: {
+  label: string; value: string; onChange: (v: string) => void; type?: string; maxLength?: number; hint?: string;
 }) {
   return (
     <div>
@@ -405,6 +436,7 @@ function FormField({ label, value, onChange, type = 'text', maxLength }: {
         maxLength={maxLength}
         className="w-full px-3 py-2.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
       />
+      {hint && <p className="mt-1 text-xs text-secondary">{hint}</p>}
     </div>
   );
 }

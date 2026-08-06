@@ -28,14 +28,19 @@ export const INDIAN_STATES = [
 const TABLE = 'statutory_settings';
 const MW_TABLE = 'state_minimum_wages';
 
+// The EPF and ESI registration numbers used to live here and on the settings form. They were
+// captured and format-checked, and then read by nothing — no payslip, no PDF, no export, no
+// return. A required field that feeds nothing is just a way to fail to switch EPF on, so it is
+// gone. Rows saved before this keep the key inside their config JSON, harmlessly: upsertComponent
+// merges over the stored blob, so it survives, and nothing looks at it.
 const EPF_DEFAULT = {
-  epfNumber: '', deductionCycle: 'monthly',
+  deductionCycle: 'monthly',
   employeeRatePct: 12, employerRatePct: 12,
   pfWageCeiling: 15000, // PF wage cap (statutory)
   includeEmployerInCtc: true, lopMode: 'prorate_restricted',
 };
 const ESI_DEFAULT = {
-  esiNumber: '', deductionCycle: 'monthly',
+  deductionCycle: 'monthly',
   employeeRatePct: 0.75, employerRatePct: 3.25, wageCeiling: 21000,
   includeEmployerInCtc: false,
 };
@@ -303,45 +308,49 @@ async function upsertComponent(
 }
 
 export async function saveEpf(input: any, userId?: number) {
-  const c = input.config || {};
-  const cfg = {
-    epfNumber: String(c.epfNumber || '').trim(),
+  const c = input.config;
+  // Omitted config → keep what is stored, the same contract savePtState and saveLwf already
+  // honour. It matters for the Disable button: rebuilding cfg from the defaults on a bare
+  // { enabled: false } would quietly reset a tuned rate or LOP mode, and switching back on
+  // would return the wrong numbers rather than the ones that were there.
+  const cfg = c ? {
     deductionCycle: 'monthly',
     employeeRatePct: num(c.employeeRatePct ?? 12, 'Employee contribution rate', 0.01, 100),
     employerRatePct: num(c.employerRatePct ?? 12, 'Employer contribution rate', 0.01, 100),
     pfWageCeiling: 15000,
     includeEmployerInCtc: c.includeEmployerInCtc !== false,
     lopMode: ['prorate_restricted', 'consider_all_below_15000'].includes(c.lopMode) ? c.lopMode : 'prorate_restricted',
-  };
-  if (input.enabled && !/^[A-Z]{2}\/[A-Z]{3}\/\d{7}\/\d{3}$/.test(cfg.epfNumber)) {
-    throw new ValidationError('EPF Number must match the format AA/AAA/0000000/XXX.');
-  }
+  } : undefined;
+  // No completeness guard on the enable path, unlike PT and LWF below. Those two can be switched
+  // on into a state that then deducts nothing; EPF cannot — both rates have a 0.01 floor, so an
+  // enabled EPF always computes something.
   await upsertComponent('epf', null, { enabled: input.enabled, config: cfg }, EPF_DEFAULT, userId);
   return getAllStatutory();
 }
 
 export async function saveEsi(input: any, userId?: number) {
-  const c = input.config || {};
-  const cfg = {
-    esiNumber: String(c.esiNumber || '').trim(),
+  const c = input.config; // omitted → keep stored, as in saveEpf above
+  const cfg = c ? {
     deductionCycle: 'monthly',
     employeeRatePct: num(c.employeeRatePct ?? 0.75, "Employees' contribution", 0, 100),
     employerRatePct: num(c.employerRatePct ?? 3.25, "Employer's contribution", 0, 100),
     wageCeiling: 21000,
     includeEmployerInCtc: !!c.includeEmployerInCtc,
-  };
-  if (input.enabled && !/^\d{2}-\d{2}-\d{6}-\d{3}-\d{4}$/.test(cfg.esiNumber)) {
-    throw new ValidationError('ESI Number must match the format 00-00-000000-000-0000.');
-  }
+  } : undefined;
+  // Unlike EPF, both rates here floor at 0 and the form takes free numbers, so ESI CAN be
+  // enabled at 0% / 0% and deduct nothing — the case PT and LWF each guard against below. That
+  // gap predates this and the removed number format check never covered it; left as found.
   await upsertComponent('esi', null, { enabled: input.enabled, config: cfg }, ESI_DEFAULT, userId);
   return getAllStatutory();
 }
 
 export async function saveBonus(input: any, userId?: number) {
-  const c = input.config || {};
+  const c = input.config; // omitted → keep stored, as in saveEpf above
   // Only monthly statutory bonus is computed; yearly (off-cycle) is not offered.
-  const monthlyPercent = num(c.monthlyPercent ?? 8.33, 'Bonus percentage', 8.33, 20);
-  await upsertComponent('bonus', null, { enabled: input.enabled, config: { frequency: 'monthly', monthlyPercent } }, BONUS_DEFAULT, userId);
+  const cfg = c
+    ? { frequency: 'monthly', monthlyPercent: num(c.monthlyPercent ?? 8.33, 'Bonus percentage', 8.33, 20) }
+    : undefined;
+  await upsertComponent('bonus', null, { enabled: input.enabled, config: cfg }, BONUS_DEFAULT, userId);
   return getAllStatutory();
 }
 

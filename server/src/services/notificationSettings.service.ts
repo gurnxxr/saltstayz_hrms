@@ -76,7 +76,6 @@ export async function setEventAudiences(eventKey: string, audiences: unknown) {
  */
 const ACTIVITY_SOURCES: Array<{ label: string; group: string; table: string; column?: string }> = [
   { label: 'Leave requests raised', group: 'Leave', table: 'leave_requests' },
-  { label: 'Leave encashments raised', group: 'Leave', table: 'leave_encashments' },
   { label: 'Regularisations raised', group: 'Attendance', table: 'attendance_regularisations' },
   { label: 'Shift change requests', group: 'Shifts', table: 'employee_shift_change_requests' },
   { label: 'Hiring exceptions raised', group: 'Manpower', table: 'manpower_exceptions' },

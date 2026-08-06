@@ -8,9 +8,11 @@ import LoadError from '@/components/ui/LoadError';
 import Pagination, { pageSlice } from '@/components/ui/Pagination';
 import api from '@/lib/api';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
-import { Search, Filter, ChevronDown, ChevronRight, Download, Loader2 } from 'lucide-react';
+import EmptyState from '@/components/ui/EmptyState';
+import { btnCls, inputCls, table } from '@/components/ui/styles';
+import { cn, formatDate } from '@/lib/utils';
+import { Search, Filter, ChevronDown, ChevronRight, Download, Loader2, Users } from 'lucide-react';
 
-const selectCls = 'px-3 py-2 border border-border rounded-lg bg-background text-sm';
 const PAGE_SIZE = 25;
 
 /**
@@ -122,14 +124,19 @@ export default function LeaveBalancesPage() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search by name or code..."
-              className="w-full pl-9 pr-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+              // tailwind-merge keeps px-3's right padding and lets pl-9 win on the left — the room
+              // the search icon needs. A raw template literal would leave both and let source
+              // order decide.
+              className={cn(inputCls, 'pl-9')}
             />
           </div>
-          <select className={selectCls} value={periodId} onChange={(e) => setPeriodId(e.target.value)}>
+          {/* These were `selectCls`, a local constant that had quietly lost the focus ring every
+              other field in the module has. */}
+          <select className={cn(inputCls, 'w-auto')} value={periodId} onChange={(e) => setPeriodId(e.target.value)}>
             <option value="">Current Period</option>
             {periods.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
-          <select className={selectCls} value={branch} onChange={(e) => setBranch(e.target.value)}>
+          <select className={cn(inputCls, 'w-auto')} value={branch} onChange={(e) => setBranch(e.target.value)}>
             <option value="">All Properties</option>
             {properties.map((p: any) => <option key={p.id} value={p.name}>{p.name}</option>)}
           </select>
@@ -148,7 +155,7 @@ export default function LeaveBalancesPage() {
           <button
             onClick={exportCsv}
             disabled={!employees.length}
-            className="flex items-center gap-2 px-3 py-2 border border-border rounded-lg text-sm font-medium hover:bg-muted disabled:opacity-50"
+            className={btnCls('secondary')}
             title="Export CSV"
           >
             <Download size={15} /> Export
@@ -168,16 +175,22 @@ export default function LeaveBalancesPage() {
           ) : isLoading ? (
             <div className="p-10 flex justify-center"><Loader2 className="animate-spin text-secondary" /></div>
           ) : employees.length === 0 ? (
-            <div className="p-8 text-center text-secondary">No employees match these filters.</div>
+            <EmptyState
+              icon={Users}
+              title="No employees match these filters"
+              body="Try a different property, department or search term."
+            />
           ) : (
             <>
             <div className="overflow-x-auto">
               <table className="w-full border-collapse text-sm">
                 <thead>
-                  <tr className="border-b border-border">
-                    <th className="text-left px-4 py-3 text-xs font-medium text-secondary uppercase sticky left-0 bg-muted/50 min-w-48">Employee</th>
+                  <tr className={table.head}>
+                    {/* The sticky cell carries its own background — a sticky <th> does not take
+                        the row's, so without it the scrolled columns show through. */}
+                    <th className={cn(table.th, 'sticky left-0 bg-muted/40 min-w-48')}>Employee</th>
                     {leaveTypes.map((lt: any) => (
-                      <th key={lt.id} className="px-2 py-3 text-xs font-medium text-secondary text-center min-w-32">{lt.name}</th>
+                      <th key={lt.id} className={cn(table.th, 'px-2 text-center min-w-32')}>{lt.name}</th>
                     ))}
                   </tr>
                 </thead>
@@ -223,7 +236,7 @@ export default function LeaveBalancesPage() {
                                 b.source === 'default' ? ' · from default days (no allocation)' : ''
                               }${b.source === 'accrual'
                                 ? ` · earned ${Number(b.accrued ?? 0).toFixed(2)} day(s) so far${
-                                  b.next_credit_on ? `, next credit ${b.next_credit_on}` : ''}`
+                                  b.next_credit_on ? `, next credit ${formatDate(b.next_credit_on)}` : ''}`
                                 : ''}`}
                             >
                               <span className={`font-medium ${b.available <= 0 ? 'text-red-600' : 'text-foreground'}`}>{b.available}</span>
@@ -263,7 +276,7 @@ export default function LeaveBalancesPage() {
                                 {b.source === 'accrual' && (
                                   <>
                                     <p>{Number(b.accrued ?? 0).toFixed(2)} earned</p>
-                                    {b.next_credit_on && <p>next {b.next_credit_on}</p>}
+                                    {b.next_credit_on && <p>next {formatDate(b.next_credit_on)}</p>}
                                   </>
                                 )}
                               </td>

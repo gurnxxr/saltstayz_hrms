@@ -25,26 +25,11 @@ function copyErrors(errors: string[]) {
 const inputCls =
   'w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50';
 
-const DAYS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
 const todayStr = () => {
   const d = new Date();
   const p = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 };
-
-/** "Sun, Sat (2,4)" — the off days an employee inherits from their shift. */
-function offDaySummary(offs: any): string {
-  if (!Array.isArray(offs) || offs.length === 0) return 'Company work week';
-  return offs
-    .slice()
-    .sort((a: any, b: any) => a.day - b.day)
-    .map((o: any) => {
-      const d = DAYS_SHORT[Number(o.day)] ?? '?';
-      return Array.isArray(o.weeks) && o.weeks.length ? `${d} (${o.weeks.join(',')})` : d;
-    })
-    .join(', ');
-}
 
 function ShiftLabel({ s }: { s: any }) {
   if (!s) return <span className="text-secondary">—</span>;
@@ -176,9 +161,6 @@ function AssignDialog({ employee, onClose }: { employee: any; onClose: () => voi
           {selected && (
             <div className="rounded-lg bg-muted/40 px-3 py-2.5 text-sm space-y-1">
               <p className="text-secondary">
-                Off days: <span className="text-foreground font-medium">{offDaySummary(selected.weekly_off_days)}</span>
-              </p>
-              <p className="text-secondary">
                 Full day at <span className="text-foreground font-medium">{Number(selected.full_day_hours) || 0}h</span>,
                 {' '}half day below <span className="text-foreground font-medium">{Number(selected.half_day_hours) || 0}h</span>,
                 {' '}absent below <span className="text-foreground font-medium">{Number(selected.absent_hours) || 0}h</span>
@@ -188,8 +170,9 @@ function AssignDialog({ employee, onClose }: { employee: any; onClose: () => voi
           )}
 
           <p className="text-xs text-secondary">
-            Everything follows from the shift — its off days, grace and hour thresholds. Assigning from a date
-            keeps past months resolving to the shift the person was actually on.
+            Timings, grace and hour thresholds all follow from the shift; off days come from the employee&apos;s
+            leave template. Assigning from a date keeps past months resolving to the shift the person was
+            actually on.
           </p>
 
           <div className="pt-2 border-t border-border">
@@ -347,7 +330,7 @@ export default function ShiftAssignmentsPage() {
           <div>
             <h1 className="text-2xl font-bold text-foreground">Shift Assignments</h1>
             <p className="text-secondary mt-1">
-              Put each employee on a shift. Their timings, off days and hour thresholds all follow from it.
+              Put each employee on a shift. Their timings and hour thresholds follow from it; their off days come from their leave template.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -430,7 +413,6 @@ export default function ShiftAssignmentsPage() {
                     <th className="px-4 py-3 font-medium">Employee</th>
                     <th className="px-4 py-3 font-medium">Property</th>
                     <th className="px-4 py-3 font-medium">Shift</th>
-                    <th className="px-4 py-3 font-medium">Off days</th>
                     <th className="px-4 py-3 font-medium">From</th>
                     <th className="px-4 py-3 font-medium text-right">Actions</th>
                   </tr>
@@ -454,9 +436,6 @@ export default function ShiftAssignmentsPage() {
                             → {r.upcoming.shift_name} from {String(r.upcoming.effective_from).slice(0, 10)}
                           </p>
                         )}
-                      </td>
-                      <td className="px-4 py-3 text-secondary">
-                        {r.current ? offDaySummary(r.current.weekly_off_days) : '—'}
                       </td>
                       <td className="px-4 py-3 text-secondary tabular-nums">
                         {r.current ? String(r.current.effective_from).slice(0, 10) : '—'}

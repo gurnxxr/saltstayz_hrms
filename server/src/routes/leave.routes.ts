@@ -33,7 +33,7 @@ router.get('/approvals', authorize('leave', 'read'), ctrl.getPendingApprovals);
 router.put('/:id/approve', authorize('leave', 'update'), ctrl.approveLeave);
 router.put('/:id/reject', authorize('leave', 'update'), ctrl.rejectLeave);
 
-// ─── Leaves module (admin layer): Application / Encashment / Control Panel / Allocation ───
+// ─── Leaves module (admin layer): Application / Control Panel / Allocation ───
 const LEAVE_ADMIN = authorizeRoles('admin', 'chro', 'hr');
 
 // Apply on behalf of an employee (reuses the standard apply validations)
@@ -69,12 +69,6 @@ router.get('/balances/overview', authorize('leave', 'read'), LEAVE_ADMIN, ctrl.g
 router.get('/entitlements', authorize('leave', 'read'), LEAVE_ADMIN, ctrl.getEntitlements);
 router.put('/entitlements', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.upsertEntitlement);
 router.post('/entitlements/bulk', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.bulkAllocate);
-
-// Encashment: record-only (Finance pays outside payroll)
-router.get('/encashments', authorize('leave', 'read'), LEAVE_ADMIN, ctrl.listEncashments);
-router.post('/encashments', authorize('leave', 'create'), LEAVE_ADMIN, ctrl.createEncashment);
-router.put('/encashments/:id/approve', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.approveEncashment);
-router.put('/encashments/:id/reject', authorize('leave', 'update'), LEAVE_ADMIN, ctrl.rejectEncashment);
 
 // Holiday management (Admin → Holidays) — Admin/CHRO/HR upload per-state lists.
 const ADMIN_ONLY = authorizeRoles('admin');

@@ -12,7 +12,12 @@ export async function getDashboardOverview(req: AuthRequest, res: Response, next
 
 export async function getMyOverview(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    res.json(await analyticsService.getMyOverview(req.user!.employeeId ?? null));
+    // Express turns a repeated key into an ARRAY — `?month=a&month=b` arrives as ['a','b'], which
+    // String() would flatten to "a,b" and the validator would reject with a confusing message.
+    // Anything that is not a single string is simply absent, and the service defaults to now.
+    // Validating there rather than here keeps the guard travelling with the function.
+    const month = typeof req.query.month === 'string' ? req.query.month : undefined;
+    res.json(await analyticsService.getMyOverview(req.user!.employeeId ?? null, month));
   } catch (err) { next(err); }
 }
 

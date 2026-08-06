@@ -20,12 +20,17 @@
 import fs from 'fs';
 import path from 'path';
 import db from '../config/database';
+import { GRID_LEAD_HEADERS, GRID_SUMMARY_HEADERS, gridHeaderDate } from '../services/attendanceGrid.service';
 
 /** The codes the importer understands (`CODE_MAP` in attendanceGrid.service.ts). */
 const CODES = ['P', 'A', 'HD', 'SP', 'MP', 'NP', 'HHD'] as const;
 type Code = typeof CODES[number];
 
-/** Column order of the summary block, matching the dashboard export the client already uses. */
+/**
+ * Which code each summary column counts, in the order `GRID_SUMMARY_HEADERS` names them:
+ * Present, Absent, Half Day, Short Present, Missed Punch, No Punch, HHD. The two arrays are
+ * positional partners — reorder one and you must reorder the other.
+ */
 const SUMMARY: Code[] = ['P', 'A', 'HD', 'SP', 'MP', 'NP', 'HHD'];
 
 /**
@@ -59,10 +64,6 @@ function pick(rand: () => number): Code {
 }
 
 const daysInMonth = (year: number, month: number) => new Date(year, month, 0).getDate();
-const pad = (n: number) => String(n).padStart(2, '0');
-
-/** The header spelling the template uses: DD-MM-YYYY. Carries its own year, so no weekday guard. */
-const headerDate = (y: number, m: number, d: number) => `${pad(d)}-${pad(m)}-${y}`;
 
 /** RFC4180-ish: quote anything containing a comma, quote or newline. */
 function csvCell(v: string | number): string {
@@ -122,10 +123,11 @@ async function main() {
   const people = await roster();
   if (!people.length) throw new Error('No active employees found — is DATABASE_URL pointing at the right database?');
 
+  // Same layout the downloadable template uses — see the constants in attendanceGrid.service.
   const header = [
-    'Emp Code', 'Empname',
-    'Present', 'Absent', 'Half Day', 'Short Present', 'Missed Punch', 'No Punch', 'HHD',
-    ...Array.from({ length: days }, (_, i) => headerDate(year, mon, i + 1)),
+    ...GRID_LEAD_HEADERS,
+    ...GRID_SUMMARY_HEADERS,
+    ...Array.from({ length: days }, (_, i) => gridHeaderDate(year, mon, i + 1)),
   ];
 
   const lines = [header.map(csvCell).join(',')];

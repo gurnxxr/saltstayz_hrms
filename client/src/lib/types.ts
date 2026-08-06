@@ -6,6 +6,15 @@ export interface User {
   employeeId: number | null;
   /** Linked employee's first name, from the auth payload (may be absent on old sessions). */
   firstName?: string | null;
+  /**
+   * Someone reports to this person, so they can approve leave whatever their role.
+   *
+   * From /session-context, which AuthProvider resolves before AppShell paints — so the Approvals
+   * tab is correct on the first frame instead of appearing when the approvals query lands. It is a
+   * capability rather than a role: `employee` says nothing about who reports to you, and leave
+   * carries no 'approve' permission for can() to test.
+   */
+  managesAnyone?: boolean;
 }
 
 export interface Permission {

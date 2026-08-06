@@ -29,6 +29,48 @@ export function formatDate(date: string | Date | null | undefined, opts?: Intl.D
   return d.toLocaleDateString('en-IN', { timeZone: IST, day: '2-digit', month: 'short', year: 'numeric', ...opts });
 }
 
+/**
+ * One leave request, one string, on every screen that shows it.
+ *
+ * My Leave put the year on the end date only and Approvals put it on neither, so the same request
+ * read "3 Aug — 7 Aug 2026" in one place and "3 Aug — 7 Aug" in the other. There is one function
+ * now, and the end date always carries the year.
+ *
+ * A single-day request collapses to one date; a range inside one month drops the repeated month;
+ * a range inside one year drops the repeated year. A null falls through to formatDate's "—" rather
+ * than throwing, which the local helper on the Control Panel did.
+ */
+export function formatDateRange(
+  start: string | Date | null | undefined,
+  end: string | Date | null | undefined,
+): string {
+  const a = toDate(start);
+  const b = toDate(end);
+  if (!a) return formatDate(end);
+  if (!b) return formatDate(start);
+
+  // Compare the IST calendar DAY, not the instant, so a bare 'YYYY-MM-DD' and the same day stored
+  // as a timestamp count as equal. en-CA is reliably ISO order, so these compare as plain strings.
+  const key = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: IST });
+  const ka = key(a);
+  const kb = key(b);
+  if (ka === kb) return formatDate(a);
+
+  const sameYear = ka.slice(0, 4) === kb.slice(0, 4);
+  const sameMonth = sameYear && ka.slice(0, 7) === kb.slice(0, 7);
+
+  // An explicit `undefined` option drops that part — Intl treats it as not requested, and it beats
+  // the default in the spread. The same trick MyHolidays already uses to render a month on its own.
+  const left = sameMonth
+    ? formatDate(a, { month: undefined, year: undefined })
+    : sameYear
+      ? formatDate(a, { year: undefined })
+      : formatDate(a);
+
+  // An en dash, because an em dash is not a range separator.
+  return `${left} – ${formatDate(b)}`;
+}
+
 export function formatDateTime(date: string | Date | null | undefined, opts?: Intl.DateTimeFormatOptions) {
   const d = toDate(date);
   if (!d) return '—';
@@ -75,6 +117,45 @@ export function formatINRShort(
   if (v >= 1e5) return '₹' + (v / 1e5).toFixed(2) + 'L';
   if (v >= 1e3) return '₹' + (v / 1e3).toFixed(1) + 'k';
   return '₹' + v;
+}
+
+// ─── Calendar months ────────────────────────────────────────────────────────────
+//
+// A `YYYY-MM` here is a calendar LABEL, not an instant, and two rules keep it honest.
+//
+// "Which month is it now" is asked in IST, the same clock the rest of this file renders in.
+// `new Date().toISOString().slice(0, 7)` is the UTC month, so between midnight and 05:30 IST on
+// the 1st it still names the month that just ended.
+//
+// Rendering one builds it with Date.UTC and formats it with `timeZone: 'UTC'`. Leave the timezone
+// off and a browser west of Greenwich renders Date.UTC(2026, 7, 1) as 31 July — the label names the
+// month BEFORE the one it was handed. The same warning is written out at the top of
+// app/admin/attendance-register/page.tsx; this is that comment made reusable.
+
+/** The current calendar month, `YYYY-MM`, in IST. */
+export function currentMonth(now: Date = new Date()): string {
+  // en-CA is reliably YYYY-MM-DD; a year+month-only format string is implementation-defined.
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: IST, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(now).slice(0, 7);
+}
+
+/** `2026-08` → `August 2026`. */
+export function formatMonth(month: string): string {
+  const [y, m] = month.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, 1))
+    .toLocaleDateString('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+}
+
+/** The last `count` calendar months ending at `end`, newest first — ready for <option>. */
+export function recentMonths(count = 12, end: string = currentMonth()): { value: string; label: string }[] {
+  const [y, m] = end.split('-').map(Number);
+  return Array.from({ length: count }, (_, i) => {
+    // Date.UTC takes a negative month index and rolls the year back, so December of the previous
+    // year needs no special case.
+    const value = new Date(Date.UTC(y, m - 1 - i, 1)).toISOString().slice(0, 7);
+    return { value, label: formatMonth(value) };
+  });
 }
 
 /**

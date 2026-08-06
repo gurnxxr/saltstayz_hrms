@@ -1,7 +1,5 @@
 'use client';
 
-import OffDayPicker, { type OffDay } from '@/components/shifts/OffDayPicker';
-
 import { useState, type ReactNode } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
@@ -28,7 +26,6 @@ const ROSTER_COLORS: { name: string; hex: string }[] = [
 const colorHex = (name: string) => ROSTER_COLORS.find((c) => c.name === name)?.hex ?? '#3b82f6';
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-const DAYS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 const inputCls =
   'w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50';
@@ -43,7 +40,6 @@ interface ShiftTypeForm {
   end_time: string;
   ends_next_day: boolean;
   office_hour_time: string;
-  weekly_off_days: OffDay[];
   max_early_in_mins: string;
   max_late_out_mins: string;
   force_time_out: string;
@@ -76,7 +72,6 @@ const emptyForm = (): ShiftTypeForm => ({
   end_time: '',
   ends_next_day: false,
   office_hour_time: '',
-  weekly_off_days: [],
   max_early_in_mins: '60',
   max_late_out_mins: '60',
   force_time_out: '',
@@ -96,12 +91,11 @@ const emptyForm = (): ShiftTypeForm => ({
 });
 
 function hydrate(row: any): ShiftTypeForm {
-  const offs: OffDay[] = Array.isArray(row.weekly_off_days)
-    ? row.weekly_off_days.map((o: any) => ({
-        day: Number(o.day),
-        weeks: Array.isArray(o.weeks) && o.weeks.length ? o.weeks.map(Number) : null,
-      }))
-    : [];
+  // `row.weekly_off_days` is deliberately not read. A shift's own off days are rung 1 of the
+  // engine's ladder and OVERRIDE the employee's leave template, which is where this business
+  // actually sets rest days — so this screen no longer offers them. The stored value is left
+  // alone rather than cleared: the save payload simply omits the key, and shift.service only
+  // writes the column when it is present.
   return {
     name: row.name ?? '',
     // Deliberately NOT defaulted to today. Almost every existing shift has no effective date,
@@ -114,7 +108,6 @@ function hydrate(row: any): ShiftTypeForm {
     end_time: (row.end_time ?? '').slice(0, 5),
     ends_next_day: !!row.ends_next_day,
     office_hour_time: (row.office_hour_time ?? '').slice(0, 5),
-    weekly_off_days: offs,
     max_early_in_mins: String(row.max_early_in_mins ?? 60),
     max_late_out_mins: String(row.max_late_out_mins ?? 60),
     force_time_out: (row.force_time_out ?? '').slice(0, 5),
@@ -184,24 +177,6 @@ function NotYetApplied() {
       <Info size={10} /> not applied yet
     </span>
   );
-}
-
-/**
- * The off-day pattern. Tick a weekday to make it an off day; by default that's every week,
- * but it can be narrowed to particular occurrences — the 2nd and 4th Saturday, say.
- */
-
-/** Human summary of an off-day pattern, for the list table. */
-function offDaySummary(offs: any): string {
-  if (!Array.isArray(offs) || offs.length === 0) return '—';
-  return offs
-    .slice()
-    .sort((a: any, b: any) => a.day - b.day)
-    .map((o: any) => {
-      const d = DAYS_SHORT[Number(o.day)] ?? '?';
-      return Array.isArray(o.weeks) && o.weeks.length ? `${d} (${o.weeks.join(',')})` : d;
-    })
-    .join(', ');
 }
 
 export default function ShiftTypePage() {
@@ -283,8 +258,9 @@ export default function ShiftTypePage() {
       start_time: form.start_time,
       end_time: form.end_time,
       ends_next_day: form.ends_next_day,
+      // No `weekly_off_days`. Omitting the key leaves whatever is stored untouched —
+      // shift.service only writes the column when the field is present in the payload.
       office_hour_time: form.office_hour_time || null,
-      weekly_off_days: form.weekly_off_days,
       max_early_in_mins: num(form.max_early_in_mins),
       max_late_out_mins: num(form.max_late_out_mins),
       force_time_out: form.force_time_out || null,
@@ -315,7 +291,7 @@ export default function ShiftTypePage() {
               <div>
                 <h1 className="text-2xl font-bold text-foreground">Shift Type</h1>
                 <p className="text-secondary mt-1">
-                  Each shift carries its own rules — timings, off days, grace and hour thresholds. Employees are then mapped to a shift.
+                  Each shift carries its own rules — timings, grace and hour thresholds. Employees are then mapped to a shift. Off days come from their leave template, not from here.
                 </p>
               </div>
               <button
@@ -350,7 +326,6 @@ export default function ShiftTypePage() {
                       <tr className="border-b border-border text-left text-secondary">
                         <th className="px-4 py-3 font-medium">Name</th>
                         <th className="px-4 py-3 font-medium">Timing</th>
-                        <th className="px-4 py-3 font-medium">Off days</th>
                         <th className="px-4 py-3 font-medium">Hours (A/H/F)</th>
                         <th className="px-4 py-3 font-medium">Overtime</th>
                         <th className="px-4 py-3 font-medium text-right">Actions</th>
@@ -376,7 +351,6 @@ export default function ShiftTypePage() {
                               </span>
                             )}
                           </td>
-                          <td className="px-4 py-3 text-secondary">{offDaySummary(s.weekly_off_days)}</td>
                           <td className="px-4 py-3 text-secondary whitespace-nowrap">
                             {Number(s.absent_hours) || 0} / {Number(s.half_day_hours) || 0} / {Number(s.full_day_hours) || 0}
                           </td>
@@ -466,12 +440,9 @@ export default function ShiftTypePage() {
               )}
             </SectionCard>
 
-            <SectionCard
-              title="Weekly adjustment — off days"
-              subtitle="Which days employees on this shift don't work. Replaces filling in a weekly roster."
-            >
-              <OffDayPicker value={form.weekly_off_days} onChange={(v) => upd({ weekly_off_days: v })} />
-            </SectionCard>
+            {/* No off-day picker here. Off days come from the employee's leave template
+                (Leaves → Control Panel → Templates), which is the rung the engine reads for
+                everyone. A pattern set on the shift would override that template silently. */}
 
             <SectionCard title="Punch limits" subtitle="How far outside the shift a punch still counts towards the day.">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

@@ -50,14 +50,18 @@ export const NAVIGATION: NavItem[] = [
   },
   {
     // Self-service: the signed-in user's own leave — apply, cancel, balances, holidays.
-    // Sits alongside My Shifts rather than inside the admin Leaves group, so an employee
-    // reaches it in one click instead of opening a group whose other tabs they can't see.
+    //
+    // A TOP-LEVEL entry, not a child of the admin group below. It was briefly folded in there to
+    // stop two adjacent entries both saying "Leaves", and that was the wrong trade: it put the one
+    // leave screen everybody uses, every week, behind a disclosure that only staff have any reason
+    // to open. The ambiguity is worth less than the click. "My Leave" vs "Leaves" carries the
+    // distinction on its own.
     //
     // Gated on `leave`, NOT a nav-only key of its own. Every endpoint this page calls is
     // authorize('leave', …) (see server/src/routes/leave.routes.ts), so a visibility-only
     // key would show the entry and then 403 on every request behind it. Granting `leave`
     // in Admin → Module Access is what turns this on for one employee.
-    label: 'My Leaves',
+    label: 'My Leave',
     href: '/leaves/my',
     icon: 'CalendarPlus',
     roles: ['admin', 'chro', 'hr', 'hr_manager', 'cluster_hr', 'property_manager', 'employee', 'finance'],
@@ -66,6 +70,12 @@ export const NAVIGATION: NavItem[] = [
   {
     // Leave ADMINISTRATION. Every child is admin/CHRO/HR only, so the Sidebar hides the
     // whole group for anyone else (it drops a group with no visible children).
+    //
+    // The children deliberately carry NO `module` key. Sidebar's visible() returns roleAllowed
+    // untouched when a child has no module — add `module: 'leave'` and an employee with a
+    // `granted: ['leave']` override (exactly how HR switches leave on for one person) would see
+    // Balances and Control Panel and get a 403 from both. Denial still works:
+    // the parent carries the module, and a filtered-out parent drops the whole group.
     label: 'Leaves',
     href: '/leaves/balances',
     icon: 'CalendarDays',
@@ -73,7 +83,10 @@ export const NAVIGATION: NavItem[] = [
     module: 'leave',
     children: [
       { label: 'Balances', href: '/leaves/balances', icon: 'Scale', roles: ['admin', 'chro', 'hr'] },
-      { label: 'Encashment', href: '/leaves/encashment', icon: 'Coins', roles: ['admin', 'chro', 'hr'] },
+      // Publishing the holiday calendar and reading it are two halves of one feature. The API
+      // already agrees — every endpoint that screen calls is /leave/* under authorize('leave', …).
+      // The Admin dashboard card stays where it is; two doors to one URL cost nothing.
+      { label: 'Holidays', href: '/admin/holidays', icon: 'CalendarDays', roles: ['admin', 'chro', 'hr'] },
       { label: 'Control Panel', href: '/leaves/control-panel', icon: 'SlidersHorizontal', roles: ['admin', 'chro', 'hr'] },
     ],
   },

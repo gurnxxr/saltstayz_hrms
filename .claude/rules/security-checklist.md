@@ -62,8 +62,21 @@ whenever it is touched:
 - **The body field is named `otp` exactly.** `middleware/audit.ts` redacts any key containing "otp";
   renaming it to `code` or `pin` would start writing live codes into `audit_logs.metadata`.
 
-Off by default: with `MAIL_PROVIDER=none` the whole feature is dark and the login screen does not
-offer it. `passwordReset.db.test.ts` asserts every property above.
+**The link is always offered; `MAIL_PROVIDER` decides only whether a code can be sent.** It used to
+gate the link too, which meant that on a box with no provider the feature looked unbuilt. Now
+`isMailConfigured()` is consulted server-side on every request — `doRequestReset` returns before any
+account work and `confirmReset` gives its uniform rejection — so with `MAIL_PROVIDER=none` the
+endpoints answer normally and do nothing. `GET /password-reset/capabilities` still reports the truth,
+as an operator diagnostic rather than a UI gate.
+
+`OTP_PEPPER` is mandatory for **every provider that can reach a real mailbox — `smtp` as well as
+`resend`** — in any environment. The guard is keyed on the provider rather than on `NODE_ENV`
+precisely so a staging box cannot send live codes protected by the repository's own literal.
+Half-configured SMTP counts as not configured: a host with no password sends nothing rather than
+promising a code it cannot deliver.
+
+`passwordReset.db.test.ts` asserts every property above under `MAIL_PROVIDER=memory`;
+`mailer.test.ts` and `config/env.test.ts` cover the provider matrix and the boot guards.
 
 ## Data Protection
 - [ ] No secrets in code (JWT_SECRET, DB credentials → `.env` only)

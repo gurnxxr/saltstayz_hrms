@@ -22,15 +22,20 @@ import {
  *  - INDIAN_STATES / DEFAULT_STATUTORY_STATE constants are asserted.
  *  - The save and addMinimumWage functions are async and DB-backed, but every one of
  *    their input-validation guards (num() range checks, state-membership,
- *    validatePtSlabs, EPF/ESI number regex, LWF fixed-mode) throws SYNCHRONOUSLY
- *    *before* the first `await db(...)`. This file ONLY drives those pre-DB
- *    rejection paths — no assertion below ever lets a save call reach the DB, so
- *    the live hrms.db is never read for a mutation nor written. (Every case is an
- *    `expect(...).rejects` on input that is guaranteed out of range.)
+ *    validatePtSlabs, LWF fixed-mode) throws SYNCHRONOUSLY *before* the first
+ *    `await db(...)`. This file ONLY drives those pre-DB rejection paths — no
+ *    assertion below ever lets a save call reach the DB, so the live database is
+ *    never read for a mutation nor written. (Every case is an `expect(...).rejects`
+ *    on input that is guaranteed out of range.)
  *
- * Focus areas: statutory-bonus ceilings (8.33–20%), EPF/ESI rate bounds + number
- * format, PT slab validation (order/overlap/open-ended/range), LWF fixed-mode +
- * multiplier bounds, minimum-wage range.
+ *    That invariant is why a case here cannot outlive the guard it covers: with the
+ *    guard gone the call no longer short-circuits, it runs on to upsertComponent and
+ *    hits whatever DATABASE_URL points at. The EPF/ESI registration-number format
+ *    cases were deleted with their regexes for exactly that reason.
+ *
+ * Focus areas: statutory-bonus ceilings (8.33–20%), EPF/ESI rate bounds, PT slab
+ * validation (order/overlap/open-ended/range), LWF fixed-mode + multiplier bounds,
+ * minimum-wage range.
  */
 
 // No save* call below reaches the pool; destroy defensively so vitest exits clean.
@@ -197,26 +202,13 @@ describe('saveEpf — contribution-rate bounds and number format', () => {
       .rejects.toThrow(ValidationError);
   });
 
-  it('rejects enabling with a malformed EPF number', async () => {
-    await expect(saveEpf({
-      enabled: true,
-      config: { employeeRatePct: 12, employerRatePct: 12, epfNumber: 'NOT-A-NUMBER' },
-    })).rejects.toThrow(/EPF Number must match/);
-  });
-
-  it('rejects enabling with an empty EPF number', async () => {
-    await expect(saveEpf({
-      enabled: true,
-      config: { employeeRatePct: 12, employerRatePct: 12, epfNumber: '' },
-    })).rejects.toThrow(ValidationError);
-  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ESI — rate bounds [0, 100] and ESI-number format. All rejects (pre-DB).
+// ESI — rate bounds [0, 100]. All rejects (pre-DB).
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('saveEsi — contribution-rate bounds and number format', () => {
+describe('saveEsi — contribution-rate bounds', () => {
   it('rejects an employee rate above 100', async () => {
     await expect(saveEsi({ enabled: false, config: { employeeRatePct: 101 } }))
       .rejects.toThrow(ValidationError);
@@ -232,12 +224,6 @@ describe('saveEsi — contribution-rate bounds and number format', () => {
       .rejects.toThrow(ValidationError);
   });
 
-  it('rejects enabling with a malformed ESI number', async () => {
-    await expect(saveEsi({
-      enabled: true,
-      config: { employeeRatePct: 0.75, employerRatePct: 3.25, esiNumber: 'BAD' },
-    })).rejects.toThrow(/ESI Number must match/);
-  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -2,6 +2,7 @@
 
 import { Calendar, Download, IndianRupee } from 'lucide-react';
 import { formatINR } from '@/lib/utils';
+import { statutoryLines } from '@/lib/payslip';
 
 // Full payslip preview card (banner + days + earnings/deductions + net + CTC).
 // Shared by the employee's own "View Payslip" (Salary page) and Admin's
@@ -54,11 +55,12 @@ export default function PayslipPreview({ result, downloadHref, download }: {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-px bg-border">
         <Section title="Earnings" rows={(b.earnings ?? []).map((l: any) => [l.name, l.amount] as [string, number])}
           total={['Gross Earnings', b.gross_earnings]} />
+        {/* The statutory heads come from lib/payslip so this card and "My Salary Structure" on the
+            Salary page — which sits one scroll above it — cannot name or order them differently
+            again. Zeroes are kept HERE: a payslip is a record of what was deducted, and naming each
+            statutory head even at nil is part of what makes it one. */}
         <Section title="Deductions" rows={[
-          ['Employee PF', b.employee_pf] as [string, number],
-          ['ESI', b.esi] as [string, number],
-          ['LWF', b.lwf] as [string, number],
-          ...((b.pt ?? 0) > 0 ? [['Professional Tax', b.pt] as [string, number]] : []),
+          ...statutoryLines(b, { includeZero: true }),
           ...(b.other_deductions ?? []).map((l: any) => [l.name, l.amount] as [string, number]),
         ]} total={['Total Deduction', b.total_deduction]} />
       </div>

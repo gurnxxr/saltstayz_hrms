@@ -2,10 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/lib/auth';
 import { Loader2 } from 'lucide-react';
-import api from '@/lib/api';
+import PasswordInput from '@/components/ui/PasswordInput';
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -14,18 +13,6 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [justReset, setJustReset] = useState(false);
-
-  /**
-   * Whether to offer the reset link at all. The server answers false while no mail provider is
-   * configured, because a "check your email" that can never arrive is worse than no link: the user
-   * waits, then calls HR anyway, having been told the system was handling it.
-   */
-  const { data: capabilities } = useQuery({
-    queryKey: ['auth-capabilities'],
-    queryFn: () => api.get('/password-reset/capabilities').then((r) => r.data),
-    staleTime: Infinity,
-    retry: false,
-  });
 
   // Read from location rather than useSearchParams so this page needs no Suspense boundary.
   useEffect(() => {
@@ -91,15 +78,19 @@ export default function LoginPage() {
                 <label htmlFor="password" className="block text-sm font-medium text-foreground">
                   Password
                 </label>
-                {capabilities?.password_reset && (
-                  <Link href="/forgot-password" className="text-sm text-primary hover:underline">
-                    Forgot password?
-                  </Link>
-                )}
+                {/*
+                  * Always offered. This used to be gated on the server reporting that a mail
+                  * provider was configured, which meant that on a box with none the link was
+                  * invisible and the feature looked unbuilt. Whether a code can actually be sent is
+                  * `MAIL_PROVIDER`'s business, checked server-side on every request; it is not a
+                  * reason to hide the way in.
+                  */}
+                <Link href="/forgot-password" className="text-sm text-primary hover:underline">
+                  Forgot password?
+                </Link>
               </div>
-              <input
+              <PasswordInput
                 id="password"
-                type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Enter password"

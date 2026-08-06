@@ -9,7 +9,10 @@
  * have meant two places where "2nd and 4th Saturday" could come to mean different things.
  */
 
-export interface OffDay { day: number; weeks: number[] | null }
+// The type lives in lib/weeklyOff so plain modules can own it without importing from a
+// 'use client' component. Re-exported here because half the app already imports it from this path.
+import type { OffDay } from '@/lib/weeklyOff';
+export type { OffDay };
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const DAYS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -118,7 +121,7 @@ export default function OffDayPicker({
 
       {value.length === 0 && (
         <p className="text-xs text-secondary pt-1">
-          {emptyHint ?? 'No off days set — employees on this shift follow the company work week.'}
+          {emptyHint ?? 'No off days set — employees fall back to the next rung: the Default leave plan, then the company work week.'}
         </p>
       )}
 

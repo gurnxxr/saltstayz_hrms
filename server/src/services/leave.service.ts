@@ -52,7 +52,7 @@ async function markLeaveDaysOnAttendance(
 
 // ─── Leave Types + policy ───
 
-const LT_BOOL_COLS = ['is_paid', 'is_active', 'is_encashable', 'half_day_allowed', 'after_probation_only', 'count_sandwich_days'];
+const LT_BOOL_COLS = ['is_paid', 'is_active', 'half_day_allowed', 'after_probation_only', 'count_sandwich_days'];
 const ELIGIBILITY_OPTS = ['any', 'female', 'male'];
 const truthy = (v: any) => v === true || v === 1 || v === '1' || v === 'true';
 
@@ -194,7 +194,7 @@ export async function getAllLeaveTypes() {
 }
 
 export async function createLeaveType(data: {
-  name: string; default_days: number; is_paid?: boolean; is_encashable?: boolean;
+  name: string; default_days: number; is_paid?: boolean;
 }) {
   const name = String(data.name || '').trim();
   if (!name) throw new ValidationError('Leave type name is required');
@@ -208,7 +208,6 @@ export async function createLeaveType(data: {
     const [{ id: newId }] = await trx('leave_types').insert({
       name, default_days: defaultDays,
       is_paid: data.is_paid === undefined ? true : !!data.is_paid,
-      is_encashable: !!data.is_encashable,
       is_active: true,
       ...collectPolicy(data),
     }).returning('id');
@@ -218,7 +217,7 @@ export async function createLeaveType(data: {
   });
   // A new active type is unusable until it's in a template — add it to the Default plan so
   // it works immediately for everyone on Default (the migration-time invariant), instead of
-  // being silently orphaned (un-appliable, un-encashable, dropped from F&F).
+  // being silently orphaned and un-appliable.
   await ensureDefaultTemplate();
   return (await getAllLeaveTypes()).find((t: any) => t.id === id);
 }
@@ -240,7 +239,6 @@ export async function updateLeaveType(id: number, data: any) {
     patch.default_days = d;
   }
   if ('is_paid' in data) patch.is_paid = !!data.is_paid;
-  if ('is_encashable' in data) patch.is_encashable = !!data.is_encashable;
   if ('is_active' in data) patch.is_active = !!data.is_active;
   Object.assign(patch, collectPolicy(data));
 
@@ -256,22 +254,21 @@ export async function updateLeaveType(id: number, data: any) {
 }
 
 /**
- * Hard-delete a leave type. Blocked when it has any history (leave requests,
- * allocations, or encashments) — deleting it would orphan those records — so the
- * caller is told to deactivate it instead.
+ * Hard-delete a leave type. Blocked when it has any history (leave requests or
+ * allocations) — deleting it would orphan those records — so the caller is told to
+ * deactivate it instead.
  */
 export async function deleteLeaveType(id: number) {
   const existing = await db('leave_types').where('id', id).first();
   if (!existing) throw new NotFoundError('Leave type');
 
-  const [reqs, ents, enc] = await Promise.all([
+  const [reqs, ents] = await Promise.all([
     db('leave_requests').where('leave_type_id', id).count({ c: '*' }).first(),
     db('leave_entitlements').where('leave_type_id', id).count({ c: '*' }).first(),
-    db('leave_encashments').where('leave_type_id', id).count({ c: '*' }).first(),
   ]);
-  const inUse = Number((reqs as any)?.c || 0) + Number((ents as any)?.c || 0) + Number((enc as any)?.c || 0);
+  const inUse = Number((reqs as any)?.c || 0) + Number((ents as any)?.c || 0);
   if (inUse > 0) {
-    throw new ValidationError('This leave type is in use (it has leave requests, allocations or encashments). Deactivate it instead of deleting.');
+    throw new ValidationError('This leave type is in use (it has leave requests or allocations). Deactivate it instead of deleting.');
   }
 
   await db('leave_types').where('id', id).del();
@@ -577,15 +574,15 @@ export interface EffectiveBalance {
  *     entitlement row: `upsertEntitlement` refuses to write one for an accruing type
  *     precisely so the two can never both be true at once.
  *   - entitlement row  → total_days − used_days. `used_days` is a stored counter
- *     bumped only on approval (approveLeave) and on encashment approval, so
- *     PENDING requests do not reduce it.
+ *     bumped only on approval (approveLeave), so PENDING requests do not reduce it.
  *   - no entitlement   → default_days − (approved + pending) days booked this period,
  *     so PENDING requests DO reduce it.
  *
  * `taken` and `pending` are always summed from leave_requests, so a caller can see
  * the difference rather than have it averaged away. For entitlement rows `used_days`
- * and `taken` can legitimately disagree (encashment bumps the counter; an entitlement
- * created after leave was approved starts at 0).
+ * and `taken` can legitimately disagree — an entitlement created after leave was
+ * approved starts at 0, and historic encashments (a feature since removed) bumped the
+ * counter without a matching request.
  *
  * The accrual branch reads leave_requests for the same reason: `used_days` is bumped
  * against `getCurrentPeriod()` regardless of which period the leave itself falls in

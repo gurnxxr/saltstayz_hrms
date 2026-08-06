@@ -21,7 +21,6 @@ export interface LeaveRule {
   leave_type_id: number;
   default_days: number;
   is_paid: boolean;
-  is_encashable: boolean;
   min_days_per_request: number | null;
   max_days_per_request: number | null;
   advance_notice_days: number | null;
@@ -55,7 +54,6 @@ function normalizeRule(r: any): LeaveRule {
     leave_type_id: r.leave_type_id,
     default_days: Number(r.default_days) || 0,
     is_paid: BOOL(r.is_paid),
-    is_encashable: BOOL(r.is_encashable),
     min_days_per_request: r.min_days_per_request ?? null,
     max_days_per_request: r.max_days_per_request ?? null,
     advance_notice_days: r.advance_notice_days ?? null,
@@ -79,7 +77,7 @@ function normalizeRule(r: any): LeaveRule {
  * — adding them would write `undefined` into a NOT NULL column. Accrual is a template-only setting.
  */
 export const TEMPLATE_ROW_COLUMNS = [
-  'default_days', 'is_paid', 'is_encashable', 'min_days_per_request', 'max_days_per_request',
+  'default_days', 'is_paid', 'min_days_per_request', 'max_days_per_request',
   'advance_notice_days', 'half_day_allowed', 'document_required_after_days', 'eligibility',
   'after_probation_only', 'count_sandwich_days',
 ] as const;
@@ -466,7 +464,7 @@ export async function getTemplate(id: number) {
     department_ids: departments.map((d: any) => d.id),
     rows: rows.map((r: any) => ({
       leave_type_id: r.leave_type_id, leave_type_name: r.leave_type_name,
-      default_days: Number(r.default_days) || 0, is_paid: !!r.is_paid, is_encashable: !!r.is_encashable,
+      default_days: Number(r.default_days) || 0, is_paid: !!r.is_paid,
       min_days_per_request: r.min_days_per_request, max_days_per_request: r.max_days_per_request,
       advance_notice_days: r.advance_notice_days, half_day_allowed: !!r.half_day_allowed,
       document_required_after_days: r.document_required_after_days, eligibility: r.eligibility,
@@ -563,7 +561,6 @@ async function validateTemplateInput(data: any, excludeId?: number): Promise<Tem
       leave_type_id: leaveTypeId,
       default_days: dd,
       is_paid: rr.is_paid === undefined ? true : !!rr.is_paid,
-      is_encashable: !!rr.is_encashable,
       min_days_per_request: min,
       max_days_per_request: max,
       advance_notice_days: policyInt(rr.advance_notice_days),

@@ -5,9 +5,12 @@ import { useRouter } from 'next/navigation';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import AppShell from '@/components/layout/AppShell';
+import Breadcrumb from '@/components/ui/Breadcrumb';
 import LoadError from '@/components/ui/LoadError';
+import { btnCls, inputCls, labelCls } from '@/components/ui/styles';
 import api from '@/lib/api';
-import { ArrowLeft } from 'lucide-react';
+import { cn, formatDate } from '@/lib/utils';
+import { Info, Loader2 } from 'lucide-react';
 
 export default function ApplyLeavePage() {
   const router = useRouter();
@@ -18,12 +21,12 @@ export default function ApplyLeavePage() {
     reason: '',
   });
 
-  const { data: leaveTypes = [], isError: typesError, refetch: refetchTypes } = useQuery({
+  const { data: leaveTypes = [], isError: typesError, isLoading: typesLoading, refetch: refetchTypes } = useQuery({
     queryKey: ['leave-types'],
     queryFn: () => api.get('/leave/types').then(r => r.data),
   });
 
-  const { data: balances = [], isError: balancesError, refetch: refetchBalances } = useQuery({
+  const { data: balances = [], isError: balancesError, isLoading: balancesLoading, refetch: refetchBalances } = useQuery({
     queryKey: ['leave-balances'],
     queryFn: () => api.get('/leave/balances').then(r => r.data),
   });
@@ -82,35 +85,36 @@ export default function ApplyLeavePage() {
   return (
     <AppShell>
       <div className="max-w-2xl space-y-6">
-        <button
-          onClick={() => router.push('/leaves/my')}
-          className="flex items-center gap-2 text-secondary hover:text-foreground text-sm transition-colors"
-        >
-          <ArrowLeft size={16} />
-          Back to Leave
-        </button>
-
         <div>
+          {/* Was a hand-rolled "← Back to Leave" button — the exact thing Breadcrumb was written to
+              replace, and the reason this page's header looked unlike every other leaves screen. */}
+          <Breadcrumb className="mb-2" items={[{ label: 'Leaves', href: '/leaves/my' }, { label: 'Apply' }]} />
           <h1 className="text-2xl font-bold text-foreground">Apply for Leave</h1>
           <p className="text-secondary mt-1">Submit a new leave request to your manager</p>
         </div>
 
-        {(typesError || balancesError) && (
+        {/* The ladder, in one place. A failed fetch used to show the error AND the form beneath it,
+            with an empty leave-type <select> that could not be submitted — so the page offered a
+            broken form instead of saying it could not be used yet. */}
+        {typesError || balancesError ? (
           <LoadError message="Couldn't load leave types or balances." onRetry={() => { refetchTypes(); refetchBalances(); }} />
-        )}
-
+        ) : typesLoading || balancesLoading ? (
+          <div className="bg-card rounded-xl border border-border p-10 flex justify-center">
+            <Loader2 className="animate-spin text-secondary" />
+          </div>
+        ) : (
         <form
           onSubmit={(e) => { e.preventDefault(); applyMutation.mutate(form); }}
           className="bg-card rounded-xl border border-border p-6 space-y-5"
         >
           {/* Leave Type */}
           <div>
-            <label className="block text-sm font-medium text-foreground mb-1.5">Leave Type *</label>
+            <label className={labelCls}>Leave Type *</label>
             <select
               required
               value={form.leave_type_id}
               onChange={(e) => setForm(p => ({ ...p, leave_type_id: e.target.value }))}
-              className="w-full px-3 py-2.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+              className={inputCls}
             >
               <option value="">Select leave type</option>
               {leaveTypes.map((lt: any) => (
@@ -133,15 +137,20 @@ export default function ApplyLeavePage() {
                 Earned so far this year: {Number(selectedBalance.accrued ?? 0).toFixed(2)} day
                 {Number(selectedBalance.accrued) === 1 ? '' : 's'} — this leave is earned month by
                 month, not given all at once.
-                {selectedBalance.next_credit_on && <> Next credit on {selectedBalance.next_credit_on}.</>}
+                {selectedBalance.next_credit_on && <> Next credit on {formatDate(selectedBalance.next_credit_on)}.</>}
               </p>
             )}
+            {/* The house info panel (attendance/settings), not the blue one this page had grown —
+                blue-50 is used as an information surface nowhere else in the module. */}
             {rules.length > 0 && (
-              <div className="mt-2 rounded-lg bg-blue-50 border border-blue-200 px-3 py-2">
-                <p className="text-xs font-medium text-blue-800 mb-1">Rules for {selectedType.name}</p>
-                <ul className="list-disc pl-4 space-y-0.5 text-xs text-blue-700">
-                  {rules.map((r) => <li key={r}>{r}</li>)}
-                </ul>
+              <div className="mt-2 flex gap-2 rounded-lg bg-muted/50 border border-border p-3">
+                <Info size={14} className="text-secondary shrink-0 mt-0.5" />
+                <div className="min-w-0">
+                  <p className="text-xs font-medium text-foreground mb-1">Rules for {selectedType.name}</p>
+                  <ul className="list-disc pl-4 space-y-0.5 text-xs text-secondary">
+                    {rules.map((r) => <li key={r}>{r}</li>)}
+                  </ul>
+                </div>
               </div>
             )}
           </div>
@@ -149,47 +158,49 @@ export default function ApplyLeavePage() {
           {/* Dates */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-foreground mb-1.5">Start Date *</label>
+              <label className={labelCls}>Start Date *</label>
               <input
                 type="date"
                 required
                 value={form.start_date}
                 onChange={(e) => setForm(p => ({ ...p, start_date: e.target.value }))}
-                className="w-full px-3 py-2.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                className={inputCls}
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-foreground mb-1.5">End Date *</label>
+              <label className={labelCls}>End Date *</label>
               <input
                 type="date"
                 required
                 value={form.end_date}
                 min={form.start_date}
                 onChange={(e) => setForm(p => ({ ...p, end_date: e.target.value }))}
-                className="w-full px-3 py-2.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                className={inputCls}
               />
             </div>
           </div>
 
+          {/* Red stays — it is a blocking condition and the submit button is disabled with it.
+              The other half was blue for no reason; it is the neutral info surface now. */}
           {estimatedDays > 0 && (
-            <div className={`flex flex-wrap items-center gap-x-2 px-3 py-2 rounded-lg text-sm ${insufficient ? 'bg-red-50 text-red-700' : 'bg-blue-50 text-blue-700'}`}>
+            <div className={`flex flex-wrap items-center gap-x-2 px-3 py-2 rounded-lg border text-sm ${insufficient ? 'bg-red-50 border-red-200 text-red-700' : 'bg-muted/50 border-border text-foreground'}`}>
               <span className="font-medium">{estimatedDays} working day{estimatedDays > 1 ? 's' : ''}</span>
               {insufficient
                 ? <span>exceeds your {remaining} remaining day{remaining !== 1 ? 's' : ''} — reduce the range or pick another leave type.</span>
-                : <span className="text-blue-500">(excluding Sundays)</span>}
+                : <span className="text-secondary">(excluding Sundays)</span>}
             </div>
           )}
 
           {/* Reason */}
           <div>
-            <label className="block text-sm font-medium text-foreground mb-1.5">Reason *</label>
+            <label className={labelCls}>Reason *</label>
             <textarea
               required
               rows={3}
               value={form.reason}
               onChange={(e) => setForm(p => ({ ...p, reason: e.target.value }))}
               placeholder="Provide a reason for your leave request..."
-              className="w-full px-3 py-2.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none"
+              className={cn(inputCls, 'resize-none')}
             />
           </div>
 
@@ -197,19 +208,17 @@ export default function ApplyLeavePage() {
             <button
               type="submit"
               disabled={applyMutation.isPending || insufficient}
-              className="px-6 py-2.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className={btnCls('primary', 'lg')}
             >
-              {applyMutation.isPending ? 'Submitting...' : 'Submit Request'}
+              {applyMutation.isPending && <Loader2 size={14} className="animate-spin" />}
+              {applyMutation.isPending ? 'Submitting…' : 'Submit Request'}
             </button>
-            <button
-              type="button"
-              onClick={() => router.push('/leaves/my')}
-              className="px-6 py-2.5 border border-border rounded-lg text-sm font-medium hover:bg-muted transition-colors"
-            >
+            <button type="button" onClick={() => router.push('/leaves/my')} className={btnCls('secondary', 'lg')}>
               Cancel
             </button>
           </div>
         </form>
+        )}
       </div>
     </AppShell>
   );
